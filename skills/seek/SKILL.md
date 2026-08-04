@@ -5,7 +5,7 @@ description: Search user's personal notes, markdown docs, Claude Code and Codex 
 
 # seek — Personal Knowledge Search
 
-`seek` is the user's local search engine. It indexes markdown notes, Claude Code conversations, and Codex conversations with BM25 + vector hybrid search. Uses **qwen3-vl-embedding** (multimodal) via Alibaba Bailian API — text and images share the same vector space.
+`seek` is the user's local search engine. It indexes markdown notes, Claude Code conversations, and Codex conversations with BM25 + vector hybrid search. Text and images share the same vector space via a configurable embedding provider — defaults to **qwen3-vl-embedding** (multimodal) on Alibaba Bailian (DashScope), but any OpenAI-compatible provider works.
 
 Binary location: `seek`
 
@@ -79,6 +79,9 @@ seek add /path/to/dir --name myname
 
 # Add an image directory (png/jpg/webp — VL embedding for visual search)
 seek add --images /path/to/images -n myimages
+
+# Add a PDF directory (each page rasterized to PNG, then VL-embedded)
+seek add --pdf /path/to/pdfs -n mydocs
 ```
 
 ## Collection Types
@@ -89,14 +92,32 @@ seek add --images /path/to/images -n myimages
 | `claude` | `~/.claude/projects/` | Claude Code conversations + screenshots |
 | `codex` | `~/.codex/` | Codex sessions + screenshots |
 | `images` | Any directory | Image files (png/jpg/webp) with VL embedding |
+| `pdf` | Any directory | PDF pages rasterized to PNG, VL embedding per page |
 
 Run `seek status` to see which collections the user has configured.
 
 ## Multimodal
 
 - Images from conversations are extracted and cached at `~/.cache/seek/images/`
+- PDF pages are rasterized to PNG at `~/.cache/seek/pdf/` and embedded the same way (DashScope's multimodal API accepts `image/*`, not PDF directly)
 - Text and image chunks use the same embedding model (unified vector space)
 - Vector search naturally finds relevant images alongside text results
+
+### Embedding provider config (`~/.config/seek/config.yaml`)
+
+```yaml
+embedding:
+  base_url: https://api.openai.com/v1   # any OpenAI-compatible endpoint
+  api_key: ${OPENAI_API_KEY}
+  model: text-embedding-3-small
+  dimensions: 1024
+  # multimodal: true                    # enable image+text (VL) embedding
+  # vl_base_url: https://...            # VL endpoint; unset → DashScope default
+```
+
+- `multimodal` is auto-detected from model names containing `vl-embedding`/`multimodal`, or forced via `multimodal: true`.
+- `vl_base_url` defaults to DashScope's qwen3-vl-embedding; point it elsewhere to use a different vision-language provider.
+- Changing `model` or `dimensions` requires re-indexing (`seek rm <collection>` then `seek add`).
 
 ## Important Notes
 
