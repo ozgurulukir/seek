@@ -23,7 +23,7 @@ bunx skills add ethan-huo/seek
 ## Setup
 
 ```bash
-# Configure embedding API (DashScope / OpenAI / custom)
+# Configure embedding API (DashScope / OpenAI / any OpenAI-compatible / custom)
 seek auth login
 
 # Add your collections
@@ -35,6 +35,20 @@ seek add --images /path/to/images -n pics  # image files
 # Generate embeddings
 seek embed
 ```
+
+Configuration lives in `~/.config/seek/config.yaml` (created by `seek auth login`):
+
+```yaml
+embedding:
+  base_url: https://api.openai.com/v1          # any OpenAI-compatible endpoint
+  api_key: ${OPENAI_API_KEY}                    # or a literal key
+  model: text-embedding-3-small
+  dimensions: 1024
+  # multimodal: true                            # enable image+text embedding
+  # vl_base_url: https://your-provider/v1/...   # defaults to DashScope if unset
+```
+
+> **Note:** `dimensions` is fixed at index time. If you change models or dimensions, re-run `seek rm <collection>` and `seek add` to rebuild the index.
 
 ## Usage
 
@@ -76,7 +90,7 @@ This writes a `Stop` hook into `~/.claude/settings.json` so `seek sync` runs aut
 
 **Indexing** — `seek sync` scans collections incrementally. Markdown files are tracked by content hash. Claude/Codex JSONL files are append-only, tracked by line count. Base64 images in conversations are extracted to `~/.cache/seek/images/`.
 
-**Embedding** — `seek embed` generates vectors via [qwen3-vl-embedding](https://help.aliyun.com/zh/model-studio/developer-reference/multimodal-embedding) (multimodal). Text and images share the same vector space. Supports DashScope Batch API (50% cheaper) for bulk indexing.
+**Embedding** — `seek embed` generates vectors. Any [OpenAI-compatible](https://platform.openai.com/docs/api-reference/embeddings) provider works out of the box (set `base_url`/`model` in config, or run `seek auth login`). Multimodal image+text embedding uses a vision-language model and is enabled automatically for models matching `vl-embedding`/`multimodal`, or explicitly via `multimodal: true` — the VL endpoint defaults to DashScope's [qwen3-vl-embedding](https://help.aliyun.com/zh/model-studio/developer-reference/multimodal-embedding) but can be pointed at any provider via `vl_base_url`.
 
 **Search** — Three modes:
 - `--lex`: SQLite FTS5 BM25 ranking

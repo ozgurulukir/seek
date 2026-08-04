@@ -46,7 +46,7 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
 	fmt.Printf("Found %d chunks needing embeddings (%d text, %d image)\n", len(chunks), len(textChunks), len(imageChunks))
 
 	// Decide which client to use based on model
-	if isVLModel(cfg.Config.Embedding.Model) {
+	if cfg.Config.Embedding.IsMultimodal() {
 		return c.embedWithVL(cfg, db, textChunks, imageChunks)
 	}
 

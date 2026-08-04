@@ -11,8 +11,11 @@ import (
 	"time"
 )
 
+// DefaultVLEndpoint is the DashScope multimodal embedding endpoint, used when
+// no custom VL base URL is configured.
+const DefaultVLEndpoint = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+
 const (
-	vlEndpoint    = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
 	vlMaxContents = 20 // max content elements per request
 	vlMaxImages   = 5  // max images per request
 )
@@ -23,20 +26,27 @@ type EmbedItem struct {
 	ImageURI string // optional: "data:image/png;base64,..." for image chunks
 }
 
-// VLClient is a client for the DashScope multimodal embedding API (qwen3-vl-embedding).
+// VLClient is a client for a multimodal embedding API (vision-language models,
+// e.g. DashScope qwen3-vl-embedding or any compatible endpoint).
 type VLClient struct {
 	apiKey     string
-	model      string // "qwen3-vl-embedding"
+	model      string
 	dimensions int
+	endpoint   string
 	http       *http.Client
 }
 
-// NewVLClient creates a new multimodal embedding client.
-func NewVLClient(apiKey, model string, dimensions int) *VLClient {
+// NewVLClient creates a new multimodal embedding client. If endpoint is empty,
+// DefaultVLEndpoint (DashScope) is used.
+func NewVLClient(apiKey, model string, dimensions int, endpoint string) *VLClient {
+	if endpoint == "" {
+		endpoint = DefaultVLEndpoint
+	}
 	return &VLClient{
 		apiKey:     apiKey,
 		model:      model,
 		dimensions: dimensions,
+		endpoint:   endpoint,
 		http:       &http.Client{Timeout: 120 * time.Second},
 	}
 }
@@ -197,7 +207,7 @@ func (c *VLClient) doRequest(items []EmbedItem) ([][]float32, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", vlEndpoint, bytes.NewReader(body))
+	httpReq, err := http.NewRequest("POST", c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

@@ -443,17 +443,12 @@ func newVLClient(cfg *config.AppConfig) *embed.VLClient {
 	if err != nil {
 		return nil
 	}
-	model := cfg.Config.Embedding.Model
-	// Only create VL client for multimodal models
-	if !isVLModel(model) {
+	ec := cfg.Config.Embedding
+	// Only create VL client for multimodal models.
+	if !ec.IsMultimodal() {
 		return nil
 	}
-	return embed.NewVLClient(key, model, cfg.Config.Embedding.Dimensions)
-}
-
-// isVLModel returns true if the model is a multimodal embedding model.
-func isVLModel(model string) bool {
-	return strings.Contains(model, "vl-embedding") || strings.Contains(model, "multimodal")
+	return embed.NewVLClient(key, ec.Model, ec.Dimensions, ec.VLBaseURL)
 }
 
 // indexChunks stores chunks in DB without embeddings.
