@@ -1,6 +1,8 @@
 package search
 
 import (
+	"sort"
+
 	"github.com/anthropics/seek/internal/embed"
 	"github.com/anthropics/seek/internal/store"
 )
@@ -111,13 +113,9 @@ func rrfFusion(bm25, vec []store.SearchResult, limit int) []store.SearchResult {
 	for id, s := range scores {
 		sorted = append(sorted, scored{id, s})
 	}
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].score > sorted[i].score {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].score > sorted[j].score
+	})
 
 	if len(sorted) > limit {
 		sorted = sorted[:limit]

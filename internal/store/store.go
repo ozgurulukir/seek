@@ -5,10 +5,12 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/viterin/vek/vek32"
 )
 
 type Store struct {
@@ -415,13 +417,9 @@ func (s *Store) SearchVector(queryEmb []float32, limit int) ([]SearchResult, err
 	}
 
 	// Sort by similarity descending
-	for i := 0; i < len(all); i++ {
-		for j := i + 1; j < len(all); j++ {
-			if all[j].score > all[i].score {
-				all[i], all[j] = all[j], all[i]
-			}
-		}
-	}
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].score > all[j].score
+	})
 
 	if len(all) > limit {
 		all = all[:limit]
@@ -506,14 +504,10 @@ func cosineSimilarity(a, b []float32) float64 {
 	if len(a) != len(b) || len(a) == 0 {
 		return 0
 	}
-	var dot, normA, normB float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-	if normA == 0 || normB == 0 {
+	sim := vek32.CosineSimilarity(a, b)
+	// NaN on zero-magnitude inputs; guard to keep prior behavior.
+	if sim != sim {
 		return 0
 	}
-	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
+	return float64(sim)
 }
