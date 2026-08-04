@@ -35,6 +35,9 @@ func (c *ConfigCmd) Run(cfg *config.AppConfig) error {
 		fmt.Println("  api_key: ${DASHSCOPE_API_KEY}")
 		fmt.Println("  model: text-embedding-v4")
 		fmt.Println("  dimensions: 1024")
+		fmt.Println("  # optional: force multimodal (image) embeddings and set the VL endpoint")
+		fmt.Println("  # multimodal: true")
+		fmt.Println("  # vl_base_url: https://your-provider/v1/embeddings")
 		fmt.Println("EOF")
 		return nil
 	}

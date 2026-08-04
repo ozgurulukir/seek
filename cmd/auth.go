@@ -83,11 +83,24 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 		return fmt.Errorf("API key cannot be empty")
 	}
 
+	multimodal := config.EmbeddingConfig{Model: model}.IsMultimodal()
+	fmt.Print("\nUse vision-language (image) embedding endpoint? [y/N]: ")
+	if yes := strings.ToLower(strings.TrimSpace(readLine())); yes == "y" || yes == "yes" {
+		multimodal = true
+	}
+	var vlBaseURL string
+	if multimodal {
+		fmt.Print("VL endpoint (blank for DashScope default): ")
+		vlBaseURL = strings.TrimSpace(readLine())
+	}
+
 	newCfg := config.Config{
 		Embedding: config.EmbeddingConfig{
-			BaseURL: baseURL,
-			APIKey:  apiKey,
-			Model:   model,
+			BaseURL:    baseURL,
+			APIKey:     apiKey,
+			Model:      model,
+			Multimodal: multimodal,
+			VLBaseURL:  vlBaseURL,
 		},
 	}
 
@@ -114,6 +127,15 @@ func (c *AuthStatusCmd) Run(cfg *config.AppConfig) error {
 	fmt.Printf("Provider:  %s\n", cfg.Config.Embedding.BaseURL)
 	fmt.Printf("Model:     %s\n", cfg.Config.Embedding.Model)
 	fmt.Printf("API Key:   %s\n", masked)
+	if cfg.Config.Embedding.IsMultimodal() {
+		vl := cfg.Config.Embedding.VLBaseURL
+		if vl == "" {
+			vl = "dashscope (default)"
+		}
+		fmt.Printf("Multimodal: true (VL endpoint: %s)\n", vl)
+	} else {
+		fmt.Printf("Multimodal: false\n")
+	}
 	return nil
 }
 

@@ -14,6 +14,20 @@ type EmbeddingConfig struct {
 	APIKey     string `yaml:"api_key"`
 	Model      string `yaml:"model"`
 	Dimensions int    `yaml:"dimensions,omitempty"`
+	// VLBaseURL is the multimodal (vision-language) embedding endpoint.
+	// Leave empty to use the DashScope default when the model is multimodal.
+	VLBaseURL string `yaml:"vl_base_url,omitempty"`
+	// Multimodal forces the vision-language (image+text) embedding path.
+	// When false, it is inferred from the model name (vl-embedding / multimodal).
+	Multimodal bool `yaml:"multimodal,omitempty"`
+}
+
+// IsMultimodal reports whether to use the vision-language embedding client.
+func (e EmbeddingConfig) IsMultimodal() bool {
+	if e.Multimodal {
+		return true
+	}
+	return strings.Contains(e.Model, "vl-embedding") || strings.Contains(e.Model, "multimodal")
 }
 
 type Config struct {
@@ -70,7 +84,7 @@ func Load() (*AppConfig, error) {
 func (ac *AppConfig) RequireEmbeddingKey() (string, error) {
 	key := ac.Config.Embedding.APIKey
 	if key == "" {
-		return "", fmt.Errorf("embedding API key not configured\nSet DASHSCOPE_API_KEY or add api_key to ~/.config/seek/config.yaml")
+		return "", fmt.Errorf("embedding API key not configured\nRun 'seek auth login' or add api_key to ~/.config/seek/config.yaml")
 	}
 	return key, nil
 }
