@@ -1,4 +1,4 @@
-.PHONY: build install clean
+.PHONY: build install clean test
 
 build:
 	@mkdir -p bin
@@ -9,3 +9,6 @@ install:
 
 clean:
 	rm -rf bin
+
+test:
+	go test ./...
