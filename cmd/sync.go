@@ -53,6 +53,10 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) error {
 			if err := syncImageCollection(cfg, db, col); err != nil {
 				fmt.Printf("  ERROR: %v\n", err)
 			}
+		case "pdf":
+			if err := syncPdfCollection(cfg, db, col); err != nil {
+				fmt.Printf("  ERROR: %v\n", err)
+			}
 		default:
 			fmt.Printf("  Unknown type: %s\n", col.Type)
 		}

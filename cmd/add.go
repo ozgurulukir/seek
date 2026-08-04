@@ -19,6 +19,7 @@ type AddCmd struct {
 	Claude bool   `help:"Add Claude Code conversations"`
 	Codex  bool   `help:"Add Codex conversations"`
 	Images bool   `help:"Add image files (png/jpg/webp)"`
+	Pdf    bool   `help:"Add PDF files (pages rasterized for VL embedding)"`
 }
 
 func (c *AddCmd) Run(cfg *config.AppConfig) error {
@@ -35,6 +36,8 @@ func (c *AddCmd) Run(cfg *config.AppConfig) error {
 		return c.addCodex(cfg, db)
 	case c.Images:
 		return c.addImages(cfg, db)
+	case c.Pdf:
+		return c.addPdfs(cfg, db)
 	default:
 		return c.addMarkdown(cfg, db)
 	}
@@ -159,6 +162,102 @@ func (c *AddCmd) addImages(cfg *config.AppConfig, db *store.Store) error {
 
 	fmt.Printf("Created collection %q (images) → %s\n", col.Name, col.Path)
 	return syncImageCollection(cfg, db, col)
+}
+
+func (c *AddCmd) addPdfs(cfg *config.AppConfig, db *store.Store) error {
+	if c.Path == "" {
+		return fmt.Errorf("path is required for pdf collection")
+	}
+
+	absPath, err := filepath.Abs(c.Path)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return fmt.Errorf("path does not exist: %s", absPath)
+	}
+
+	name := c.Name
+	if name == "" {
+		name = filepath.Base(absPath)
+	}
+
+	if existing, err := db.GetCollectionByName(name); err == nil {
+		fmt.Printf("Collection %q already exists (id=%d, path=%s)\n", existing.Name, existing.ID, existing.Path)
+		return nil
+	}
+
+	col, err := db.CreateCollection(name, "pdf", absPath, "**/*.pdf")
+	if err != nil {
+		return fmt.Errorf("create collection: %w", err)
+	}
+
+	fmt.Printf("Created collection %q (pdf) → %s\n", col.Name, col.Path)
+	return syncPdfCollection(cfg, db, col)
+}
+
+// syncPdfCollection rasterizes each changed PDF into per-page PNGs (cached under
+// cfg.CacheDir/pdf/) and stores one document per PDF with one image chunk per page.
+// Pages are embedded later by `seek embed` through the same VL image pipeline.
+func syncPdfCollection(cfg *config.AppConfig, db *store.Store, col *store.Collection) error {
+	files, err := source.ScanPdfs(col.Path)
+	if err != nil {
+		return err
+	}
+
+	diskPaths := make(map[string]bool, len(files))
+	for _, f := range files {
+		diskPaths[f.Path] = true
+	}
+	if existingPaths, err := db.ListDocumentPaths(col.ID); err == nil {
+		var removed int
+		for path, docID := range existingPaths {
+			if !diskPaths[path] {
+				db.DeleteDocument(docID)
+				removed++
+			}
+		}
+		if removed > 0 {
+			fmt.Printf("  Removed %d stale PDFs\n", removed)
+		}
+	}
+
+	var indexed, skipped int
+
+	for _, f := range files {
+		existing, err := db.GetDocument(col.ID, f.Path)
+		if err == nil && existing.ContentHash == f.ContentHash {
+			skipped++
+			continue
+		}
+
+		pages, err := source.RasterizePDF(f.Path, cfg.CacheDir, 150)
+		if err != nil {
+			fmt.Printf("  WARN: rasterize %s: %v\n", f.Path, err)
+			continue
+		}
+
+		docID, err := db.UpsertDocument(col.ID, f.Path, f.Name, f.ContentHash, f.Mtime, len(pages))
+		if err != nil {
+			fmt.Printf("  WARN: upsert doc %s: %v\n", f.Path, err)
+			continue
+		}
+
+		db.DeleteChunksForDocument(docID)
+
+		for _, pg := range pages {
+			content := fmt.Sprintf("PDF page %d of %s", pg.Seq+1, f.Name)
+			if err := db.InsertImageChunk(docID, pg.Seq, content, pg.Path, nil); err != nil {
+				fmt.Printf("  WARN: insert page chunk %s: %v\n", pg.Path, err)
+				break
+			}
+		}
+		indexed++
+		fmt.Printf("  Indexed %s (%d pages)\n", f.Name, len(pages))
+	}
+
+	fmt.Printf("PDFs: %d indexed, %d skipped\n", indexed, skipped)
+	return nil
 }
 
 // --- Sync helpers (shared with sync.go) ---

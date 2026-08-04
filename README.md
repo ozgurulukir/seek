@@ -30,7 +30,8 @@ seek auth login
 seek add /path/to/notes --name mynotes    # markdown
 seek add --claude                          # Claude Code conversations
 seek add --codex                           # Codex conversations
-seek add --images /path/to/images -n pics  # image files
+seek add --images /path/to/images -n pics  # image files (png/jpg/webp)
+seek add --pdf /path/to/pdfs -n docs      # PDFs (pages rasterized for VL embedding)
 
 # Generate embeddings
 seek embed
@@ -88,7 +89,7 @@ This writes a `Stop` hook into `~/.claude/settings.json` so `seek sync` runs aut
 
 ## How It Works
 
-**Indexing** — `seek sync` scans collections incrementally. Markdown files are tracked by content hash. Claude/Codex JSONL files are append-only, tracked by line count. Base64 images in conversations are extracted to `~/.cache/seek/images/`.
+**Indexing** — `seek sync` scans collections incrementally. Markdown files are tracked by content hash. Claude/Codex JSONL files are append-only, tracked by line count. Base64 images in conversations are extracted to `~/.cache/seek/images/`. PDF pages are rasterized to PNG under `~/.cache/seek/pdf/` so VL models can embed them (DashScope's multimodal API accepts `image/*` data URIs, not PDFs directly).
 
 **Embedding** — `seek embed` generates vectors. Any [OpenAI-compatible](https://platform.openai.com/docs/api-reference/embeddings) provider works out of the box (set `base_url`/`model` in config, or run `seek auth login`). Multimodal image+text embedding uses a vision-language model and is enabled automatically for models matching `vl-embedding`/`multimodal`, or explicitly via `multimodal: true` — the VL endpoint defaults to DashScope's [qwen3-vl-embedding](https://help.aliyun.com/zh/model-studio/developer-reference/multimodal-embedding) but can be pointed at any provider via `vl_base_url`.
 
@@ -107,6 +108,7 @@ This writes a `Stop` hook into `~/.claude/settings.json` so `seek sync` runs aut
 | `claude` | `~/.claude/projects/` | All Claude Code conversations + screenshots |
 | `codex` | `~/.codex/` | All Codex sessions + screenshots |
 | `images` | Any directory | Image files (png/jpg/webp) with VL embedding |
+| `pdf` | Any directory | PDF pages rasterized to PNG, VL embedding per page |
 
 ## Built With
 
