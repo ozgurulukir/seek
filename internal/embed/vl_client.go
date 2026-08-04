@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	vlEndpoint     = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
-	vlMaxContents  = 20 // max content elements per request
-	vlMaxImages    = 5  // max images per request
+	vlEndpoint    = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+	vlMaxContents = 20 // max content elements per request
+	vlMaxImages   = 5  // max images per request
 )
 
 // EmbedItem represents a single item to embed — either text-only or image+context.
@@ -43,9 +43,9 @@ func NewVLClient(apiKey, model string, dimensions int) *VLClient {
 
 // vlRequest is the DashScope multimodal embedding request format.
 type vlRequest struct {
-	Model      string      `json:"model"`
-	Input      vlInput     `json:"input"`
-	Parameters vlParams    `json:"parameters"`
+	Model      string   `json:"model"`
+	Input      vlInput  `json:"input"`
+	Parameters vlParams `json:"parameters"`
 }
 
 type vlInput struct {

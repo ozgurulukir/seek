@@ -12,12 +12,12 @@ import (
 )
 
 var cli struct {
-	Add    cmd.AddCmd    `cmd:"" help:"Add a collection to index"`
-	Rm     cmd.RmCmd     `cmd:"" help:"Remove a collection"`
-	Sync   cmd.SyncCmd   `cmd:"" help:"Sync all collections (incremental)"`
-	Embed  cmd.EmbedCmd  `cmd:"" help:"Generate embeddings (batch or realtime)"`
-	Search cmd.SearchCmd `cmd:"" help:"Search across collections"`
-	Status cmd.StatusCmd `cmd:"" help:"Show index status"`
+	Add     cmd.AddCmd     `cmd:"" help:"Add a collection to index"`
+	Rm      cmd.RmCmd      `cmd:"" help:"Remove a collection"`
+	Sync    cmd.SyncCmd    `cmd:"" help:"Sync all collections (incremental)"`
+	Embed   cmd.EmbedCmd   `cmd:"" help:"Generate embeddings (batch or realtime)"`
+	Search  cmd.SearchCmd  `cmd:"" help:"Search across collections"`
+	Status  cmd.StatusCmd  `cmd:"" help:"Show index status"`
 	Service cmd.ServiceCmd `cmd:"" help:"Manage periodic sync+embed service"`
 	Hooks   cmd.HooksCmd   `cmd:"" help:"Install/remove hooks for AI tools"`
 	Auth    cmd.AuthCmd    `cmd:"" help:"Manage API authentication"`
