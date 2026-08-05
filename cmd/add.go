@@ -9,17 +9,19 @@ import (
 	"github.com/anthropics/seek/internal/chunk"
 	"github.com/anthropics/seek/internal/config"
 	"github.com/anthropics/seek/internal/embed"
-	"github.com/anthropics/seek/internal/source"
+	"github.com/anthropics/seek/internal/indexer"
 	"github.com/anthropics/seek/internal/store"
 )
 
 type AddCmd struct {
-	Path   string `arg:"" optional:"" help:"Path to directory"`
-	Name   string `short:"n" help:"Collection name (default: directory name)"`
-	Claude bool   `help:"Add Claude Code conversations"`
-	Codex  bool   `help:"Add Codex conversations"`
-	Images bool   `help:"Add image files (png/jpg/webp)"`
-	Pdf    bool   `help:"Add PDF files (pages rasterized for VL embedding)"`
+	Path    string `arg:"" optional:"" help:"Directory to index"`
+	Name    string `short:"n" help:"Name of the collection (defaults to folder name)"`
+	Pattern string `short:"p" help:"Glob pattern for markdown files (default: **/*.md)"`
+
+	Claude bool `help:"Add Claude Code conversations (~/.claude/projects/)"`
+	Codex  bool `help:"Add Codex conversations (~/.codex/)"`
+	Images bool `help:"Add an image directory (png/jpg/webp)"`
+	Pdf    bool `help:"Add a PDF directory (rasterized for VL embedding)"`
 }
 
 func (c *AddCmd) Run(cfg *config.AppConfig) error {
@@ -29,25 +31,26 @@ func (c *AddCmd) Run(cfg *config.AppConfig) error {
 	}
 	defer db.Close()
 
-	switch {
-	case c.Claude:
+	if c.Claude {
 		return c.addClaude(cfg, db)
-	case c.Codex:
-		return c.addCodex(cfg, db)
-	case c.Images:
-		return c.addImages(cfg, db)
-	case c.Pdf:
-		return c.addPdfs(cfg, db)
-	default:
-		return c.addMarkdown(cfg, db)
 	}
+	if c.Codex {
+		return c.addCodex(cfg, db)
+	}
+	if c.Images {
+		return c.addImages(cfg, db)
+	}
+	if c.Pdf {
+		return c.addPdfs(cfg, db)
+	}
+
+	return c.addMarkdown(cfg, db)
 }
 
 func (c *AddCmd) addMarkdown(cfg *config.AppConfig, db *store.Store) error {
 	if c.Path == "" {
-		return fmt.Errorf("path is required for markdown collection")
+		return fmt.Errorf("path is required")
 	}
-
 	absPath, err := filepath.Abs(c.Path)
 	if err != nil {
 		return err
@@ -61,75 +64,62 @@ func (c *AddCmd) addMarkdown(cfg *config.AppConfig, db *store.Store) error {
 		name = filepath.Base(absPath)
 	}
 
-	// Check if already exists
 	if existing, err := db.GetCollectionByName(name); err == nil {
 		fmt.Printf("Collection %q already exists (id=%d, path=%s)\n", existing.Name, existing.ID, existing.Path)
 		return nil
 	}
 
-	col, err := db.CreateCollection(name, "markdown", absPath, "**/*.md")
+	col, err := db.CreateCollection(name, "markdown", absPath, c.Pattern)
 	if err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
 
 	fmt.Printf("Created collection %q (markdown) → %s\n", col.Name, col.Path)
-
-	// Initial sync
-	return syncMarkdownCollection(cfg, db, col)
+	return indexer.New(cfg, db).SyncCollection(col)
 }
 
 func (c *AddCmd) addClaude(cfg *config.AppConfig, db *store.Store) error {
+	name := c.Name
+	if name == "" {
+		name = "claude"
+	}
 	home, _ := os.UserHomeDir()
-	claudeDir := filepath.Join(home, ".claude", "projects")
-
-	if _, err := os.Stat(claudeDir); os.IsNotExist(err) {
-		return fmt.Errorf("claude projects directory not found: %s", claudeDir)
-	}
-
-	name := "claude-conversations"
-	if c.Name != "" {
-		name = c.Name
-	}
+	path := filepath.Join(home, ".claude", "projects")
 
 	if existing, err := db.GetCollectionByName(name); err == nil {
 		fmt.Printf("Collection %q already exists (id=%d)\n", existing.Name, existing.ID)
 		return nil
 	}
 
-	col, err := db.CreateCollection(name, "claude", claudeDir, "**/*.jsonl")
+	col, err := db.CreateCollection(name, "claude", path, "")
 	if err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
 
 	fmt.Printf("Created collection %q (claude) → %s\n", col.Name, col.Path)
-	return syncClaudeCollection(cfg, db, col)
+	return indexer.New(cfg, db).SyncCollection(col)
 }
 
 func (c *AddCmd) addCodex(cfg *config.AppConfig, db *store.Store) error {
+	name := c.Name
+	if name == "" {
+		name = "codex"
+	}
 	home, _ := os.UserHomeDir()
-	codexDir := filepath.Join(home, ".codex")
-
-	if _, err := os.Stat(codexDir); os.IsNotExist(err) {
-		return fmt.Errorf("codex directory not found: %s", codexDir)
-	}
-
-	name := "codex-conversations"
-	if c.Name != "" {
-		name = c.Name
-	}
+	path := filepath.Join(home, ".codex")
 
 	if existing, err := db.GetCollectionByName(name); err == nil {
 		fmt.Printf("Collection %q already exists (id=%d)\n", existing.Name, existing.ID)
 		return nil
 	}
 
-	col, err := db.CreateCollection(name, "codex", codexDir, "**/*.jsonl")
+	col, err := db.CreateCollection(name, "codex", path, "")
 	if err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
 
 	fmt.Printf("Created collection %q (codex) → %s\n", col.Name, col.Path)
-	return syncCodexCollection(cfg, db, col)
+	return indexer.New(cfg, db).SyncCollection(col)
 }
 
 func (c *AddCmd) addImages(cfg *config.AppConfig, db *store.Store) error {
@@ -155,13 +145,13 @@ func (c *AddCmd) addImages(cfg *config.AppConfig, db *store.Store) error {
 		return nil
 	}
 
-	col, err := db.CreateCollection(name, "images", absPath, "**/*.{png,jpg,jpeg,webp,gif}")
+	col, err := db.CreateCollection(name, "images", absPath, "**/*.{png,jpg,jpeg,webp}")
 	if err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
 
 	fmt.Printf("Created collection %q (images) → %s\n", col.Name, col.Path)
-	return syncImageCollection(cfg, db, col)
+	return indexer.New(cfg, db).SyncCollection(col)
 }
 
 func (c *AddCmd) addPdfs(cfg *config.AppConfig, db *store.Store) error {
@@ -193,360 +183,7 @@ func (c *AddCmd) addPdfs(cfg *config.AppConfig, db *store.Store) error {
 	}
 
 	fmt.Printf("Created collection %q (pdf) → %s\n", col.Name, col.Path)
-	return syncPdfCollection(cfg, db, col)
-}
-
-// syncPdfCollection rasterizes each changed PDF into per-page PNGs (cached under
-// cfg.CacheDir/pdf/) and stores one document per PDF with one image chunk per page.
-// Pages are embedded later by `seek embed` through the same VL image pipeline.
-func syncPdfCollection(cfg *config.AppConfig, db *store.Store, col *store.Collection) error {
-	files, err := source.ScanPdfs(col.Path)
-	if err != nil {
-		return err
-	}
-
-	diskPaths := make(map[string]bool, len(files))
-	for _, f := range files {
-		diskPaths[f.Path] = true
-	}
-	if existingPaths, err := db.ListDocumentPaths(col.ID); err == nil {
-		var removed int
-		for path, docID := range existingPaths {
-			if !diskPaths[path] {
-				db.DeleteDocument(docID)
-				removed++
-			}
-		}
-		if removed > 0 {
-			fmt.Printf("  Removed %d stale PDFs\n", removed)
-		}
-	}
-
-	// OCR client for scanned pages (nil if disabled or no key).
-	var ocr source.TextExtractor
-	if cfg.Config.OCR.Enabled {
-		key := cfg.Config.OCR.APIKey
-		if key == "" {
-			fmt.Println("  WARN: ocr.enabled is true but no API key configured; skipping OCR")
-		} else {
-			ocr = embed.NewOCRClient(cfg.Config.OCR.BaseURL, key, cfg.Config.OCR.Model)
-		}
-	}
-
-	var indexed, skipped int
-
-	for _, f := range files {
-		existing, err := db.GetDocument(col.ID, f.Path)
-		if err == nil && existing.ContentHash == f.ContentHash {
-			skipped++
-			continue
-		}
-
-		pages, err := source.RasterizePDF(f.Path, cfg.CacheDir, 150, ocr)
-		if err != nil {
-			fmt.Printf("  WARN: rasterize %s: %v\n", f.Path, err)
-			continue
-		}
-
-		docID, err := db.UpsertDocument(col.ID, f.Path, f.Name, f.ContentHash, f.Mtime, len(pages))
-		if err != nil {
-			fmt.Printf("  WARN: upsert doc %s: %v\n", f.Path, err)
-			continue
-		}
-
-		db.DeleteChunksForDocument(docID)
-
-		var pageText strings.Builder
-		for _, pg := range pages {
-			content := fmt.Sprintf("PDF page %d of %s", pg.Seq+1, f.Name)
-			if pg.Text != "" {
-				content += "\n" + pg.Text
-				pageText.WriteString(pg.Text)
-				pageText.WriteString("\n")
-			}
-			if err := db.InsertImageChunk(docID, pg.Seq, content, pg.Path, nil); err != nil {
-				fmt.Printf("  WARN: insert page chunk %s: %v\n", pg.Path, err)
-				break
-			}
-		}
-
-		// Index extracted text for keyword (BM25) search.
-		if pageText.Len() > 0 {
-			if err := db.UpsertFTS(docID, f.Name, pageText.String()); err != nil {
-				fmt.Printf("  WARN: upsert fts %s: %v\n", f.Path, err)
-			}
-		}
-
-		indexed++
-		fmt.Printf("  Indexed %s (%d pages)\n", f.Name, len(pages))
-	}
-
-	fmt.Printf("PDFs: %d indexed, %d skipped\n", indexed, skipped)
-	return nil
-}
-
-// --- Sync helpers (shared with sync.go) ---
-
-func syncMarkdownCollection(cfg *config.AppConfig, db *store.Store, col *store.Collection) error {
-	files, err := source.ScanMarkdown(col.Path, col.Pattern)
-	if err != nil {
-		return err
-	}
-
-	// Build set of current paths on disk
-	diskPaths := make(map[string]bool, len(files))
-	for _, f := range files {
-		diskPaths[f.Path] = true
-	}
-
-	// Remove stale documents no longer on disk
-	existingPaths, err := db.ListDocumentPaths(col.ID)
-	if err == nil {
-		var removed int
-		for path, docID := range existingPaths {
-			if !diskPaths[path] {
-				db.DeleteDocument(docID)
-				removed++
-			}
-		}
-		if removed > 0 {
-			fmt.Printf("  Removed %d stale documents\n", removed)
-		}
-	}
-
-	var indexed, skipped int
-
-	for _, f := range files {
-		existing, err := db.GetDocument(col.ID, f.Path)
-		if err == nil {
-			// Document exists — check if changed
-			if existing.ContentHash == f.ContentHash {
-				if existing.Mtime != f.Mtime {
-					db.UpdateDocumentMtime(existing.ID, f.Mtime)
-				}
-				skipped++
-				continue
-			}
-		}
-
-		// New or changed — index it
-		docID, err := db.UpsertDocument(col.ID, f.Path, f.Title, f.ContentHash, f.Mtime, f.LineCount)
-		if err != nil {
-			fmt.Printf("  WARN: upsert doc %s: %v\n", f.Path, err)
-			continue
-		}
-
-		// FTS
-		if err := db.UpsertFTS(docID, f.Title, f.Content); err != nil {
-			fmt.Printf("  WARN: fts %s: %v\n", f.Path, err)
-		}
-
-		// Chunks + embeddings
-		db.DeleteChunksForDocument(docID)
-		chunks := chunk.ChunkMarkdown(f.Content, 0, 0)
-		if err := indexChunks(db, docID, chunks); err != nil {
-			fmt.Printf("  WARN: embed %s: %v\n", f.Path, err)
-		}
-
-		indexed++
-	}
-
-	fmt.Printf("  Synced: %d indexed, %d unchanged\n", indexed, skipped)
-	return nil
-}
-
-func syncClaudeCollection(cfg *config.AppConfig, db *store.Store, col *store.Collection) error {
-	files, err := source.ScanClaudeFiles()
-	if err != nil {
-		return err
-	}
-
-	var indexed, skipped int
-	var totalImages int
-
-	for _, f := range files {
-		// Fast path: skip if file mtime hasn't changed
-		existing, err := db.GetDocument(col.ID, f.Path)
-		if err == nil && existing.Mtime >= f.Mtime {
-			skipped++
-			continue
-		}
-
-		lineCount, _ := source.CountLines(f.Path)
-
-		// Double-check: line count unchanged means no new content
-		if existing != nil && existing.LineCount >= lineCount {
-			db.UpdateDocumentMtime(existing.ID, f.Mtime)
-			skipped++
-			continue
-		}
-
-		// Only parse files that actually changed
-		fromLine := 0
-		if existing != nil {
-			fromLine = existing.LineCount
-		}
-
-		convID := strings.TrimSuffix(filepath.Base(f.Path), filepath.Ext(f.Path))
-
-		messages, images, err := source.ParseClaudeFileWithImages(f.Path, fromLine, convID)
-		if err != nil {
-			continue
-		}
-
-		if len(messages) == 0 && len(images) == 0 {
-			skipped++
-			continue
-		}
-
-		title := filepath.Base(f.Path)
-		if fromLine == 0 {
-			for _, m := range messages {
-				if m.Role == "user" {
-					title = source.Truncate(m.Content, 100)
-					break
-				}
-			}
-		}
-
-		docID, err := db.UpsertDocument(col.ID, f.Path, title, "", f.Mtime, lineCount)
-		if err != nil {
-			continue
-		}
-
-		text := source.ClaudeConversationToText(messages)
-		if fromLine > 0 {
-			if err := db.AppendFTS(docID, text); err != nil {
-				fmt.Printf("  WARN: fts %s: %v\n", f.Path, err)
-			}
-		} else {
-			if err := db.UpsertFTS(docID, title, text); err != nil {
-				fmt.Printf("  WARN: fts %s: %v\n", f.Path, err)
-			}
-			db.DeleteChunksForDocument(docID)
-		}
-
-		chunks := chunk.ChunkConversation(text, 0)
-		if err := indexChunks(db, docID, chunks); err != nil {
-			fmt.Printf("  WARN: embed %s: %v\n", f.Path, err)
-		}
-
-		nextSeq := len(chunks)
-		for _, img := range images {
-			if err := db.InsertImageChunk(docID, nextSeq, img.Context, img.SavedPath, nil); err != nil {
-				fmt.Printf("  WARN: image chunk %s: %v\n", img.SavedPath, err)
-				continue
-			}
-			nextSeq++
-			totalImages++
-		}
-
-		indexed++
-	}
-
-	fmt.Printf("  Synced: %d indexed, %d unchanged", indexed, skipped)
-	if totalImages > 0 {
-		fmt.Printf(", %d images", totalImages)
-	}
-	fmt.Println()
-	return nil
-}
-
-func syncCodexCollection(cfg *config.AppConfig, db *store.Store, col *store.Collection) error {
-	files, err := source.ScanCodexFiles()
-	if err != nil {
-		return err
-	}
-
-	threadNames := source.LoadCodexThreadNames()
-
-	var indexed, skipped int
-	var totalImages int
-
-	for _, f := range files {
-		// Fast path: skip if file mtime hasn't changed
-		existing, err := db.GetDocument(col.ID, f.Path)
-		if err == nil && existing.Mtime >= f.Mtime {
-			skipped++
-			continue
-		}
-
-		lineCount, _ := source.CountLines(f.Path)
-
-		if existing != nil && existing.LineCount >= lineCount {
-			db.UpdateDocumentMtime(existing.ID, f.Mtime)
-			skipped++
-			continue
-		}
-
-		fromLine := 0
-		if existing != nil {
-			fromLine = existing.LineCount
-		}
-
-		messages, sessionID, images, err := source.ParseCodexFileWithImages(f.Path, fromLine)
-		if err != nil {
-			continue
-		}
-
-		if len(messages) == 0 && len(images) == 0 {
-			skipped++
-			continue
-		}
-
-		title := filepath.Base(f.Path)
-		if name, ok := threadNames[sessionID]; ok && name != "" {
-			title = name
-		} else if fromLine == 0 {
-			for _, m := range messages {
-				if m.Role == "user" {
-					title = source.Truncate(m.Content, 100)
-					break
-				}
-			}
-		}
-
-		docID, err := db.UpsertDocument(col.ID, f.Path, title, "", f.Mtime, lineCount)
-		if err != nil {
-			continue
-		}
-
-		text := source.ConversationToText(messages)
-		if fromLine > 0 {
-			if err := db.AppendFTS(docID, text); err != nil {
-				fmt.Printf("  WARN: fts %s: %v\n", f.Path, err)
-			}
-		} else {
-			if err := db.UpsertFTS(docID, title, text); err != nil {
-				fmt.Printf("  WARN: fts %s: %v\n", f.Path, err)
-			}
-			db.DeleteChunksForDocument(docID)
-		}
-
-		chunks := chunk.ChunkConversation(text, 0)
-		if err := indexChunks(db, docID, chunks); err != nil {
-			fmt.Printf("  WARN: embed %s: %v\n", f.Path, err)
-		}
-
-		nextSeq := len(chunks)
-		for _, img := range images {
-			if err := db.InsertImageChunk(docID, nextSeq, img.Context, img.SavedPath, nil); err != nil {
-				fmt.Printf("  WARN: image chunk %s: %v\n", img.SavedPath, err)
-				continue
-			}
-			nextSeq++
-			totalImages++
-		}
-
-		indexed++
-	}
-
-	fmt.Printf("  Synced: %d indexed, %d unchanged", indexed, skipped)
-	if totalImages > 0 {
-		fmt.Printf(", %d images", totalImages)
-	}
-	fmt.Println()
-	return nil
+	return indexer.New(cfg, db).SyncCollection(col)
 }
 
 func newEmbedClient(cfg *config.AppConfig) *embed.Client {
@@ -589,61 +226,6 @@ func indexChunks(db *store.Store, docID int64, chunks []chunk.Chunk) error {
 			}
 		}
 	}
-	return nil
-}
-
-func syncImageCollection(cfg *config.AppConfig, db *store.Store, col *store.Collection) error {
-	files, err := source.ScanImages(col.Path)
-	if err != nil {
-		return err
-	}
-
-	// Remove stale images no longer on disk
-	diskPaths := make(map[string]bool, len(files))
-	for _, f := range files {
-		diskPaths[f.Path] = true
-	}
-	if existingPaths, err := db.ListDocumentPaths(col.ID); err == nil {
-		var removed int
-		for path, docID := range existingPaths {
-			if !diskPaths[path] {
-				db.DeleteDocument(docID)
-				removed++
-			}
-		}
-		if removed > 0 {
-			fmt.Printf("  Removed %d stale images\n", removed)
-		}
-	}
-
-	var indexed, skipped int
-
-	for _, f := range files {
-		existing, err := db.GetDocument(col.ID, f.Path)
-		if err == nil && existing.ContentHash == f.ContentHash {
-			skipped++
-			continue
-		}
-
-		// Each image file = 1 document + 1 image chunk
-		docID, err := db.UpsertDocument(col.ID, f.Path, f.Name, f.ContentHash, f.Mtime, 0)
-		if err != nil {
-			fmt.Printf("  WARN: upsert doc %s: %v\n", f.Path, err)
-			continue
-		}
-
-		db.DeleteChunksForDocument(docID)
-
-		// Insert as image chunk — content is the filename (as context for VL embedding)
-		if err := db.InsertImageChunk(docID, 0, f.Name, f.Path, nil); err != nil {
-			fmt.Printf("  WARN: image chunk %s: %v\n", f.Path, err)
-			continue
-		}
-
-		indexed++
-	}
-
-	fmt.Printf("  Synced: %d indexed, %d unchanged\n", indexed, skipped)
 	return nil
 }
 
