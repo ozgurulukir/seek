@@ -119,6 +119,7 @@ func (idx *Indexer) syncConversation(
 			continue
 		}
 
+		nextSeq := 0
 		if messages != nil {
 			text := toText(messages)
 			if fromLine > 0 {
@@ -138,12 +139,7 @@ func (idx *Indexer) syncConversation(
 					idx.log.Printf("  WARN: embed %s: %v\n", f.Path, err)
 				}
 			}
-		}
-
-		nextSeq := 0
-		if messages != nil {
-			// Get chunk count roughly
-			nextSeq = 100 // We don't have len(chunks) here, need better design if we want accurate seq
+			nextSeq = len(chunks)
 		}
 
 		for _, img := range images {

@@ -64,6 +64,10 @@ func (c *AddCmd) addMarkdown(cfg *config.AppConfig, db *store.Store) error {
 		name = filepath.Base(absPath)
 	}
 
+	if c.Pattern == "" {
+		c.Pattern = "**/*.md"
+	}
+
 	if existing, err := db.GetCollectionByName(name); err == nil {
 		fmt.Printf("Collection %q already exists (id=%d, path=%s)\n", existing.Name, existing.ID, existing.Path)
 		return nil
@@ -81,7 +85,7 @@ func (c *AddCmd) addMarkdown(cfg *config.AppConfig, db *store.Store) error {
 func (c *AddCmd) addClaude(cfg *config.AppConfig, db *store.Store) error {
 	name := c.Name
 	if name == "" {
-		name = "claude"
+		name = "claude-conversations"
 	}
 	home, _ := os.UserHomeDir()
 	path := filepath.Join(home, ".claude", "projects")
@@ -103,7 +107,7 @@ func (c *AddCmd) addClaude(cfg *config.AppConfig, db *store.Store) error {
 func (c *AddCmd) addCodex(cfg *config.AppConfig, db *store.Store) error {
 	name := c.Name
 	if name == "" {
-		name = "codex"
+		name = "codex-conversations"
 	}
 	home, _ := os.UserHomeDir()
 	path := filepath.Join(home, ".codex")
