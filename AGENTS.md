@@ -36,9 +36,9 @@ root (main.go) ──> cmd ──> internal/{chunk,config,embed,search,source,st
 Keep the layering: `cmd/` orchestrates; `internal/` has no imports from `cmd/` or `root`. Do not introduce cross-boundary imports.
 
 - `internal/store` — SQLite persistence: collections, documents, chunks, embeddings, FTS5 index, vector search. **All SQL lives here.** `SearchVector` currently does a full-table scan + cosine (SIMD via `viterin/vek`); it has no ANN index yet.
-- `internal/embed` — providers: `Client` (any OpenAI-compatible text embeddings) and `VLClient` (multimodal image+text). The VL endpoint is configurable via `embedding.vl_base_url`, defaulting to DashScope's qwen3-vl-embedding.
+- `internal/embed` — providers: `Client` (any OpenAI-compatible text embeddings), `VLClient` (multimodal image+text), and `OCRClient` (OpenAI-compatible vision/OCR for scanned PDF pages). The VL endpoint is configurable via `embedding.vl_base_url`, defaulting to DashScope's qwen3-vl-embedding.
 - `internal/search` — BM25 + vector + RRF hybrid fusion. The RRF fusion and sort are covered by tests.
-- `internal/source` — per-format parsers (claude/codex/markdown/images) plus `pdf.go`, which rasterizes PDF pages to PNG via `go-fitz` (bundled static MuPDF, cgo).
+- `internal/source` — per-format parsers (claude/codex/markdown/images) plus `pdf.go`, which rasterizes PDF pages to PNG via `go-fitz` (bundled static MuPDF, cgo) and extracts text (embedded via `doc.Text`, or OCR via the `TextExtractor` interface for scanned pages).
 - `internal/chunk` — text chunking (header/size splitting).
 - `internal/config` — `~/.config/seek/config.yaml`, provider selection, `IsMultimodal()` logic.
 
@@ -60,6 +60,22 @@ embedding:
 - Multimodal (image+text) uses `VLClient`. It is enabled when `IsMultimodal()` is true — i.e. `multimodal: true`, or the model name contains `vl-embedding`/`multimodal`.
 - `dimensions` is **fixed at index time** (stored per-chunk). Changing model or dimensions requires re-indexing (`seek rm <collection>` then `seek add`).
 - **Never hardcode a provider endpoint** — everything must route through `base_url`/`vl_base_url` from config. The only exception is `DefaultVLEndpoint` as the DashScope fallback.
+
+### OCR config (`ocr`)
+
+```yaml
+ocr:
+  enabled: true
+  # base_url/api_key/model default to the embedding provider; model defaults to qwen-vl-ocr
+  # base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  # api_key: ${DASHSCOPE_API_KEY}
+  # model: qwen-vl-ocr
+```
+
+- OCR runs only for PDF pages with no embedded text (scanned docs), during `seek add --pdf` / `seek sync`.
+- Uses the OpenAI-compatible chat-completions vision format (`POST {base_url}/chat/completions`), so any vision/OCR model works.
+- Extracted text is written to the chunk `content` and indexed via `UpsertFTS`, making scanned PDFs keyword-searchable.
+- `source.TextExtractor` is the interface; `embed.OCRClient` implements it. Keep `source` decoupled from `embed`.
 
 ## Testing conventions
 

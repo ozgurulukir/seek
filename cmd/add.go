@@ -222,6 +222,17 @@ func syncPdfCollection(cfg *config.AppConfig, db *store.Store, col *store.Collec
 		}
 	}
 
+	// OCR client for scanned pages (nil if disabled or no key).
+	var ocr source.TextExtractor
+	if cfg.Config.OCR.Enabled {
+		key := cfg.Config.OCR.APIKey
+		if key == "" {
+			fmt.Println("  WARN: ocr.enabled is true but no API key configured; skipping OCR")
+		} else {
+			ocr = embed.NewOCRClient(cfg.Config.OCR.BaseURL, key, cfg.Config.OCR.Model)
+		}
+	}
+
 	var indexed, skipped int
 
 	for _, f := range files {
@@ -231,7 +242,7 @@ func syncPdfCollection(cfg *config.AppConfig, db *store.Store, col *store.Collec
 			continue
 		}
 
-		pages, err := source.RasterizePDF(f.Path, cfg.CacheDir, 150)
+		pages, err := source.RasterizePDF(f.Path, cfg.CacheDir, 150, ocr)
 		if err != nil {
 			fmt.Printf("  WARN: rasterize %s: %v\n", f.Path, err)
 			continue
@@ -245,13 +256,27 @@ func syncPdfCollection(cfg *config.AppConfig, db *store.Store, col *store.Collec
 
 		db.DeleteChunksForDocument(docID)
 
+		var pageText strings.Builder
 		for _, pg := range pages {
 			content := fmt.Sprintf("PDF page %d of %s", pg.Seq+1, f.Name)
+			if pg.Text != "" {
+				content += "\n" + pg.Text
+				pageText.WriteString(pg.Text)
+				pageText.WriteString("\n")
+			}
 			if err := db.InsertImageChunk(docID, pg.Seq, content, pg.Path, nil); err != nil {
 				fmt.Printf("  WARN: insert page chunk %s: %v\n", pg.Path, err)
 				break
 			}
 		}
+
+		// Index extracted text for keyword (BM25) search.
+		if pageText.Len() > 0 {
+			if err := db.UpsertFTS(docID, f.Name, pageText.String()); err != nil {
+				fmt.Printf("  WARN: upsert fts %s: %v\n", f.Path, err)
+			}
+		}
+
 		indexed++
 		fmt.Printf("  Indexed %s (%d pages)\n", f.Name, len(pages))
 	}

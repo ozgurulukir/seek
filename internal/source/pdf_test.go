@@ -46,7 +46,7 @@ func TestRasterizePDF(t *testing.T) {
 	pdfPath := filepath.Join(dir, "doc.pdf")
 	writeMinPdf(t, pdfPath)
 
-	pages, err := RasterizePDF(pdfPath, dir, 72)
+	pages, err := RasterizePDF(pdfPath, dir, 72, nil)
 	if err != nil {
 		t.Fatalf("RasterizePDF: %v", err)
 	}
@@ -60,11 +60,50 @@ func TestRasterizePDF(t *testing.T) {
 		t.Errorf("cached png not written: %v", err)
 	}
 	// Deterministic cache dir keyed by content hash.
-	pages2, err := RasterizePDF(pdfPath, dir, 72)
+	pages2, err := RasterizePDF(pdfPath, dir, 72, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if pages2[0].Path != pages[0].Path {
 		t.Errorf("cache not keyed by hash: %s vs %s", pages2[0].Path, pages[0].Path)
+	}
+}
+
+// fakeExtractor is a TextExtractor that returns a canned string.
+type fakeExtractor struct{ out string }
+
+func (f fakeExtractor) ExtractText(string) (string, error) { return f.out, nil }
+
+// TestRasterizePDFOCR verifies OCR is invoked when a page has no embedded text.
+func TestRasterizePDFOCR(t *testing.T) {
+	dir := t.TempDir()
+	pdfPath := filepath.Join(dir, "scan.pdf")
+	writeMinPdf(t, pdfPath) // minimal PDF has no text layer
+
+	ocr := fakeExtractor{out: "SCANNED PAGE TEXT"}
+	pages, err := RasterizePDF(pdfPath, dir, 72, ocr)
+	if err != nil {
+		t.Fatalf("RasterizePDF: %v", err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("pages = %d, want 1", len(pages))
+	}
+	if pages[0].Text != "SCANNED PAGE TEXT" {
+		t.Errorf("Text = %q, want OCR output", pages[0].Text)
+	}
+}
+
+// TestRasterizePDFNoOCR verifies no OCR is attempted when extractor is nil.
+func TestRasterizePDFNoOCR(t *testing.T) {
+	dir := t.TempDir()
+	pdfPath := filepath.Join(dir, "scan.pdf")
+	writeMinPdf(t, pdfPath)
+
+	pages, err := RasterizePDF(pdfPath, dir, 72, nil)
+	if err != nil {
+		t.Fatalf("RasterizePDF: %v", err)
+	}
+	if pages[0].Text != "" {
+		t.Errorf("Text = %q, want empty (no OCR)", pages[0].Text)
 	}
 }

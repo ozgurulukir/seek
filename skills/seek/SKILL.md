@@ -92,7 +92,7 @@ seek add --pdf /path/to/pdfs -n mydocs
 | `claude` | `~/.claude/projects/` | Claude Code conversations + screenshots |
 | `codex` | `~/.codex/` | Codex sessions + screenshots |
 | `images` | Any directory | Image files (png/jpg/webp) with VL embedding |
-| `pdf` | Any directory | PDF pages rasterized to PNG, VL embedding per page |
+| `pdf` | Any directory | PDF pages rasterized to PNG, VL embedding per page + OCR text (if enabled) |
 
 Run `seek status` to see which collections the user has configured.
 
@@ -100,6 +100,7 @@ Run `seek status` to see which collections the user has configured.
 
 - Images from conversations are extracted and cached at `~/.cache/seek/images/`
 - PDF pages are rasterized to PNG at `~/.cache/seek/pdf/` and embedded the same way (DashScope's multimodal API accepts `image/*`, not PDF directly)
+- Embedded PDF text is indexed for keyword search; scanned pages are OCR'd when `ocr.enabled` is set (any OpenAI-compatible vision model, default `qwen-vl-ocr`)
 - Text and image chunks use the same embedding model (unified vector space)
 - Vector search naturally finds relevant images alongside text results
 

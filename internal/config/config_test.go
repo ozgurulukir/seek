@@ -22,3 +22,21 @@ func TestEmbeddingConfigIsMultimodal(t *testing.T) {
 		})
 	}
 }
+
+func TestOCRDefaultsResolveFromEmbedding(t *testing.T) {
+	// Simulate the Load() fallback logic directly.
+	emb := EmbeddingConfig{BaseURL: "https://api.example.com/v1", APIKey: "k", Model: "text-embedding-v4"}
+	ocr := OCRConfig{Enabled: true} // base_url/api_key/model empty
+	if ocr.BaseURL == "" {
+		ocr.BaseURL = emb.BaseURL
+	}
+	if ocr.APIKey == "" {
+		ocr.APIKey = emb.APIKey
+	}
+	if ocr.Model == "" {
+		ocr.Model = "qwen-vl-ocr"
+	}
+	if ocr.BaseURL != "https://api.example.com/v1" || ocr.APIKey != "k" || ocr.Model != "qwen-vl-ocr" {
+		t.Errorf("OCR defaults not resolved: %+v", ocr)
+	}
+}

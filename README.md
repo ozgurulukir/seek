@@ -47,6 +47,14 @@ embedding:
   dimensions: 1024
   # multimodal: true                            # enable image+text embedding
   # vl_base_url: https://your-provider/v1/...   # defaults to DashScope if unset
+
+ocr:
+  # extract text from scanned PDF pages so they're keyword-searchable too
+  enabled: true
+  # base_url/api_key/model default to the embedding provider; model defaults to qwen-vl-ocr
+  # base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  # api_key: ${DASHSCOPE_API_KEY}
+  # model: qwen-vl-ocr
 ```
 
 > **Note:** `dimensions` is fixed at index time. If you change models or dimensions, re-run `seek rm <collection>` and `seek add` to rebuild the index.
@@ -89,7 +97,7 @@ This writes a `Stop` hook into `~/.claude/settings.json` so `seek sync` runs aut
 
 ## How It Works
 
-**Indexing** — `seek sync` scans collections incrementally. Markdown files are tracked by content hash. Claude/Codex JSONL files are append-only, tracked by line count. Base64 images in conversations are extracted to `~/.cache/seek/images/`. PDF pages are rasterized to PNG under `~/.cache/seek/pdf/` so VL models can embed them (DashScope's multimodal API accepts `image/*` data URIs, not PDFs directly).
+**Indexing** — `seek sync` scans collections incrementally. Markdown files are tracked by content hash. Claude/Codex JSONL files are append-only, tracked by line count. Base64 images in conversations are extracted to `~/.cache/seek/images/`. PDF pages are rasterized to PNG under `~/.cache/seek/pdf/` so VL models can embed them (DashScope's multimodal API accepts `image/*` data URIs, not PDFs directly). Embedded PDF text is indexed for keyword search; scanned pages are OCR'd when `ocr.enabled` is set, so their text is keyword-searchable too.
 
 **Embedding** — `seek embed` generates vectors. Any [OpenAI-compatible](https://platform.openai.com/docs/api-reference/embeddings) provider works out of the box (set `base_url`/`model` in config, or run `seek auth login`). Multimodal image+text embedding uses a vision-language model and is enabled automatically for models matching `vl-embedding`/`multimodal`, or explicitly via `multimodal: true` — the VL endpoint defaults to DashScope's [qwen3-vl-embedding](https://help.aliyun.com/zh/model-studio/developer-reference/multimodal-embedding) but can be pointed at any provider via `vl_base_url`.
 
@@ -108,7 +116,7 @@ This writes a `Stop` hook into `~/.claude/settings.json` so `seek sync` runs aut
 | `claude` | `~/.claude/projects/` | All Claude Code conversations + screenshots |
 | `codex` | `~/.codex/` | All Codex sessions + screenshots |
 | `images` | Any directory | Image files (png/jpg/webp) with VL embedding |
-| `pdf` | Any directory | PDF pages rasterized to PNG, VL embedding per page |
+| `pdf` | Any directory | PDF pages rasterized to PNG, VL embedding per page + OCR text (if enabled) |
 
 ## Built With
 

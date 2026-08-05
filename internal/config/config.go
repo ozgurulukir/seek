@@ -30,8 +30,20 @@ func (e EmbeddingConfig) IsMultimodal() bool {
 	return strings.Contains(e.Model, "vl-embedding") || strings.Contains(e.Model, "multimodal")
 }
 
+// OCRConfig configures text extraction from rasterized PDF pages (scanned docs).
+// It uses the OpenAI-compatible chat-completions vision format, so any provider
+// that exposes a vision/OCR model works (DashScope qwen-vl-ocr, OpenAI gpt-4o, etc.).
+// Empty base_url/model fall back to the embedding provider's settings.
+type OCRConfig struct {
+	Enabled bool   `yaml:"enabled,omitempty"`
+	BaseURL string `yaml:"base_url,omitempty"`
+	APIKey  string `yaml:"api_key,omitempty"`
+	Model   string `yaml:"model,omitempty"`
+}
+
 type Config struct {
 	Embedding EmbeddingConfig `yaml:"embedding"`
+	OCR       OCRConfig       `yaml:"ocr,omitempty"`
 }
 
 type AppConfig struct {
@@ -77,6 +89,18 @@ func Load() (*AppConfig, error) {
 
 	// Resolve env vars in api_key (e.g. ${DASHSCOPE_API_KEY})
 	ac.Config.Embedding.APIKey = expandEnv(ac.Config.Embedding.APIKey)
+	ac.Config.OCR.APIKey = expandEnv(ac.Config.OCR.APIKey)
+
+	// OCR falls back to the embedding provider when not explicitly set.
+	if ac.Config.OCR.BaseURL == "" {
+		ac.Config.OCR.BaseURL = ac.Config.Embedding.BaseURL
+	}
+	if ac.Config.OCR.APIKey == "" {
+		ac.Config.OCR.APIKey = ac.Config.Embedding.APIKey
+	}
+	if ac.Config.OCR.Model == "" {
+		ac.Config.OCR.Model = "qwen-vl-ocr"
+	}
 
 	return ac, nil
 }

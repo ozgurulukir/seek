@@ -2,6 +2,7 @@ package source
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,10 +19,17 @@ type PdfFile struct {
 	Mtime       float64
 }
 
+// TextExtractor extracts text from a base64 data-URI image. Implemented by
+// embed.OCRClient; defined here so source does not depend on embed.
+type TextExtractor interface {
+	ExtractText(imageDataURI string) (string, error)
+}
+
 // PageImage is one rasterized PDF page rendered to a cached PNG file.
 type PageImage struct {
 	Path string // absolute path to the cached PNG
 	Seq  int    // 0-based page index
+	Text string // extracted text (embedded or OCR'd); empty if none
 }
 
 // ScanPdfs walks a directory and returns all PDF files.
@@ -55,7 +63,10 @@ func ScanPdfs(dir string) ([]PdfFile, error) {
 // RasterizePDF renders every page of a PDF to a PNG in cacheDir/pdf/<hash>/ and
 // returns the page images. Pages are rendered at 150 DPI, which gives VL models
 // clear page images without exploding token/byte sizes.
-func RasterizePDF(pdfPath, cacheDir string, dpi float64) ([]PageImage, error) {
+//
+// Text is extracted per page: embedded text is used when present; otherwise, if
+// ocr is non-nil, the rendered page is OCR'd. ocr may be nil to skip OCR.
+func RasterizePDF(pdfPath, cacheDir string, dpi float64, ocr TextExtractor) ([]PageImage, error) {
 	if dpi <= 0 {
 		dpi = 150
 	}
@@ -85,7 +96,23 @@ func RasterizePDF(pdfPath, cacheDir string, dpi float64) ([]PageImage, error) {
 		if err := os.WriteFile(pagePath, png, 0644); err != nil {
 			return nil, fmt.Errorf("write page png %s: %w", pagePath, err)
 		}
-		pages = append(pages, PageImage{Path: pagePath, Seq: i})
+
+		text, _ := doc.Text(i)
+		text = strings.TrimSpace(text)
+		if text == "" && ocr != nil {
+			text, _ = ocr.ExtractText(dataURIFromFile(pagePath))
+		}
+
+		pages = append(pages, PageImage{Path: pagePath, Seq: i, Text: text})
 	}
 	return pages, nil
+}
+
+// dataURIFromFile reads a file and returns it as a base64 data URI (image/png).
+func dataURIFromFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)
 }
