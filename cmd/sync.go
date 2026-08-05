@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/anthropics/seek/internal/config"
+	"github.com/anthropics/seek/internal/indexer"
 	"github.com/anthropics/seek/internal/store"
 )
 
@@ -28,6 +29,8 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) error {
 		return nil
 	}
 
+	idx := indexer.New(cfg, db)
+
 	for i := range collections {
 		col := &collections[i]
 		if c.Collection != "" && col.Name != c.Collection {
@@ -36,29 +39,8 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) error {
 
 		fmt.Printf("Syncing %q (%s)...\n", col.Name, col.Type)
 
-		switch col.Type {
-		case "markdown":
-			if err := syncMarkdownCollection(cfg, db, col); err != nil {
-				fmt.Printf("  ERROR: %v\n", err)
-			}
-		case "claude":
-			if err := syncClaudeCollection(cfg, db, col); err != nil {
-				fmt.Printf("  ERROR: %v\n", err)
-			}
-		case "codex":
-			if err := syncCodexCollection(cfg, db, col); err != nil {
-				fmt.Printf("  ERROR: %v\n", err)
-			}
-		case "images":
-			if err := syncImageCollection(cfg, db, col); err != nil {
-				fmt.Printf("  ERROR: %v\n", err)
-			}
-		case "pdf":
-			if err := syncPdfCollection(cfg, db, col); err != nil {
-				fmt.Printf("  ERROR: %v\n", err)
-			}
-		default:
-			fmt.Printf("  Unknown type: %s\n", col.Type)
+		if err := idx.SyncCollection(col); err != nil {
+			fmt.Printf("  ERROR: %v\n", err)
 		}
 	}
 
