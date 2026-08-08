@@ -77,7 +77,7 @@ func (idx *Indexer) syncConversation(
 		return err
 	}
 
-	var indexed, skipped, totalImages int
+	var indexed, skipped, totalImages, failed int
 
 	for _, f := range files {
 		existing, err := idx.db.GetDocument(col.ID, f.Path)
@@ -100,6 +100,8 @@ func (idx *Indexer) syncConversation(
 
 		messages, sessionID, images, err := parseFile(f.Path, fromLine)
 		if err != nil {
+			idx.log.Printf("  WARN: parse %s: %v\n", f.Path, err)
+			failed++
 			continue
 		}
 
@@ -120,6 +122,8 @@ func (idx *Indexer) syncConversation(
 
 		docID, err := idx.db.UpsertDocument(col.ID, f.Path, title, "", f.Mtime, lineCount)
 		if err != nil {
+			idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
+			failed++
 			continue
 		}
 
@@ -161,6 +165,9 @@ func (idx *Indexer) syncConversation(
 	idx.log.Printf("  Synced: %d indexed, %d unchanged", indexed, skipped)
 	if totalImages > 0 {
 		idx.log.Printf(", %d images", totalImages)
+	}
+	if failed > 0 {
+		idx.log.Printf(", %d failed", failed)
 	}
 	idx.log.Printf("\n")
 	return nil
@@ -237,7 +244,7 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 		}
 	}
 
-	var indexed, skipped int
+	var indexed, skipped, failed int
 	for _, f := range files {
 		existing, err := idx.db.GetDocument(col.ID, f.Path)
 		if err == nil && existing.ContentHash == f.ContentHash {
@@ -250,6 +257,8 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 
 		docID, err := idx.db.UpsertDocument(col.ID, f.Path, f.Title, f.ContentHash, f.Mtime, f.LineCount)
 		if err != nil {
+			idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
+			failed++
 			continue
 		}
 
@@ -265,7 +274,11 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 		indexed++
 	}
 
-	idx.log.Printf("  Synced: %d indexed, %d unchanged\n", indexed, skipped)
+	idx.log.Printf("  Synced: %d indexed, %d unchanged", indexed, skipped)
+	if failed > 0 {
+		idx.log.Printf(", %d failed", failed)
+	}
+	idx.log.Printf("\n")
 	return nil
 }
 
@@ -292,7 +305,7 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 		}
 	}
 
-	var indexed, skipped int
+	var indexed, skipped, failed int
 	for _, f := range files {
 		existing, err := idx.db.GetDocument(col.ID, f.Path)
 		if err == nil && existing.ContentHash == f.ContentHash {
@@ -302,6 +315,8 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 
 		docID, err := idx.db.UpsertDocument(col.ID, f.Path, f.Name, f.ContentHash, f.Mtime, 0)
 		if err != nil {
+			idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
+			failed++
 			continue
 		}
 
@@ -310,7 +325,11 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 		indexed++
 	}
 
-	idx.log.Printf("  Synced: %d indexed, %d unchanged\n", indexed, skipped)
+	idx.log.Printf("  Synced: %d indexed, %d unchanged", indexed, skipped)
+	if failed > 0 {
+		idx.log.Printf(", %d failed", failed)
+	}
+	idx.log.Printf("\n")
 	return nil
 }
 
@@ -342,7 +361,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 		ocr = embed.NewOCRClient(idx.cfg.Config.OCR.BaseURL, idx.cfg.Config.OCR.APIKey, idx.cfg.Config.OCR.Model)
 	}
 
-	var indexed, skipped int
+	var indexed, skipped, failed int
 	for _, f := range files {
 		existing, err := idx.db.GetDocument(col.ID, f.Path)
 		if err == nil && existing.ContentHash == f.ContentHash {
@@ -352,11 +371,15 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 
 		pages, err := source.RasterizePDF(f.Path, idx.cfg.CacheDir, 150, ocr)
 		if err != nil {
+			idx.log.Printf("  WARN: rasterize %s: %v\n", f.Path, err)
+			failed++
 			continue
 		}
 
 		docID, err := idx.db.UpsertDocument(col.ID, f.Path, f.Name, f.ContentHash, f.Mtime, len(pages))
 		if err != nil {
+			idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
+			failed++
 			continue
 		}
 
@@ -381,7 +404,11 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 		idx.log.Printf("  Indexed %s (%d pages)\n", f.Name, len(pages))
 	}
 
-	idx.log.Printf("PDFs: %d indexed, %d skipped\n", indexed, skipped)
+	idx.log.Printf("PDFs: %d indexed, %d skipped", indexed, skipped)
+	if failed > 0 {
+		idx.log.Printf(", %d failed", failed)
+	}
+	idx.log.Printf("\n")
 	return nil
 }
 
@@ -435,7 +462,7 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 	}
 
 	// 5. Index each session.
-	var indexed, skipped int
+	var indexed, skipped, failed int
 	seenPaths := make(map[string]bool)
 	for _, sess := range sessions {
 		docPath := sess.SrcPath + "#" + sess.ID
@@ -478,6 +505,7 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 		docID, err := idx.db.UpsertDocument(col.ID, docPath, title, "", cursorUnix, len(sess.Messages))
 		if err != nil {
 			idx.log.Printf("  WARN: upsert %s: %v\n", docPath, err)
+			failed++
 			continue
 		}
 
@@ -530,7 +558,11 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 		idx.log.Printf("  Skipping orphan cleanup due to %d scan error(s)\n", len(sErrs))
 	}
 
-	idx.log.Printf("  Synced: %d indexed, %d unchanged\n", indexed, skipped)
+	idx.log.Printf("  Synced: %d indexed, %d unchanged", indexed, skipped)
+	if failed > 0 || len(sErrs) > 0 {
+		idx.log.Printf(", %d failed", failed+len(sErrs))
+	}
+	idx.log.Printf("\n")
 	return nil
 }
 

@@ -21,6 +21,8 @@ type VectorIndex interface {
 	Add(id int64, vector []float32) error
 	Search(query []float32, k int) ([]VectorResult, error)
 	Delete(id int64) error
+	// Clear removes all vectors from the index.
+	Clear() error
 	Save(path string) error
 	Load(path string) error
 	Len() int
@@ -29,10 +31,12 @@ type VectorIndex interface {
 // --- HNSW Implementation ---
 
 type hnswIndex struct {
-	graph *hnsw.Graph[int64]
-	dim   int
-	mu    sync.Mutex
-	dirty bool
+	graph    *hnsw.Graph[int64]
+	dim      int
+	m        int
+	efSearch int
+	mu       sync.Mutex
+	dirty    bool
 }
 
 func newHNSWIndex(dim, m, efSearch int) (*hnswIndex, error) {
@@ -46,7 +50,7 @@ func newHNSWIndex(dim, m, efSearch int) (*hnswIndex, error) {
 	g.Distance = hnsw.CosineDistance
 	// Register the distance function for persistence (required by coder/hnsw)
 	hnsw.RegisterDistanceFunc("cosine", hnsw.CosineDistance)
-	return &hnswIndex{graph: g, dim: dim}, nil
+	return &hnswIndex{graph: g, dim: dim, m: m, efSearch: efSearch}, nil
 }
 
 func (h *hnswIndex) Add(id int64, vector []float32) error {
@@ -85,6 +89,24 @@ func (h *hnswIndex) Delete(id int64) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.graph.Delete(id)
+	h.dirty = true
+	return nil
+}
+
+// Clear rebuilds an empty graph, preserving M/EfSearch/distance config.
+// coder/hnsw has no bulk-clear API, so we allocate a fresh graph.
+func (h *hnswIndex) Clear() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	g := hnsw.NewGraph[int64]()
+	g.M = h.m
+	if h.efSearch > 0 {
+		g.EfSearch = h.efSearch
+	} else {
+		g.EfSearch = 50
+	}
+	g.Distance = hnsw.CosineDistance
+	h.graph = g
 	h.dirty = true
 	return nil
 }
@@ -182,6 +204,13 @@ func (l *linearIndex) Delete(id int64) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.vectors, id)
+	return nil
+}
+
+func (l *linearIndex) Clear() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.vectors = make(map[int64][]float32)
 	return nil
 }
 

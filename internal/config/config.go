@@ -207,11 +207,10 @@ func Save(cfg Config) error {
 	return os.WriteFile(filepath.Join(dir, "config.yaml"), data, 0600)
 }
 
-// expandEnv resolves ${VAR} references in a string.
+// expandEnv resolves $VAR and ${VAR} references anywhere in a string.
+// This is a thin wrapper over os.ExpandEnv so embedded references like
+// "Bearer ${TOKEN}" or "https://${HOST}:${PORT}" are substituted, not just
+// values that are exactly "${VAR}".
 func expandEnv(s string) string {
-	if strings.HasPrefix(s, "${") && strings.HasSuffix(s, "}") {
-		name := s[2 : len(s)-1]
-		return os.Getenv(name)
-	}
-	return s
+	return os.ExpandEnv(s)
 }

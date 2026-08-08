@@ -20,6 +20,77 @@ As a [skill](https://skills.sh) (Claude Code, Codex, Cursor, etc.):
 bunx skills add ethan-huo/seek
 ```
 
+## Quickstart
+
+`seek` works in two modes. Pick the one that fits your needs — you can start keyword-only and add embeddings later without re-indexing.
+
+### Option A — Keyword search only (no API key, fully offline)
+
+`add` and `sync` never require an API key — they build the FTS5 index from your content's text. You only need a key for vector/semantic search. So if you just want fast keyword (BM25) search over your notes and conversations:
+
+```bash
+# No config, no API key — just start indexing
+seek add ~/notes --name mynotes            # markdown
+seek add --claude                          # Claude Code conversations
+seek add --codex                           # Codex sessions
+seek add --opencode                        # opencode CLI sessions
+seek sync                                  # incremental update
+
+# Search with BM25 (keyword) ranking — title matches boosted 10x
+seek search "ECONNREFUSED port 3000" --lex
+seek search "deploy gateway" --lex -l 5
+```
+
+This runs entirely offline. The FTS5 tokenizer is Turkish/diacritics-aware (`unicode61 remove_diacritics 2`), so `İstanbul`, `istanbul`, and `ISTANBUL` all match the same way.
+
+### Option B — Hybrid search (keyword + semantic, recommended)
+
+For meaning-based search ("functional programming architecture" matches docs about FP even without those exact words), add an embedding provider. Any [OpenAI-compatible](https://platform.openai.com/docs/api-reference/embeddings) endpoint works.
+
+```bash
+seek auth login                            # configure base_url / api_key / model
+seek embed                                 # generate vectors for indexed chunks
+seek search "functional programming architecture"   # hybrid: BM25 + vector + RRF
+```
+
+### What needs what
+
+| Command / feature | API key | OCR | Notes |
+|---|---|---|---|
+| `add` / `sync` (text collections) | — | — | Always works offline |
+| `search --lex` (BM25) | — | — | Keyword search, offline |
+| `search` (hybrid, without key) | — | — | **Auto-falls back to BM25** when vector search unavailable |
+| `search` (hybrid, with key) | required | — | BM25 + vector + RRF fusion |
+| `search --vec` (semantic) | required | — | Vector-only |
+| `embed` | required | — | Generates embeddings |
+| `add --pdf` (text-based PDFs) | — | — | Embedded text indexed via FTS5 |
+| `add --pdf` (scanned PDFs, searchable) | — | required | OCR extracts text from rasterized pages |
+
+### Migrating from Option A to B
+
+You can start offline and add embeddings anytime — no re-indexing needed:
+
+```bash
+# 1. You've been using seek keyword-only with collections already indexed
+seek auth login                            # add an embedding provider
+seek embed                                 # backfills vectors for existing chunks
+# Now `seek search "query"` uses hybrid (BM25 + vector) automatically
+```
+
+### Choosing an embedding provider
+
+```bash
+seek auth login
+# DashScope (default, qwen3-embeddings, free tier available):
+#   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+# OpenAI:
+#   base_url: https://api.openai.com/v1
+# Local (Ollama, vLLM, etc.):
+#   base_url: http://localhost:11434/v1
+```
+
+> **Note:** `dimensions` is fixed at index time. If you later change models or dimensions, run `seek rm <collection>` then `seek add` to rebuild, and `seek embed` again.
+
 ## Setup
 
 ```bash
@@ -196,7 +267,9 @@ This writes a `Stop` hook into `~/.claude/settings.json` so `seek sync` runs aut
 
 **Query parsing** — By default, queries are parsed into structured AST (boolean, phrase, prefix, fuzzy, field-scoped, proximity). Invalid syntax falls back to raw FTS5 MATCH automatically. Use `--query-mode raw` to disable parsing.
 
-**Tokenization** — Query-time analysis supports English and Turkish stemming (Snowball) with stop-word removal. Stemmed terms are expanded with `*` prefix for FTS5 matching, so "running" → "run*" matches both "run" and "running". Index-time tokenization uses FTS5's built-in `unicode61` and is unchanged.
+**Tokenization** — Query-time analysis supports English and Turkish stemming (Snowball) with stop-word removal. Stemmed terms are expanded with `*` prefix for FTS5 matching, so "running" → "run*" matches both "run" and "running". Index-time tokenization uses FTS5's `unicode61` with `remove_diacritics 2`, which enables full Unicode case-folding — Turkish `İ/ı`, `ç/ğ/ş/ü/ö` and other Latin diacritics are normalized consistently at index and query time. Changing the tokenizer triggers a one-time automatic rebuild of the FTS index on the next `seek` invocation.
+
+**Ranking** — BM25 results are weighted by column: title matches count 10× body matches (`bm25(documents_fts, 10.0, 1.0)`), so documents whose *title* matches the query rank above body-only matches.
 
 ## Collections
 

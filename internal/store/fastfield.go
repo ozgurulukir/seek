@@ -26,6 +26,13 @@ func (f *FastFieldStore) ensureTable() error {
 		field_value TEXT,
 		PRIMARY KEY (doc_id, field_name)
 	)`)
+	if err != nil {
+		return err
+	}
+	// Index for value lookups (FastFieldFilter: WHERE field_name = ? AND field_value = ?).
+	// The PK (doc_id, field_name) cannot serve these because it leads with doc_id,
+	// so without this index such filters fall back to a full table scan.
+	_, err = f.db.Exec(`CREATE INDEX IF NOT EXISTS idx_fast_fields_name_value ON fast_fields (field_name, field_value)`)
 	return err
 }
 

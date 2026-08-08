@@ -25,6 +25,16 @@ const (
 	CollectionTypeParser   CollectionType = "parser"
 )
 
+// FTSTokenize is the FTS5 unicode61 tokenizer configuration.
+// remove_diacritics 2 enables full Unicode case-folding (incl. Turkish İ/ı,
+// ç/ğ/ş/ü/ö), so non-ASCII terms are indexed and queried consistently.
+// Stored as a constant because FTS5 tokenizer params are fixed at CREATE time.
+const FTSTokenize = "unicode61 remove_diacritics 2"
+
+// FTSTitleWeight is the bm25 column weight applied to the title column (10x),
+// boosting title matches over body matches. Content stays at the default 1.0.
+const FTSTitleWeight = 10.0
+
 type ChunkType int
 
 const (
@@ -243,14 +253,18 @@ func (s *Store) SetCompression(enabled bool, level int) {
 }
 
 // SyncVectorIndex adds all embedded chunks to the vector index.
-// It clears the index first to ensure consistency.
+// It clears the index first to ensure consistency — otherwise repeated
+// syncs (e.g. after each `seek embed`) would accumulate duplicate/stale
+// entries and grow the HNSW graph indefinitely.
 func (s *Store) SyncVectorIndex() error {
 	if s.vectorIndex == nil {
 		return nil
 	}
-	// Clear existing index entries
-	// (We do this by creating a fresh index; HNSW doesn't support bulk clear)
-	_ = s.vectorIndex
+
+	// Clear existing entries so we rebuild from the current DB state.
+	if err := s.vectorIndex.Clear(); err != nil {
+		return fmt.Errorf("clear vector index: %w", err)
+	}
 
 	rows, err := s.db.Query(`SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL`)
 	if err != nil {
@@ -301,11 +315,6 @@ func (s *Store) migrate() error {
 			updated_at TEXT,
 			UNIQUE(collection_id, path)
 		)`,
-		`CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
-			title, content,
-			content_rowid='id',
-			tokenize='unicode61'
-		)`,
 		`CREATE TABLE IF NOT EXISTS chunks (
 			id INTEGER PRIMARY KEY,
 			document_id INTEGER REFERENCES documents(id) ON DELETE CASCADE,
@@ -335,7 +344,143 @@ func (s *Store) migrate() error {
 		s.execIgnoreDuplicate(stmt)
 	}
 
+	// FTS5 table: rebuild if the tokenizer config changed (e.g. upgrading from
+	// the old "unicode61" to the Turkish-aware "unicode61 remove_diacritics 2").
+	// A tokenizer change requires re-indexing all content, so we drop and
+	// recreate the virtual table, then repopulate it from chunk contents.
+	needRebuild, err := s.ftsNeedsRebuild()
+	if err != nil {
+		return fmt.Errorf("check fts tokenize: %w", err)
+	}
+	// Wrap the whole rebuild (DROP + CREATE + repopulate) in a transaction so
+	// a crash mid-migration cannot leave documents_fts half-populated — that
+	// would silently break BM25 search, and the new tokenize string would
+	// already be in sqlite_master so the migration would never re-trigger.
+	if needRebuild {
+		if _, err := s.db.Exec(`BEGIN`); err != nil {
+			return fmt.Errorf("begin fts rebuild tx: %w", err)
+		}
+		if _, err := s.db.Exec(`DROP TABLE IF EXISTS documents_fts`); err != nil {
+			s.db.Exec(`ROLLBACK`)
+			return fmt.Errorf("drop documents_fts: %w", err)
+		}
+	}
+	// NOTE: FTS5 requires the tokenize argument as a literal in the DDL —
+	// it rejects bound parameters ("tokenize=?") with a parse error. FTSTokenize
+	// is a package constant we control, so formatting it in is safe.
+	ftsDDL := fmt.Sprintf(
+		`CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+			title, content,
+			content_rowid='id',
+			tokenize='%s')`,
+		FTSTokenize,
+	)
+	if _, err := s.db.Exec(ftsDDL); err != nil {
+		if needRebuild {
+			s.db.Exec(`ROLLBACK`)
+		}
+		return fmt.Errorf("create documents_fts: %w", err)
+	}
+	if needRebuild {
+		if err := s.rebuildFTSFromDocuments(); err != nil {
+			s.db.Exec(`ROLLBACK`)
+			return fmt.Errorf("rebuild fts: %w", err)
+		}
+		if _, err := s.db.Exec(`COMMIT`); err != nil {
+			return fmt.Errorf("commit fts rebuild: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// ftsNeedsRebuild reports whether documents_fts is missing or was created
+// with a tokenizer different from the current FTSTokenize config.
+func (s *Store) ftsNeedsRebuild() (bool, error) {
+	var ddlSQL string
+	err := s.db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type='table' AND name='documents_fts'`,
+	).Scan(&ddlSQL)
+	if err == sql.ErrNoRows {
+		// Table doesn't exist yet — CREATE will handle it, no rebuild needed.
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !strings.Contains(ddlSQL, FTSTokenize), nil
+}
+
+// rebuildFTSFromDocuments repopulates documents_fts from the chunks table.
+//
+// Fidelity note: the original document body is not retained after chunking,
+// so we reconstruct each document's searchable text by concatenating its
+// chunks in seq order. This is a lossy approximation of the source —
+// ChunkMarkdown drops empty sections and adds overlap, ChunkConversation
+// rejoins lines — but for BM25 (a bag-of-words model) term coverage is
+// essentially preserved. Snippet rendering may differ slightly from a fresh
+// index. Ordering is done in Go (not via SQL GROUP_CONCAT, whose row order
+// under an inner subquery ORDER BY is not guaranteed by SQLite).
+func (s *Store) rebuildFTSFromDocuments() error {
+	// One pass: stream (doc_id, title, chunk_seq, chunk_content) ordered so
+	// all chunks of a document arrive together and in seq order.
+	rows, err := s.db.Query(
+		`SELECT d.id, d.title, ch.seq, ch.content
+		   FROM documents d
+		   LEFT JOIN chunks ch ON ch.document_id = d.id
+		  ORDER BY d.id, ch.seq`,
+	)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var (
+		curID    int64
+		curTitle string
+		started  bool
+		b        strings.Builder
+	)
+	// flush inserts the accumulated content for the previous document.
+	flush := func() error {
+		if !started {
+			return nil
+		}
+		_, err := s.db.Exec(
+			`INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`,
+			curID, curTitle, b.String(),
+		)
+		b.Reset()
+		return err
+	}
+
+	for rows.Next() {
+		var (
+			id      int64
+			title   string
+			seq     sql.NullInt64
+			content sql.NullString
+		)
+		if err := rows.Scan(&id, &title, &seq, &content); err != nil {
+			return err
+		}
+		if !started || id != curID {
+			if err := flush(); err != nil {
+				return err
+			}
+			curID, curTitle, started = id, title, true
+		}
+		if content.Valid && content.String != "" {
+			if b.Len() > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(content.String)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return flush()
 }
 
 // execIgnoreDuplicate executes an ALTER TABLE statement and ignores "duplicate column" errors.
@@ -361,7 +506,13 @@ func (s *Store) CreateCollection(name string, typ CollectionType, path, pattern 
 	if err != nil {
 		return nil, err
 	}
+	// LastInsertId is unreliable with some SQLite/driver paths; fall back to a lookup.
 	id, _ := res.LastInsertId()
+	if id == 0 {
+		if err := s.db.QueryRow(`SELECT id FROM collections WHERE name = ?`, name).Scan(&id); err != nil {
+			return nil, err
+		}
+	}
 	return &Collection{ID: id, Name: name, Type: typ, Path: path, Pattern: pattern}, nil
 }
 
@@ -377,6 +528,11 @@ func (s *Store) CreateParserCollection(name, path, pattern, parserName string) (
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
+	if id == 0 {
+		if err := s.db.QueryRow(`SELECT id FROM collections WHERE name = ?`, name).Scan(&id); err != nil {
+			return nil, err
+		}
+	}
 	return &Collection{ID: id, Name: name, Type: CollectionTypeParser, Path: path, Pattern: pattern, ParserName: parserName}, nil
 }
 
@@ -458,9 +614,10 @@ func (s *Store) DeleteCollection(id int64) error {
 func (s *Store) GetDocument(collectionID int64, path string) (*Document, error) {
 	d := &Document{}
 	err := s.db.QueryRow(
-		`SELECT id, collection_id, path, title, content_hash, mtime, line_count FROM documents WHERE collection_id = ? AND path = ?`,
+		`SELECT id, collection_id, path, title, content_hash, mtime, line_count, created_at, updated_at
+		 FROM documents WHERE collection_id = ? AND path = ?`,
 		collectionID, path,
-	).Scan(&d.ID, &d.CollectionID, &d.Path, &d.Title, &d.ContentHash, &d.Mtime, &d.LineCount)
+	).Scan(&d.ID, &d.CollectionID, &d.Path, &d.Title, &d.ContentHash, &d.Mtime, &d.LineCount, &d.CreatedAt, &d.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -551,7 +708,9 @@ func (s *Store) AppendFTS(docID int64, newContent string) error {
 }
 
 func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]SearchResult, error) {
-	sqlQuery := `SELECT d.id, d.title, d.path, c.name, snippet(documents_fts, 1, '>>>', '<<<', '...', 40) as snip, bm25(documents_fts)
+	// bm25 column weights follow the table's column order (title, content),
+	// so title matches (FTSTitleWeight=10.0) rank above body matches (1.0).
+	sqlQuery := `SELECT d.id, d.title, d.path, c.name, snippet(documents_fts, 1, '>>>', '<<<', '...', 40) as snip, bm25(documents_fts, ` + fmt.Sprintf("%g", FTSTitleWeight) + `, 1.0)
 		 FROM documents_fts f
 		 JOIN documents d ON d.id = f.rowid
 		 JOIN collections c ON c.id = d.collection_id`
@@ -563,7 +722,7 @@ func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]Search
 			args = append(args, fargs...)
 		}
 	}
-	sqlQuery += " ORDER BY bm25(documents_fts) LIMIT ?"
+	sqlQuery += " ORDER BY bm25(documents_fts, " + fmt.Sprintf("%g", FTSTitleWeight) + ", 1.0) LIMIT ?"
 	args = append(args, limit)
 
 	rows, err := s.db.Query(sqlQuery, args...)
