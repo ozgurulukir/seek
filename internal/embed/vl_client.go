@@ -8,16 +8,17 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"time"
+
+	"github.com/anthropics/seek/internal/config"
 )
 
 // DefaultVLEndpoint is the DashScope multimodal embedding endpoint, used when
 // no custom VL base URL is configured.
-const DefaultVLEndpoint = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+const DefaultVLEndpoint = config.DefaultVLBaseURL
 
 const (
-	vlMaxContents = 20 // max content elements per request
-	vlMaxImages   = 5  // max images per request
+	vlMaxContents = config.DefaultVLMaxContents // max content elements per request
+	vlMaxImages   = config.DefaultVLMaxImages   // max images per request
 )
 
 // EmbedItem represents a single item to embed — either text-only or image+context.
@@ -47,7 +48,7 @@ func NewVLClient(apiKey, model string, dimensions int, endpoint string) *VLClien
 		model:      model,
 		dimensions: dimensions,
 		endpoint:   endpoint,
-		http:       &http.Client{Timeout: 120 * time.Second},
+		http:       &http.Client{Timeout: config.DefaultVLTimeout},
 	}
 }
 
@@ -225,7 +226,7 @@ func (c *VLClient) doRequest(items []EmbedItem) ([][]float32, error) {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("vl API %d: %s", resp.StatusCode, string(respBody))
 	}
 

@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
+
+	"github.com/anthropics/seek/internal/config"
 )
 
 // OCRClient extracts text from an image using an OpenAI-compatible vision/OCR
@@ -27,7 +28,7 @@ func NewOCRClient(baseURL, apiKey, model string) *OCRClient {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		model:   model,
-		http:    &http.Client{Timeout: 60 * time.Second},
+		http:    &http.Client{Timeout: config.DefaultEmbeddingTimeout},
 	}
 }
 

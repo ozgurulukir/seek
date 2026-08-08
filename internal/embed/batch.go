@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/anthropics/seek/internal/config"
 )
 
 // BatchJob tracks a batch embedding job.
@@ -194,7 +196,7 @@ func (c *Client) PollBatch(batchID string, onStatus func(status string, elapsed 
 			return job, fmt.Errorf("batch %s: %s", result.Status, string(respBody))
 		}
 
-		time.Sleep(5 * time.Second)
+		time.Sleep(config.DefaultBatchPollInterval)
 	}
 }
 

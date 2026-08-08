@@ -54,12 +54,12 @@ func readClaudeSettings() (map[string]interface{}, error) {
 
 func writeClaudeSettings(settings map[string]interface{}) error {
 	path := claudeSettingsPath()
-	os.MkdirAll(filepath.Dir(path), 0755)
+	os.MkdirAll(filepath.Dir(path), config.DefaultDirPerms)
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, config.DefaultFilePerms)
 }
 
 func seekBinaryPath() string {

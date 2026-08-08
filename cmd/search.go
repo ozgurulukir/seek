@@ -59,14 +59,14 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 	for i, r := range results {
 		fmt.Printf("\n%s %s\n", fmt.Sprintf("[%d]", i+1), r.Title)
 		fmt.Printf("    %s  (%s)  score=%.4f\n", formatRelPath(r.Path), r.Collection, r.Score)
-		if r.ChunkType == 1 && r.ImagePath != "" {
+		if r.ChunkType == store.ChunkTypeImage && r.ImagePath != "" {
 			fmt.Printf("    %s\n", formatRelPath(r.ImagePath))
 			if r.Content != "" {
-				snippet := formatSnippet(r.Content, 150)
+				snippet := formatSnippet(r.Content, config.DefaultImageSnippetLen)
 				fmt.Printf("    context: %s\n", snippet)
 			}
 		} else if r.Content != "" {
-			snippet := formatSnippet(r.Content, 200)
+			snippet := formatSnippet(r.Content, config.DefaultTextSnippetLen)
 			fmt.Printf("    %s\n", snippet)
 		}
 	}

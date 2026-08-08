@@ -130,7 +130,7 @@ func ParseClaudeFileWithImages(path string, fromLine int, convID string) ([]Clau
 		for i := range lineImages {
 			// Attach context: nearest text before or after
 			if len(allTexts) > 0 {
-				lineImages[i].Context = Truncate(allTexts[len(allTexts)-1], 500)
+				lineImages[i].Context = Truncate(allTexts[len(allTexts)-1], ImageContextMaxLen)
 			}
 			images = append(images, lineImages[i])
 		}
@@ -141,8 +141,8 @@ func ParseClaudeFileWithImages(path string, fromLine int, convID string) ([]Clau
 
 // extractClaudeImages extracts images from a single JSONL line.
 // Claude images appear as:
-//   - User messages: {type: "user", message: {role: "user", content: [{type: "image", source: {type: "base64", media_type: "...", data: "..."}}]}}
-//   - Assistant messages: {type: "assistant", message: [{type: "image", source: {type: "base64", media_type: "...", data: "..."}}]}
+//   - User messages: {type: RoleUser, message: {role: RoleUser, content: [{type: "image", source: {type: "base64", media_type: "...", data: "..."}}]}}
+//   - Assistant messages: {type: RoleAssistant, message: [{type: "image", source: {type: "base64", media_type: "...", data: "..."}}]}
 func extractClaudeImages(line string, convID string, imgIdx *int) []ConversationImage {
 	var raw struct {
 		Type    string          `json:"type"`
@@ -152,13 +152,13 @@ func extractClaudeImages(line string, convID string, imgIdx *int) []Conversation
 		return nil
 	}
 
-	if raw.Type != "user" && raw.Type != "assistant" {
+	if raw.Type != RoleUser && raw.Type != RoleAssistant {
 		return nil
 	}
 
 	var contentBlocks []json.RawMessage
 
-	if raw.Type == "user" {
+	if raw.Type == RoleUser {
 		var userMsg struct {
 			Content json.RawMessage `json:"content"`
 		}
@@ -244,8 +244,8 @@ func parseClaudeConversation(path, projectsDir string) (*ClaudeConversation, err
 	if len(messages) > 0 {
 		// First user message becomes title
 		for _, m := range messages {
-			if m.Role == "user" {
-				title = Truncate(m.Content, 100)
+			if m.Role == RoleUser {
+				title = Truncate(m.Content, TitleMaxLen)
 				break
 			}
 		}
@@ -269,14 +269,14 @@ func parseClaudeLine(line string) (ClaudeMessage, bool) {
 		return ClaudeMessage{}, false
 	}
 
-	if raw.Type != "user" && raw.Type != "assistant" {
+	if raw.Type != RoleUser && raw.Type != RoleAssistant {
 		return ClaudeMessage{}, false
 	}
 
 	role := raw.Type
 
-	if raw.Type == "user" {
-		// User message: {message: {role: "user", content: "text" | [{type: "text", text: "..."}]}}
+	if raw.Type == RoleUser {
+		// User message: {message: {role: RoleUser, content: "text" | [{type: "text", text: "..."}]}}
 		var userMsg struct {
 			Role    string          `json:"role"`
 			Content json.RawMessage `json:"content"`

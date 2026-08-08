@@ -121,7 +121,7 @@ func ParseCodexFile(path string, fromLine int) ([]CodexMessage, string, error) {
 			if err := json.Unmarshal(raw.Payload, &item); err != nil {
 				continue
 			}
-			if item.Role != "user" && item.Role != "assistant" {
+			if item.Role != RoleUser && item.Role != RoleAssistant {
 				continue
 			}
 			var parts []string
@@ -204,7 +204,7 @@ func ParseCodexFileWithImages(path string, fromLine int) ([]CodexMessage, string
 				continue
 			}
 
-			if item.Role != "user" && item.Role != "assistant" {
+			if item.Role != RoleUser && item.Role != RoleAssistant {
 				continue
 			}
 
@@ -222,7 +222,7 @@ func ParseCodexFileWithImages(path string, fromLine int) ([]CodexMessage, string
 			}
 
 			// Extract images from user messages
-			if item.Role == "user" {
+			if item.Role == RoleUser {
 				sid := sessionID
 				if len(sid) > 8 {
 					sid = sid[:8]
@@ -249,9 +249,9 @@ func ParseCodexFileWithImages(path string, fromLine int) ([]CodexMessage, string
 					// Context: nearest text from this message
 					context := ""
 					if len(textParts) > 0 {
-						context = Truncate(strings.Join(textParts, " "), 500)
+						context = Truncate(strings.Join(textParts, " "), ImageContextMaxLen)
 					} else if len(messages) > 0 {
-						context = Truncate(messages[len(messages)-1].Content, 500)
+						context = Truncate(messages[len(messages)-1].Content, ImageContextMaxLen)
 					}
 
 					images = append(images, ConversationImage{
@@ -312,8 +312,8 @@ func parseCodexConversation(path string, threadNames map[string]string) (*CodexC
 		title = name
 	} else if len(messages) > 0 {
 		for _, m := range messages {
-			if m.Role == "user" {
-				title = Truncate(m.Content, 100)
+			if m.Role == RoleUser {
+				title = Truncate(m.Content, TitleMaxLen)
 				break
 			}
 		}

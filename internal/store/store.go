@@ -13,6 +13,23 @@ import (
 	"github.com/viterin/vek/vek32"
 )
 
+type CollectionType string
+
+const (
+	CollectionTypeMarkdown CollectionType = "markdown"
+	CollectionTypeClaude   CollectionType = "claude"
+	CollectionTypeCodex    CollectionType = "codex"
+	CollectionTypeImages   CollectionType = "images"
+	CollectionTypePDF      CollectionType = "pdf"
+)
+
+type ChunkType int
+
+const (
+	ChunkTypeText  ChunkType = 0
+	ChunkTypeImage ChunkType = 1
+)
+
 type Store struct {
 	db *sql.DB
 }
@@ -20,7 +37,7 @@ type Store struct {
 type Collection struct {
 	ID        int64
 	Name      string
-	Type      string // "markdown", "claude", "codex"
+	Type      CollectionType
 	Path      string
 	Pattern   string
 	CreatedAt string
@@ -45,7 +62,7 @@ type Chunk struct {
 	Seq        int
 	Content    string
 	Embedding  []float32
-	ChunkType  int    // 0 = text, 1 = image
+	ChunkType  ChunkType
 	ImagePath  string // path to image file on disk (for image chunks)
 	CreatedAt  string
 }
@@ -58,7 +75,7 @@ type SearchResult struct {
 	Collection string
 	Content    string
 	Score      float64
-	ChunkType  int    // 0 = text, 1 = image
+	ChunkType  ChunkType
 	ImagePath  string // non-empty for image chunks
 }
 
@@ -155,7 +172,7 @@ func (s *Store) execIgnoreDuplicate(stmt string) {
 
 // --- Collections ---
 
-func (s *Store) CreateCollection(name, typ, path, pattern string) (*Collection, error) {
+func (s *Store) CreateCollection(name string, typ CollectionType, path, pattern string) (*Collection, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := s.db.Exec(
 		`INSERT INTO collections (name, type, path, pattern, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -347,8 +364,8 @@ func (s *Store) DeleteChunksForDocument(docID int64) error {
 func (s *Store) InsertChunk(docID int64, seq int, content string, embedding []float32) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
-		`INSERT INTO chunks (document_id, seq, content, embedding, chunk_type, image_path, created_at) VALUES (?, ?, ?, ?, 0, NULL, ?)`,
-		docID, seq, content, encodeEmbedding(embedding), now,
+		`INSERT INTO chunks (document_id, seq, content, embedding, chunk_type, image_path, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+		docID, seq, content, encodeEmbedding(embedding), ChunkTypeText, now,
 	)
 	return err
 }
@@ -357,8 +374,8 @@ func (s *Store) InsertChunk(docID int64, seq int, content string, embedding []fl
 func (s *Store) InsertImageChunk(docID int64, seq int, context string, imagePath string, embedding []float32) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
-		`INSERT INTO chunks (document_id, seq, content, embedding, chunk_type, image_path, created_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		docID, seq, context, encodeEmbedding(embedding), imagePath, now,
+		`INSERT INTO chunks (document_id, seq, content, embedding, chunk_type, image_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		docID, seq, context, encodeEmbedding(embedding), ChunkTypeImage, imagePath, now,
 	)
 	return err
 }
@@ -366,12 +383,12 @@ func (s *Store) InsertImageChunk(docID int64, seq int, context string, imagePath
 func (s *Store) SearchVector(queryEmb []float32, limit int) ([]SearchResult, error) {
 	rows, err := s.db.Query(
 		`SELECT ch.id, ch.document_id, ch.content, ch.embedding,
-		        COALESCE(ch.chunk_type, 0), COALESCE(ch.image_path, ''),
+		        COALESCE(ch.chunk_type, ?), COALESCE(ch.image_path, ''),
 		        d.title, d.path, c.name
 		 FROM chunks ch
 		 JOIN documents d ON d.id = ch.document_id
 		 JOIN collections c ON c.id = d.collection_id
-		 WHERE ch.embedding IS NOT NULL`,
+		 WHERE ch.embedding IS NOT NULL`, ChunkTypeText,
 	)
 	if err != nil {
 		return nil, err
@@ -390,7 +407,7 @@ func (s *Store) SearchVector(queryEmb []float32, limit int) ([]SearchResult, err
 			docID      int64
 			content    string
 			embBlob    []byte
-			chunkType  int
+			chunkType  ChunkType
 			imagePath  string
 			title      string
 			path       string
@@ -441,11 +458,11 @@ func (s *Store) UpdateChunkEmbedding(chunkID int64, embedding []float32) error {
 // GetChunksWithoutEmbedding returns chunks that don't have embeddings yet.
 // If force is true, returns all chunks.
 func (s *Store) GetChunksWithoutEmbedding(force bool) ([]Chunk, error) {
-	query := `SELECT id, document_id, seq, content, COALESCE(chunk_type, 0), COALESCE(image_path, '') FROM chunks WHERE embedding IS NULL`
+	query := `SELECT id, document_id, seq, content, COALESCE(chunk_type, ?), COALESCE(image_path, '') FROM chunks WHERE embedding IS NULL`
 	if force {
-		query = `SELECT id, document_id, seq, content, COALESCE(chunk_type, 0), COALESCE(image_path, '') FROM chunks`
+		query = `SELECT id, document_id, seq, content, COALESCE(chunk_type, ?), COALESCE(image_path, '') FROM chunks`
 	}
-	rows, err := s.db.Query(query)
+	rows, err := s.db.Query(query, ChunkTypeText)
 	if err != nil {
 		return nil, err
 	}

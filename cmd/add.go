@@ -73,7 +73,7 @@ func (c *AddCmd) addMarkdown(cfg *config.AppConfig, db *store.Store) error {
 		return nil
 	}
 
-	col, err := db.CreateCollection(name, "markdown", absPath, c.Pattern)
+	col, err := db.CreateCollection(name, store.CollectionTypeMarkdown, absPath, c.Pattern)
 	if err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
@@ -95,7 +95,7 @@ func (c *AddCmd) addClaude(cfg *config.AppConfig, db *store.Store) error {
 		return nil
 	}
 
-	col, err := db.CreateCollection(name, "claude", path, "")
+	col, err := db.CreateCollection(name, store.CollectionTypeClaude, path, "")
 	if err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
@@ -117,7 +117,7 @@ func (c *AddCmd) addCodex(cfg *config.AppConfig, db *store.Store) error {
 		return nil
 	}
 
-	col, err := db.CreateCollection(name, "codex", path, "")
+	col, err := db.CreateCollection(name, store.CollectionTypeCodex, path, "")
 	if err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
@@ -149,7 +149,7 @@ func (c *AddCmd) addImages(cfg *config.AppConfig, db *store.Store) error {
 		return nil
 	}
 
-	col, err := db.CreateCollection(name, "images", absPath, "**/*.{png,jpg,jpeg,webp}")
+	col, err := db.CreateCollection(name, store.CollectionTypeImages, absPath, "**/*.{png,jpg,jpeg,webp}")
 	if err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
@@ -181,7 +181,7 @@ func (c *AddCmd) addPdfs(cfg *config.AppConfig, db *store.Store) error {
 		return nil
 	}
 
-	col, err := db.CreateCollection(name, "pdf", absPath, "**/*.pdf")
+	col, err := db.CreateCollection(name, store.CollectionTypePDF, absPath, "**/*.pdf")
 	if err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}

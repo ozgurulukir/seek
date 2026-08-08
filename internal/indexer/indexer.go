@@ -174,8 +174,8 @@ func (idx *Indexer) syncClaude(col *store.Collection) error {
 		},
 		func(m map[string]interface{}) string {
 			for _, msg := range m["msgs"].([]source.ClaudeMessage) {
-				if msg.Role == "user" {
-					return source.Truncate(msg.Content, 100)
+				if msg.Role == source.RoleUser {
+					return source.Truncate(msg.Content, source.TitleMaxLen)
 				}
 			}
 			return ""
@@ -195,8 +195,8 @@ func (idx *Indexer) syncCodex(col *store.Collection) error {
 		},
 		func(m map[string]interface{}) string {
 			for _, msg := range m["msgs"].([]source.CodexMessage) {
-				if msg.Role == "user" {
-					return source.Truncate(msg.Content, 100)
+				if msg.Role == source.RoleUser {
+					return source.Truncate(msg.Content, source.TitleMaxLen)
 				}
 			}
 			return ""

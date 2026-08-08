@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/anthropics/seek/internal/config"
 	"github.com/gen2brain/go-fitz"
 )
 
@@ -68,7 +69,7 @@ func ScanPdfs(dir string) ([]PdfFile, error) {
 // ocr is non-nil, the rendered page is OCR'd. ocr may be nil to skip OCR.
 func RasterizePDF(pdfPath, cacheDir string, dpi float64, ocr TextExtractor) ([]PageImage, error) {
 	if dpi <= 0 {
-		dpi = 150
+		dpi = config.DefaultPDFDPI
 	}
 	data, err := os.ReadFile(pdfPath)
 	if err != nil {
@@ -76,7 +77,7 @@ func RasterizePDF(pdfPath, cacheDir string, dpi float64, ocr TextExtractor) ([]P
 	}
 	hash := sha256.Sum256(data)
 	dir := filepath.Join(cacheDir, "pdf", fmt.Sprintf("%x", hash))
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, config.DefaultDirPerms); err != nil {
 		return nil, fmt.Errorf("create pdf cache %s: %w", dir, err)
 	}
 
@@ -93,7 +94,7 @@ func RasterizePDF(pdfPath, cacheDir string, dpi float64, ocr TextExtractor) ([]P
 			return nil, fmt.Errorf("render page %d of %s: %w", i, pdfPath, err)
 		}
 		pagePath := filepath.Join(dir, fmt.Sprintf("page_%04d.png", i))
-		if err := os.WriteFile(pagePath, png, 0644); err != nil {
+		if err := os.WriteFile(pagePath, png, config.DefaultFilePerms); err != nil {
 			return nil, fmt.Errorf("write page png %s: %w", pagePath, err)
 		}
 

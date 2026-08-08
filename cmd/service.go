@@ -81,7 +81,7 @@ func (c *ServiceStartCmd) Run(cfg *config.AppConfig) error {
 	path := plistPath()
 
 	// Ensure log directory exists
-	os.MkdirAll(filepath.Dir(logPath()), 0755)
+	os.MkdirAll(filepath.Dir(logPath()), config.DefaultDirPerms)
 
 	interval := c.Interval
 	if interval < 60 {

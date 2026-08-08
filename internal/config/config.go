@@ -65,8 +65,8 @@ func cacheDir() string {
 func Load() (*AppConfig, error) {
 	cfgDir := configDir()
 	cacheD := cacheDir()
-	os.MkdirAll(cfgDir, 0755)
-	os.MkdirAll(cacheD, 0755)
+	os.MkdirAll(cfgDir, DefaultDirPerms)
+	os.MkdirAll(cacheD, DefaultDirPerms)
 
 	ac := &AppConfig{
 		CacheDir: cacheD,
@@ -75,9 +75,9 @@ func Load() (*AppConfig, error) {
 
 	// Defaults
 	ac.Config.Embedding = EmbeddingConfig{
-		BaseURL:    "https://dashscope.aliyuncs.com/compatible-mode/v1",
-		Model:      "text-embedding-v4",
-		Dimensions: 1024,
+		BaseURL:    DefaultEmbeddingBaseURL,
+		Model:      DefaultEmbeddingModel,
+		Dimensions: DefaultEmbeddingDimensions,
 	}
 
 	cfgPath := filepath.Join(cfgDir, "config.yaml")
@@ -99,7 +99,7 @@ func Load() (*AppConfig, error) {
 		ac.Config.OCR.APIKey = ac.Config.Embedding.APIKey
 	}
 	if ac.Config.OCR.Model == "" {
-		ac.Config.OCR.Model = "qwen-vl-ocr"
+		ac.Config.OCR.Model = DefaultOCRModel
 	}
 
 	return ac, nil
@@ -119,7 +119,7 @@ func (ac *AppConfig) ConfigPath() string {
 
 func Save(cfg Config) error {
 	dir := configDir()
-	os.MkdirAll(dir, 0755)
+	os.MkdirAll(dir, DefaultDirPerms)
 
 	data, err := yaml.Marshal(&cfg)
 	if err != nil {

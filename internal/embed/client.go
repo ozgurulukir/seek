@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
+
+	"github.com/anthropics/seek/internal/config"
 )
 
 type Client struct {
@@ -23,7 +24,7 @@ func NewClient(baseURL, apiKey, model string, dimensions int) *Client {
 		apiKey:     apiKey,
 		model:      model,
 		dimensions: dimensions,
-		http:       &http.Client{Timeout: 60 * time.Second},
+		http:       &http.Client{Timeout: config.DefaultEmbeddingTimeout},
 	}
 }
 
@@ -80,7 +81,7 @@ func (c *Client) Embed(texts []string) ([][]float32, error) {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("embedding API %d: %s", resp.StatusCode, string(respBody))
 	}
 
@@ -118,7 +119,7 @@ func (c *Client) EmbedSingle(text string) ([]float32, error) {
 // BatchEmbed handles texts in batches of batchSize.
 func (c *Client) BatchEmbed(texts []string, batchSize int) ([][]float32, error) {
 	if batchSize <= 0 {
-		batchSize = 6
+		batchSize = config.DefaultEmbeddingBatchSize
 	}
 
 	all := make([][]float32, len(texts))

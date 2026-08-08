@@ -36,7 +36,7 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
 	// Separate text and image chunks
 	var textChunks, imageChunks []store.Chunk
 	for _, ch := range chunks {
-		if ch.ChunkType == 1 {
+		if ch.ChunkType == store.ChunkTypeImage {
 			imageChunks = append(imageChunks, ch)
 		} else {
 			textChunks = append(textChunks, ch)

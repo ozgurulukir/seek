@@ -5,6 +5,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/anthropics/seek/internal/config"
+)
+
+const (
+	RoleUser      = "user"
+	RoleAssistant = "assistant"
+
+	TitleMaxLen        = 100
+	ImageContextMaxLen = 500
 )
 
 // ConversationImage represents an image extracted from a conversation.
@@ -18,10 +28,10 @@ type ConversationImage struct {
 
 // SaveImage writes image data to the given path, creating directories as needed.
 func SaveImage(data []byte, mediaType string, path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), config.DefaultDirPerms); err != nil {
 		return fmt.Errorf("create image dir: %w", err)
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, config.DefaultFilePerms)
 }
 
 // ExtractExtension returns the file extension for a given media type.
