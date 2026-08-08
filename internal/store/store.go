@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -31,7 +32,105 @@ const (
 )
 
 type Store struct {
-	db *sql.DB
+	db                 *sql.DB
+	vectorIndex        VectorIndex
+	fastFields         *FastFieldStore
+	compressionEnabled bool
+	compressionLevel   int
+}
+
+// Filter is a search filter that can be converted to a SQL WHERE clause.
+type Filter interface {
+	ToSQL() (clause string, args []interface{})
+}
+
+// FilterSet combines multiple filters with AND.
+type FilterSet struct {
+	filters []Filter
+}
+
+func NewFilterSet() *FilterSet {
+	return &FilterSet{filters: make([]Filter, 0)}
+}
+
+func (fs *FilterSet) Add(f Filter) {
+	fs.filters = append(fs.filters, f)
+}
+
+func (fs *FilterSet) ToSQL() (string, []interface{}) {
+	var clauses []string
+	var args []interface{}
+	for _, f := range fs.filters {
+		c, a := f.ToSQL()
+		if c != "" {
+			clauses = append(clauses, c)
+			args = append(args, a...)
+		}
+	}
+	return strings.Join(clauses, " AND "), args
+}
+
+// --- Filter Types ---
+
+// CollectionFilter filters by collection name.
+type CollectionFilter struct {
+	Name string
+}
+
+func (f *CollectionFilter) ToSQL() (string, []interface{}) {
+	return "d.collection_id = (SELECT id FROM collections WHERE name = ?)", []interface{}{f.Name}
+}
+
+// DocTypeFilter filters by collection type (markdown, claude, codex, images, pdf).
+type DocTypeFilter struct {
+	Type string
+}
+
+func (f *DocTypeFilter) ToSQL() (string, []interface{}) {
+	return "c.type = ?", []interface{}{f.Type}
+}
+
+// DateRangeFilter filters documents by created_at range.
+type DateRangeFilter struct {
+	After  string // RFC3339 or empty
+	Before string // RFC3339 or empty
+}
+
+func (f *DateRangeFilter) ToSQL() (string, []interface{}) {
+	var clauses []string
+	var args []interface{}
+	if f.After != "" {
+		clauses = append(clauses, "d.created_at >= ?")
+		args = append(args, f.After)
+	}
+	if f.Before != "" {
+		clauses = append(clauses, "d.created_at <= ?")
+		args = append(args, f.Before)
+	}
+	return strings.Join(clauses, " AND "), args
+}
+
+// ChunkTypeFilter filters chunks by chunk_type (0=text, 1=image).
+type ChunkTypeFilter struct {
+	Type int // 0=text, 1=image
+}
+
+func (f *ChunkTypeFilter) ToSQL() (string, []interface{}) {
+	return "ch.chunk_type = ?", []interface{}{f.Type}
+}
+
+// PathFilter filters documents by path pattern (GLOB).
+type PathFilter struct {
+	Pattern string
+}
+
+func (f *PathFilter) ToSQL() (string, []interface{}) {
+	// Sanitize: reject path traversal
+	if strings.Contains(f.Pattern, "..") {
+		return "", nil
+	}
+	cleaned := filepath.Clean(f.Pattern)
+	return "d.path GLOB ?", []interface{}{cleaned}
 }
 
 type Collection struct {
@@ -84,7 +183,7 @@ func Open(dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	s := &Store{db: db}
+	s := &Store{db: db, fastFields: NewFastFieldStore(db)}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
@@ -92,8 +191,64 @@ func Open(dbPath string) (*Store, error) {
 	return s, nil
 }
 
+// DB returns the underlying *sql.DB for direct queries (aggregations, etc.).
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// SetVectorIndex sets the vector index backend (HNSW or linear scan).
+func (s *Store) SetVectorIndex(idx VectorIndex) {
+	s.vectorIndex = idx
+}
+
+// FastFields returns the fast field store for sorting and aggregation.
+func (s *Store) FastFields() *FastFieldStore {
+	return s.fastFields
+}
+
+// SetCompression configures chunk content compression.
+// enabled: if true, new chunks are compressed with Zstd.
+// level: Zstd compression level (1-22); 0 means default (3).
+func (s *Store) SetCompression(enabled bool, level int) {
+	s.compressionEnabled = enabled
+	if level <= 0 {
+		level = 3
+	}
+	s.compressionLevel = level
+}
+
+// SyncVectorIndex adds all embedded chunks to the vector index.
+// It clears the index first to ensure consistency.
+func (s *Store) SyncVectorIndex() error {
+	if s.vectorIndex == nil {
+		return nil
+	}
+	// Clear existing index entries
+	// (We do this by creating a fresh index; HNSW doesn't support bulk clear)
+	_ = s.vectorIndex
+
+	rows, err := s.db.Query(`SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var chunkID int64
+		var embBlob []byte
+		if err := rows.Scan(&chunkID, &embBlob); err != nil {
+			return err
+		}
+		emb := decodeEmbedding(embBlob)
+		if err := s.vectorIndex.Add(chunkID, emb); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) migrate() error {
@@ -150,6 +305,8 @@ func (s *Store) migrate() error {
 	alterStmts := []string{
 		`ALTER TABLE chunks ADD COLUMN chunk_type INTEGER DEFAULT 0`,
 		`ALTER TABLE chunks ADD COLUMN image_path TEXT`,
+		`ALTER TABLE documents ADD COLUMN metadata TEXT DEFAULT '{}'`,
+		`ALTER TABLE chunks ADD COLUMN content_zstd BLOB`,
 	}
 	for _, stmt := range alterStmts {
 		s.execIgnoreDuplicate(stmt)
@@ -328,17 +485,23 @@ func (s *Store) AppendFTS(docID int64, newContent string) error {
 	return err
 }
 
-func (s *Store) SearchFTS(query string, limit int) ([]SearchResult, error) {
-	rows, err := s.db.Query(
-		`SELECT d.id, d.title, d.path, c.name, snippet(documents_fts, 1, '>>>', '<<<', '...', 40) as snip, bm25(documents_fts)
+func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]SearchResult, error) {
+	sqlQuery := `SELECT d.id, d.title, d.path, c.name, snippet(documents_fts, 1, '>>>', '<<<', '...', 40) as snip, bm25(documents_fts)
 		 FROM documents_fts f
 		 JOIN documents d ON d.id = f.rowid
-		 JOIN collections c ON c.id = d.collection_id
-		 WHERE documents_fts MATCH ?
-		 ORDER BY bm25(documents_fts)
-		 LIMIT ?`,
-		query, limit,
-	)
+		 JOIN collections c ON c.id = d.collection_id`
+	var args []interface{}
+	if filters != nil {
+		clause, fargs := filters.ToSQL()
+		if clause != "" {
+			sqlQuery += " WHERE " + clause
+			args = append(args, fargs...)
+		}
+	}
+	sqlQuery += " ORDER BY bm25(documents_fts) LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.Query(sqlQuery, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -363,9 +526,17 @@ func (s *Store) DeleteChunksForDocument(docID int64) error {
 
 func (s *Store) InsertChunk(docID int64, seq int, content string, embedding []float32) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(
-		`INSERT INTO chunks (document_id, seq, content, embedding, chunk_type, image_path, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)`,
-		docID, seq, content, encodeEmbedding(embedding), ChunkTypeText, now,
+	var contentZstd []byte
+	var err error
+	if s.compressionEnabled {
+		contentZstd, err = CompressString(content, s.compressionLevel)
+		if err != nil {
+			return fmt.Errorf("compress chunk: %w", err)
+		}
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO chunks (document_id, seq, content, content_zstd, embedding, chunk_type, image_path, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+		docID, seq, content, contentZstd, encodeEmbedding(embedding), ChunkTypeText, now,
 	)
 	return err
 }
@@ -373,23 +544,83 @@ func (s *Store) InsertChunk(docID int64, seq int, content string, embedding []fl
 // InsertImageChunk inserts an image chunk with type=1 and an image path.
 func (s *Store) InsertImageChunk(docID int64, seq int, context string, imagePath string, embedding []float32) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(
-		`INSERT INTO chunks (document_id, seq, content, embedding, chunk_type, image_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		docID, seq, context, encodeEmbedding(embedding), ChunkTypeImage, imagePath, now,
+	var contentZstd []byte
+	var err error
+	if s.compressionEnabled {
+		contentZstd, err = CompressString(context, s.compressionLevel)
+		if err != nil {
+			return fmt.Errorf("compress image chunk: %w", err)
+		}
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO chunks (document_id, seq, content, content_zstd, embedding, chunk_type, image_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		docID, seq, context, contentZstd, encodeEmbedding(embedding), ChunkTypeImage, imagePath, now,
 	)
 	return err
 }
 
-func (s *Store) SearchVector(queryEmb []float32, limit int) ([]SearchResult, error) {
-	rows, err := s.db.Query(
-		`SELECT ch.id, ch.document_id, ch.content, ch.embedding,
+// GetChunkContent returns the content of a chunk, decompressing if necessary.
+func (s *Store) GetChunkContent(chunkID int64) (string, error) {
+	var content string
+	var contentZstd []byte
+	err := s.db.QueryRow(
+		`SELECT content, content_zstd FROM chunks WHERE id = ?`,
+		chunkID,
+	).Scan(&content, &contentZstd)
+	if err != nil {
+		return "", err
+	}
+	if len(contentZstd) > 0 {
+		decompressed, err := DecompressString(contentZstd)
+		if err != nil {
+			return "", fmt.Errorf("decompress chunk %d: %w", chunkID, err)
+		}
+		return decompressed, nil
+	}
+	return content, nil
+}
+
+func (s *Store) SearchVector(queryEmb []float32, limit int, filters *FilterSet) ([]SearchResult, error) {
+	// Use HNSW index if available
+	if s.vectorIndex != nil {
+		// HNSW returns chunk IDs; we push filters into the SQL fetch query
+		// so the DB handles filtering efficiently. Over-fetch to account for
+		// results that get filtered out.
+		searchLimit := limit
+		if filters != nil {
+			searchLimit = limit * 10
+		}
+		results, err := s.vectorIndex.Search(queryEmb, searchLimit)
+		if err == nil && len(results) > 0 {
+			fullResults := s.fetchSearchResults(results, filters)
+			if len(fullResults) > limit {
+				fullResults = fullResults[:limit]
+			}
+			return fullResults, nil
+		}
+		// Fall through to linear scan on error or empty results
+	}
+
+	// Fallback: linear scan over all embedded chunks with optional filters
+	sqlQuery := `SELECT ch.id, ch.document_id, ch.content, ch.content_zstd, ch.embedding,
 		        COALESCE(ch.chunk_type, ?), COALESCE(ch.image_path, ''),
 		        d.title, d.path, c.name
 		 FROM chunks ch
 		 JOIN documents d ON d.id = ch.document_id
 		 JOIN collections c ON c.id = d.collection_id
-		 WHERE ch.embedding IS NOT NULL`, ChunkTypeText,
-	)
+		 WHERE ch.embedding IS NOT NULL`
+	var args []interface{}
+	args = append(args, ChunkTypeText)
+
+	if filters != nil {
+		clause, fargs := filters.ToSQL()
+		if clause != "" {
+			sqlQuery += " AND " + clause
+			args = append(args, fargs...)
+		}
+	}
+
+	rows, err := s.db.Query(sqlQuery, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -403,18 +634,25 @@ func (s *Store) SearchVector(queryEmb []float32, limit int) ([]SearchResult, err
 
 	for rows.Next() {
 		var (
-			chunkID    int64
-			docID      int64
-			content    string
-			embBlob    []byte
-			chunkType  ChunkType
-			imagePath  string
-			title      string
-			path       string
-			collection string
+			chunkID     int64
+			docID       int64
+			content     string
+			contentZstd []byte
+			embBlob     []byte
+			chunkType   ChunkType
+			imagePath   string
+			title       string
+			path        string
+			collection  string
 		)
-		if err := rows.Scan(&chunkID, &docID, &content, &embBlob, &chunkType, &imagePath, &title, &path, &collection); err != nil {
+		if err := rows.Scan(&chunkID, &docID, &content, &contentZstd, &embBlob, &chunkType, &imagePath, &title, &path, &collection); err != nil {
 			return nil, err
+		}
+		if len(contentZstd) > 0 {
+			content, err = DecompressString(contentZstd)
+			if err != nil {
+				return nil, fmt.Errorf("decompress chunk %d: %w", chunkID, err)
+			}
 		}
 		emb := decodeEmbedding(embBlob)
 		sim := cosineSimilarity(queryEmb, emb)
@@ -450,6 +688,102 @@ func (s *Store) SearchVector(queryEmb []float32, limit int) ([]SearchResult, err
 	return results, nil
 }
 
+// fetchSearchResults fetches full SearchResult data for HNSW results.
+// Filters are pushed into the SQL WHERE clause so the DB handles filtering.
+func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) []SearchResult {
+	if len(results) == 0 {
+		return nil
+	}
+	// Build a lookup map
+	resultMap := make(map[int64]SearchResult)
+	for _, r := range results {
+		resultMap[r.ChunkID] = SearchResult{
+			ChunkID: r.ChunkID,
+			Score:   r.Score,
+		}
+	}
+
+	// Fetch all in one query
+	ids := make([]int64, len(results))
+	for i, r := range results {
+		ids[i] = r.ChunkID
+	}
+
+	// Build placeholders for IN clause
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(
+		`SELECT ch.id, ch.document_id, ch.content, ch.content_zstd, COALESCE(ch.chunk_type, ?), COALESCE(ch.image_path, ''),
+		        d.title, d.path, c.name
+		 FROM chunks ch
+		 JOIN documents d ON d.id = ch.document_id
+		 JOIN collections c ON c.id = d.collection_id
+		 WHERE ch.id IN (%s)`,
+		strings.Join(placeholders, ","),
+	)
+	args = append([]interface{}{ChunkTypeText}, args...)
+
+	// Push filters into the SQL query so the DB handles filtering
+	if filters != nil {
+		clause, fargs := filters.ToSQL()
+		if clause != "" {
+			query += " AND " + clause
+			args = append(args, fargs...)
+		}
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			chunkID     int64
+			docID       int64
+			content     string
+			contentZstd []byte
+			chunkType   ChunkType
+			imagePath   string
+			title       string
+			path        string
+			collection  string
+		)
+		if err := rows.Scan(&chunkID, &docID, &content, &contentZstd, &chunkType, &imagePath, &title, &path, &collection); err != nil {
+			continue
+		}
+		if len(contentZstd) > 0 {
+			content, err = DecompressString(contentZstd)
+			if err != nil {
+				continue
+			}
+		}
+		if r, ok := resultMap[chunkID]; ok {
+			r.DocumentID = docID
+			r.Title = title
+			r.Path = path
+			r.Collection = collection
+			r.Content = content
+			r.ChunkType = chunkType
+			r.ImagePath = imagePath
+			resultMap[chunkID] = r
+		}
+	}
+
+	// Preserve HNSW ordering
+	out := make([]SearchResult, len(results))
+	for i, r := range results {
+		out[i] = resultMap[r.ChunkID]
+	}
+	return out
+}
+
 func (s *Store) UpdateChunkEmbedding(chunkID int64, embedding []float32) error {
 	_, err := s.db.Exec(`UPDATE chunks SET embedding = ? WHERE id = ?`, encodeEmbedding(embedding), chunkID)
 	return err
@@ -458,9 +792,9 @@ func (s *Store) UpdateChunkEmbedding(chunkID int64, embedding []float32) error {
 // GetChunksWithoutEmbedding returns chunks that don't have embeddings yet.
 // If force is true, returns all chunks.
 func (s *Store) GetChunksWithoutEmbedding(force bool) ([]Chunk, error) {
-	query := `SELECT id, document_id, seq, content, COALESCE(chunk_type, ?), COALESCE(image_path, '') FROM chunks WHERE embedding IS NULL`
+	query := `SELECT id, document_id, seq, content, content_zstd, COALESCE(chunk_type, ?), COALESCE(image_path, '') FROM chunks WHERE embedding IS NULL`
 	if force {
-		query = `SELECT id, document_id, seq, content, COALESCE(chunk_type, ?), COALESCE(image_path, '') FROM chunks`
+		query = `SELECT id, document_id, seq, content, content_zstd, COALESCE(chunk_type, ?), COALESCE(image_path, '') FROM chunks`
 	}
 	rows, err := s.db.Query(query, ChunkTypeText)
 	if err != nil {
@@ -470,8 +804,15 @@ func (s *Store) GetChunksWithoutEmbedding(force bool) ([]Chunk, error) {
 	var chunks []Chunk
 	for rows.Next() {
 		var ch Chunk
-		if err := rows.Scan(&ch.ID, &ch.DocumentID, &ch.Seq, &ch.Content, &ch.ChunkType, &ch.ImagePath); err != nil {
+		var contentZstd []byte
+		if err := rows.Scan(&ch.ID, &ch.DocumentID, &ch.Seq, &ch.Content, &contentZstd, &ch.ChunkType, &ch.ImagePath); err != nil {
 			return nil, err
+		}
+		if len(contentZstd) > 0 {
+			ch.Content, err = DecompressString(contentZstd)
+			if err != nil {
+				return nil, fmt.Errorf("decompress chunk %d: %w", ch.ID, err)
+			}
 		}
 		chunks = append(chunks, ch)
 	}

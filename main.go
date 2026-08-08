@@ -7,8 +7,8 @@ import (
 	"os"
 
 	"github.com/alecthomas/kong"
-	"github.com/anthropics/seek/cmd"
-	"github.com/anthropics/seek/internal/config"
+	"github.com/ozgurulukir/seek/cmd"
+	"github.com/ozgurulukir/seek/internal/config"
 )
 
 var cli struct {
@@ -17,11 +17,13 @@ var cli struct {
 	Sync    cmd.SyncCmd    `cmd:"" help:"Sync all collections (incremental)"`
 	Embed   cmd.EmbedCmd   `cmd:"" help:"Generate embeddings (batch or realtime)"`
 	Search  cmd.SearchCmd  `cmd:"" help:"Search across collections"`
+	Analyze cmd.AnalyzeCmd `cmd:"" help:"Analyze text (tokenize, stem)"`
 	Status  cmd.StatusCmd  `cmd:"" help:"Show index status"`
 	Service cmd.ServiceCmd `cmd:"" help:"Manage periodic sync+embed service"`
 	Hooks   cmd.HooksCmd   `cmd:"" help:"Install/remove hooks for AI tools"`
 	Auth    cmd.AuthCmd    `cmd:"" help:"Manage API authentication"`
 	Config  cmd.ConfigCmd  `cmd:"" help:"Show or edit config"`
+	Schema  cmd.SchemaCmd  `cmd:"" help:"Show or validate schema"`
 }
 
 func main() {

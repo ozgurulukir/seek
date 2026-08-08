@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/anthropics/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/config"
 )
 
 // OCRClient extracts text from an image using an OpenAI-compatible vision/OCR

@@ -71,7 +71,7 @@ func TestSearchVectorOrdersBySimilarity(t *testing.T) {
 	insertVecDoc(t, s, "far", [][]float32{{0.1, 0.99}})
 	insertVecDoc(t, s, "mid", [][]float32{{0.6, 0.8}})
 
-	res, err := s.SearchVector([]float32{1, 0}, 2)
+	res, err := s.SearchVector([]float32{1, 0}, 2, nil)
 	if err != nil {
 		t.Fatalf("SearchVector: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestSearchVectorOrdersBySimilarity(t *testing.T) {
 // SearchVector returns nothing for an empty embedding table without error.
 func TestSearchVectorEmpty(t *testing.T) {
 	s := newTestStore(t)
-	res, err := s.SearchVector([]float32{1, 0}, 5)
+	res, err := s.SearchVector([]float32{1, 0}, 5, nil)
 	if err != nil {
 		t.Fatalf("SearchVector on empty: %v", err)
 	}

@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/anthropics/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/store"
 )
 
 func mkResult(docID int64, title string) store.SearchResult {

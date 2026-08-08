@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/anthropics/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/config"
 )
 
 // DefaultVLEndpoint is the DashScope multimodal embedding endpoint, used when

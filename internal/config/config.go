@@ -41,9 +41,62 @@ type OCRConfig struct {
 	Model   string `yaml:"model,omitempty"`
 }
 
+// SearchConfig configures the search engine behavior.
+type SearchConfig struct {
+	// QueryMode is the default query parsing mode: "raw" (FTS5 MATCH passthrough)
+	// or "parsed" (structured query parser). Invalid parsed queries fall back to raw.
+	QueryMode string `yaml:"query_mode,omitempty"`
+	// DefaultLimit is the default max results when not specified via CLI.
+	DefaultLimit int `yaml:"default_limit,omitempty"`
+	// RRFK is the RRF (Reciprocal Rank Fusion) constant.
+	RRFK int `yaml:"rrf_k,omitempty"`
+}
+
+// FilterConfig configures filter behavior.
+type FilterConfig struct {
+	Enabled           bool   `yaml:"enabled,omitempty"`
+	DefaultCollection string `yaml:"default_collection,omitempty"`
+}
+
+// AggregationConfig configures aggregation behavior.
+type AggregationConfig struct {
+	Enabled bool `yaml:"enabled,omitempty"`
+}
+
+// VectorIndexConfig configures the vector index backend.
+type VectorIndexConfig struct {
+	// Backend is the vector index backend: "hnsw" or "linear".
+	Backend string `yaml:"backend,omitempty"`
+	// HNSW holds HNSW-specific parameters.
+	HNSW HNSWConfig `yaml:"hnsw,omitempty"`
+}
+
+// HNSWConfig holds HNSW index parameters.
+type HNSWConfig struct {
+	M              int    `yaml:"m,omitempty"`
+	EFConstruction int    `yaml:"ef_construction,omitempty"` // reserved; coder/hnsw v0.6.1 has no public field for this
+	EFSearch       int    `yaml:"ef_search,omitempty"`
+	PersistPath    string `yaml:"persist_path,omitempty"`
+	Dimension      int    `yaml:"dimension,omitempty"`
+}
+
+// CompressionConfig configures chunk content compression.
+type CompressionConfig struct {
+	// Algorithm is the compression algorithm: "zstd", "lz4", or "none".
+	Algorithm string `yaml:"algorithm,omitempty"`
+	// Level is the compression level (1-22 for zstd, 1-12 for lz4).
+	Level int `yaml:"level,omitempty"`
+}
+
+// Config holds all configuration sections.
 type Config struct {
-	Embedding EmbeddingConfig `yaml:"embedding"`
-	OCR       OCRConfig       `yaml:"ocr,omitempty"`
+	Embedding    EmbeddingConfig   `yaml:"embedding"`
+	OCR          OCRConfig         `yaml:"ocr,omitempty"`
+	Search       SearchConfig      `yaml:"search,omitempty"`
+	Filters      FilterConfig      `yaml:"filters,omitempty"`
+	Aggregations AggregationConfig `yaml:"aggregations,omitempty"`
+	VectorIndex  VectorIndexConfig `yaml:"vector_index,omitempty"`
+	Compression  CompressionConfig `yaml:"compression,omitempty"`
 }
 
 type AppConfig struct {
@@ -78,6 +131,31 @@ func Load() (*AppConfig, error) {
 		BaseURL:    DefaultEmbeddingBaseURL,
 		Model:      DefaultEmbeddingModel,
 		Dimensions: DefaultEmbeddingDimensions,
+	}
+	ac.Config.Search = SearchConfig{
+		QueryMode:    DefaultQueryMode,
+		DefaultLimit: DefaultSearchLimit,
+		RRFK:         DefaultRRFK,
+	}
+	ac.Config.Filters = FilterConfig{
+		Enabled: true,
+	}
+	ac.Config.Aggregations = AggregationConfig{
+		Enabled: true,
+	}
+	ac.Config.VectorIndex = VectorIndexConfig{
+		Backend: DefaultVectorIndexBackend,
+		HNSW: HNSWConfig{
+			M:              DefaultHNSWM,
+			EFConstruction: DefaultHNSEFConstruction,
+			EFSearch:       DefaultHNSEFSearch,
+			PersistPath:    filepath.Join(cacheD, "hnsw.index"),
+			Dimension:      DefaultHNSWDimension,
+		},
+	}
+	ac.Config.Compression = CompressionConfig{
+		Algorithm: DefaultCompressionAlgorithm,
+		Level:     DefaultCompressionLevel,
 	}
 
 	cfgPath := filepath.Join(cfgDir, "config.yaml")

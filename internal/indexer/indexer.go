@@ -5,11 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/anthropics/seek/internal/chunk"
-	"github.com/anthropics/seek/internal/config"
-	"github.com/anthropics/seek/internal/embed"
-	"github.com/anthropics/seek/internal/source"
-	"github.com/anthropics/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/chunk"
+	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/embed"
+	"github.com/ozgurulukir/seek/internal/source"
+	"github.com/ozgurulukir/seek/internal/store"
 )
 
 // Logger allows the indexer to emit progress without hardcoding fmt.Printf

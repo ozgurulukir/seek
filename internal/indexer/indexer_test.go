@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anthropics/seek/internal/config"
-	"github.com/anthropics/seek/internal/indexer"
-	"github.com/anthropics/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/indexer"
+	"github.com/ozgurulukir/seek/internal/store"
 )
 
 type nopLogger struct{}

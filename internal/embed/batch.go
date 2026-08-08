@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anthropics/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/config"
 )
 
 // BatchJob tracks a batch embedding job.

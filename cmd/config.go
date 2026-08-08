@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/anthropics/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/config"
 )
 
 type ConfigCmd struct {

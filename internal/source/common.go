@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/anthropics/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/config"
 )
 
 const (

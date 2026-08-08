@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anthropics/seek/internal/config"
-	"github.com/anthropics/seek/internal/embed"
-	"github.com/anthropics/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/embed"
+	"github.com/ozgurulukir/seek/internal/store"
 )
 
 type EmbedCmd struct {
@@ -21,6 +21,17 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer db.Close()
+
+	// Set up vector index if configured
+	vectorIndex := false
+	if cfg.Config.VectorIndex.Backend != "" && cfg.Config.VectorIndex.Backend != "linear" {
+		vi, err := store.NewVectorIndex(cfg)
+		if err == nil {
+			db.SetVectorIndex(vi)
+			vectorIndex = true
+			defer vi.Save(cfg.Config.VectorIndex.HNSW.PersistPath)
+		}
+	}
 
 	// Get chunks that need embedding
 	chunks, err := db.GetChunksWithoutEmbedding(c.Force)
@@ -47,11 +58,10 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
 
 	// Decide which client to use based on model
 	if cfg.Config.Embedding.IsMultimodal() {
-		return c.embedWithVL(cfg, db, textChunks, imageChunks)
-	}
-
-	// Text-only model: can only embed text chunks, skip image chunks
-	if len(imageChunks) > 0 {
+		if err := c.embedWithVL(cfg, db, textChunks, imageChunks); err != nil {
+			return err
+		}
+	} else if len(imageChunks) > 0 {
 		fmt.Printf("  WARNING: %d image chunks skipped (model %q does not support multimodal)\n", len(imageChunks), cfg.Config.Embedding.Model)
 		fmt.Println("  To embed images, set model to qwen3-vl-embedding in config")
 	}
@@ -67,9 +77,24 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
 	}
 
 	if c.Realtime || !c.Batch {
-		return c.embedRealtime(db, embedClient, textChunks, texts)
+		if err := c.embedRealtime(db, embedClient, textChunks, texts); err != nil {
+			return err
+		}
+	} else {
+		if err := c.embedBatch(db, embedClient, textChunks, texts); err != nil {
+			return err
+		}
 	}
-	return c.embedBatch(db, embedClient, textChunks, texts)
+
+	// Sync HNSW index with newly embedded chunks
+	if vectorIndex {
+		fmt.Println("Syncing vector index...")
+		if err := db.SyncVectorIndex(); err != nil {
+			fmt.Printf("  WARN: vector index sync: %v\n", err)
+		}
+	}
+
+	return nil
 }
 
 // embedWithVL uses the VL realtime API for all chunks (unified vector space).

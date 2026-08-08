@@ -43,4 +43,27 @@ const (
 	DefaultPDFDPI = 150.0
 	// DefaultOCRModel is the default model for OCR extraction.
 	DefaultOCRModel = "qwen-vl-ocr"
+
+	// DefaultQueryMode is the default query parsing mode.
+	DefaultQueryMode = "parsed"
+	// DefaultSearchLimit is the default search result limit.
+	DefaultSearchLimit = 20
+	// DefaultRRFK is the default RRF constant.
+	DefaultRRFK = 60
+
+	// DefaultVectorIndexBackend is the default vector index backend.
+	DefaultVectorIndexBackend = "hnsw"
+	// DefaultHNSWM is the default HNSW M parameter.
+	DefaultHNSWM = 16
+	// DefaultHNSEFConstruction is the default HNSW efConstruction.
+	DefaultHNSEFConstruction = 100
+	// DefaultHNSEFSearch is the default HNSW efSearch.
+	DefaultHNSEFSearch = 50
+	// DefaultHNSWDimension is the default HNSW dimension.
+	DefaultHNSWDimension = 1024
+
+	// DefaultCompressionAlgorithm is the default compression algorithm.
+	DefaultCompressionAlgorithm = "zstd"
+	// DefaultCompressionLevel is the default compression level.
+	DefaultCompressionLevel = 3
 )

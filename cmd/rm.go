@@ -3,8 +3,8 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/anthropics/seek/internal/config"
-	"github.com/anthropics/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/store"
 )
 
 type RmCmd struct {

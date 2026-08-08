@@ -55,6 +55,36 @@ ocr:
   # base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
   # api_key: ${DASHSCOPE_API_KEY}
   # model: qwen-vl-ocr
+
+# Search configuration
+search:
+  query_mode: parsed        # "raw" (FTS5 passthrough) or "parsed" (structured queries)
+  default_limit: 20
+  rrf_k: 60
+
+# Vector index backend
+vector_index:
+  backend: hnsw             # "hnsw" (default) or "linear"
+  hnsw:
+    m: 16                   # HNSW M parameter
+    # ef_construction: 100  # reserved; coder/hnsw v0.6.1 does not expose this parameter
+    ef_search: 50           # query-time search width (higher = more accurate, slower)
+    persist_path: ~/.cache/seek/hnsw.index
+    dimension: 1024         # must match embedding.dimensions
+
+# Filter configuration
+filters:
+  enabled: true
+  default_collection: ""    # empty = all collections
+
+# Aggregation configuration
+aggregations:
+  enabled: true
+
+# Compression configuration
+compression:
+  algorithm: zstd           # "zstd" (default), "lz4", or "none"
+  level: 3                  # compression level (1-22 for zstd)
 ```
 
 > **Note:** `dimensions` is fixed at index time. If you change models or dimensions, re-run `seek rm <collection>` and `seek add` to rebuild the index.
@@ -70,6 +100,27 @@ seek search "ECONNREFUSED port 3000" --lex
 
 # Vector semantic search (meaning-based)
 seek search "functional programming architecture" --vec
+
+# Filtered search
+seek search "error" --collection mynotes --type markdown
+seek search "meeting" --after 2024-01-01 --before 2024-12-31
+seek search "image" --chunk-type image
+seek search "doc" --path "docs/*.md"
+
+# Aggregations
+seek search "error" --aggs "type:terms"
+seek search "error" --aggs "created_at:histogram:month"
+
+# Analyze text (tokenize, stem)
+seek analyze "running" --lang en
+seek analyze "kitaplar evlerde" --lang tr
+
+# Show schema
+seek schema --show
+seek schema --validate
+
+# Autocomplete suggestions
+seek search "hel" --autocomplete
 
 # Incremental sync + embed new content
 seek sync && seek embed
@@ -103,10 +154,36 @@ This writes a `Stop` hook into `~/.claude/settings.json` so `seek sync` runs aut
 
 **Search** — Three modes:
 - `--lex`: SQLite FTS5 BM25 ranking
-- `--vec`: Cosine similarity against stored embeddings
+- `--vec`: Cosine similarity against stored embeddings (HNSW index for fast search)
 - Default (hybrid): [RRF fusion](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf) combining both
 
-**Storage** — SQLite database at `~/.cache/seek/index.db`. Config at `~/.config/seek/config.yaml`.
+**Query syntax** — Structured queries are supported by default:
+- Boolean: `term1 AND term2`, `term1 OR term2`, `NOT term`
+- Phrase: `"exact phrase"`
+- Prefix: `pref*`
+- Fuzzy: `term~2` (maps to prefix expansion)
+- Field-scoped: `title:term`, `content:term`
+- Proximity: `NEAR(term1 term2, 5)`
+
+**Filters** — Narrow results by:
+- `--collection <name>`: collection name
+- `--type <type>`: document type (markdown, claude, codex, images, pdf)
+- `--after <date>` / `--before <date>`: date range (RFC3339)
+- `--chunk-type <type>`: chunk type (text, image)
+- `--path <pattern>`: path pattern (GLOB syntax)
+
+**Aggregations** — Get facet counts and statistics:
+- `--aggs "type:terms"`: term aggregation by document type
+- `--aggs "collection:terms"`: term aggregation by collection
+- `--aggs "created_at:histogram:month"`: time-based histogram
+- `--aggs "line_count:range:0-100,100-500"`: numeric range buckets
+- `--aggs "count"`: total match count
+
+**Storage** — SQLite database at `~/.cache/seek/index.db`. HNSW index at `~/.cache/seek/hnsw.index`. Config at `~/.config/seek/config.yaml`. Chunk content is compressed with Zstd (configurable) to reduce storage footprint; uncompressed content is still readable for backward compatibility.
+
+**Query parsing** — By default, queries are parsed into structured AST (boolean, phrase, prefix, fuzzy, field-scoped, proximity). Invalid syntax falls back to raw FTS5 MATCH automatically. Use `--query-mode raw` to disable parsing.
+
+**Tokenization** — Query-time analysis supports English and Turkish stemming (Snowball) with stop-word removal. Stemmed terms are expanded with `*` prefix for FTS5 matching, so "running" → "run*" matches both "run" and "running". Index-time tokenization uses FTS5's built-in `unicode61` and is unchanged.
 
 ## Collections
 
@@ -122,6 +199,10 @@ This writes a `Stop` hook into `~/.claude/settings.json` so `seek sync` runs aut
 
 - [Kong](https://github.com/alecthomas/kong) — struct-tag CLI framework
 - [mattn/go-sqlite3](https://github.com/mattn/go-sqlite3) — SQLite with FTS5
+- [coder/hnsw](https://github.com/coder/hnsw) — HNSW vector index for fast semantic search
+- [blevesearch/snowballstem](https://github.com/blevesearch/snowballstem) — English + Turkish stemming
+- [blevesearch/vellum](https://github.com/blevesearch/vellum) — FST-based autocomplete
+- [klauspost/compress](https://github.com/klauspost/compress) — Zstd compression for chunk content
 - [qwen3-vl-embedding](https://help.aliyun.com/zh/model-studio/developer-reference/multimodal-embedding) — multimodal embedding via DashScope
 
 ## License

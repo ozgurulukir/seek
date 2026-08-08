@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/anthropics/seek/internal/config"
 	"github.com/gen2brain/go-fitz"
+	"github.com/ozgurulukir/seek/internal/config"
 )
 
 // PdfFile represents a PDF found on disk (before page rasterization).

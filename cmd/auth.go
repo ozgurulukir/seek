@@ -6,7 +6,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/anthropics/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/config"
 	"golang.org/x/term"
 )
 

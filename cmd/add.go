@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/anthropics/seek/internal/chunk"
-	"github.com/anthropics/seek/internal/config"
-	"github.com/anthropics/seek/internal/embed"
-	"github.com/anthropics/seek/internal/indexer"
-	"github.com/anthropics/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/chunk"
+	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/embed"
+	"github.com/ozgurulukir/seek/internal/indexer"
+	"github.com/ozgurulukir/seek/internal/store"
 )
 
 type AddCmd struct {
