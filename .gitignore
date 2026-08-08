@@ -13,3 +13,5 @@ bin/
 # Local tooling
 .nova/
 .code-tandem/
+.zcode/
+_plans/
