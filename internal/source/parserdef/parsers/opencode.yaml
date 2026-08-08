@@ -1,0 +1,34 @@
+format: 1
+name: opencode
+description: opencode CLI oturumları (SQLite layout; workspace başına DB)
+
+sources:
+  - driver: sqlite
+    when: { file_exists: "~/.local/share/opencode/opencode.db" }
+    paths: ["~/.local/share/opencode/opencode*.db"]
+    exclude: ["*-wal", "*-shm"]
+    versions:
+      - version: 1
+        sessions:
+          query: |
+            SELECT id, title, directory, parent_id, time_updated
+            FROM session
+          id: id
+          title: title
+          cursor: time_updated
+          cursor_format: epoch_ms
+          metadata:
+            workspace: directory
+            parent: parent_id
+        messages:
+          query: |
+            SELECT json_extract(m.data,'$.role') AS role,
+                   COALESCE(json_extract(p.data,'$.text'),
+                            json_extract(p.data,'$.state.output')) AS content
+            FROM message m
+            JOIN part p ON p.message_id = m.id
+            WHERE m.session_id = :session_id
+              AND json_extract(p.data,'$.type') IN ('text','tool')
+            ORDER BY m.time_created, p.time_created
+          role: role
+          content: content

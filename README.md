@@ -28,10 +28,21 @@ seek auth login
 
 # Add your collections
 seek add /path/to/notes --name mynotes    # markdown
-seek add --claude                          # Claude Code conversations
-seek add --codex                           # Codex conversations
+seek add --claude                          # Claude Code conversations (native, +images)
+seek add --codex                           # Codex conversations (native, +images)
 seek add --images /path/to/images -n pics  # image files (png/jpg/webp)
 seek add --pdf /path/to/pdfs -n docs      # PDFs (pages rasterized for VL embedding)
+
+# Schema-driven parser collections (text-only, no image extraction)
+seek add --opencode                        # opencode CLI sessions (SQLite)
+seek add --copilot                         # GitHub Copilot CLI sessions
+seek add --zed                             # Zed Agent panel threads (zstd blobs)
+seek add --parser <name>                   # any parser schema by name
+seek add --claude-schema                   # Claude conversations via schema engine
+seek add --codex-schema                    # Codex conversations via schema engine
+
+# List available parser schemas + detection status
+seek parsers list
 
 # Generate embeddings
 seek embed
@@ -102,10 +113,11 @@ seek search "ECONNREFUSED port 3000" --lex
 seek search "functional programming architecture" --vec
 
 # Filtered search
-seek search "error" --collection mynotes --type markdown
+seek search "error" --collection mynotes --doc-type markdown
 seek search "meeting" --after 2024-01-01 --before 2024-12-31
 seek search "image" --chunk-type image
 seek search "doc" --path "docs/*.md"
+seek search "deploy" --workspace /path/to/project   # parser collections only
 
 # Aggregations
 seek search "error" --aggs "type:terms"
@@ -167,10 +179,11 @@ This writes a `Stop` hook into `~/.claude/settings.json` so `seek sync` runs aut
 
 **Filters** — Narrow results by:
 - `--collection <name>`: collection name
-- `--type <type>`: document type (markdown, claude, codex, images, pdf)
+- `--doc-type <type>`: document type (markdown, claude, codex, images, pdf, parser)
 - `--after <date>` / `--before <date>`: date range (RFC3339)
 - `--chunk-type <type>`: chunk type (text, image)
 - `--path <pattern>`: path pattern (GLOB syntax)
+- `--workspace <path>`: workspace directory (parser collections only)
 
 **Aggregations** — Get facet counts and statistics:
 - `--aggs "type:terms"`: term aggregation by document type
@@ -194,6 +207,31 @@ This writes a `Stop` hook into `~/.claude/settings.json` so `seek sync` runs aut
 | `codex` | `~/.codex/` | All Codex sessions + screenshots |
 | `images` | Any directory | Image files (png/jpg/webp) with VL embedding |
 | `pdf` | Any directory | PDF pages rasterized to PNG, VL embedding per page + OCR text (if enabled) |
+| `parser` | External SQLite/JSONL | Schema-driven: opencode, copilot-cli, zed, claude (text-only), codex (text-only) |
+
+### Schema-driven parsers
+
+New conversation platforms can be indexed without writing Go code — they're defined by declarative YAML schemas. The engine has a fixed Go motor; per-platform knowledge lives in schema files. Built-in schemas are embedded in the binary and can be overridden by user files.
+
+**Built-in schemas** (run `seek parsers list` to see detection status):
+
+| Schema | Driver | Source |
+|--------|--------|--------|
+| `opencode` | sqlite | `~/.local/share/opencode/opencode*.db` |
+| `copilot-cli` | sqlite | `~/.copilot/session-store.db` |
+| `zed` | sqlite | `~/.local/share/zed/threads/threads.db` (zstd blobs) |
+| `claude` | jsonl | `~/.claude/projects/**/*.jsonl` (text-only, no images) |
+| `codex` | jsonl | `~/.codex/sessions/**/*.jsonl` (text-only, no images) |
+
+**User overrides** — drop a YAML file in `~/.config/seek/parsers/<name>.yaml` to completely replace a built-in schema (no merge). Useful for customizing queries or adapting to upstream format changes without waiting for a seek update.
+
+**`--workspace` filter** — parser collections extract workspace metadata (`cwd`, `directory`, `folder_paths`) into a common `workspace` field, enabling cross-platform filtering:
+
+```bash
+seek search "deploy" --workspace /home/user/myproject
+```
+
+This works across opencode, copilot-cli, zed, and schema-driven claude collections (native claude/codex do not extract workspace metadata).
 
 ## Built With
 

@@ -62,10 +62,11 @@ Invalid syntax falls back to raw FTS5 MATCH automatically.
 
 ```bash
 seek search "query" --collection mynotes
-seek search "query" --type markdown
+seek search "query" --doc-type markdown
 seek search "query" --after 2024-01-01 --before 2024-12-31
 seek search "query" --chunk-type image
 seek search "query" --path "docs/*.md"
+seek search "query" --workspace /path/to/project   # parser collections only
 ```
 
 Filters work with both `--lex` and `--vec` modes.
@@ -106,7 +107,7 @@ seek schema --validate  # Validate schema against DB
 2. **Use default (hybrid)** for conceptual questions like "how to deploy" or "best practices for X"
 3. **Use `--vec`** only when hybrid results are poor and you need pure semantic matching
 4. **Increase `-l 20`** if the first 10 results aren't enough
-5. **Use filters** to narrow results: `--collection`, `--type`, `--after/--before`, `--chunk-type`, `--path`
+5. **Use filters** to narrow results: `--collection`, `--doc-type`, `--after/--before`, `--chunk-type`, `--path`, `--workspace`
 6. **Use `--aggs`** to get facet counts and statistics alongside search results
 
 ### Reading Output
@@ -155,6 +156,13 @@ seek add --images /path/to/images -n myimages
 
 # Add a PDF directory (each page rasterized to PNG, then VL-embedded)
 seek add --pdf /path/to/pdfs -n mydocs
+
+# Add schema-driven parser collections (opencode, copilot, zed, etc.)
+seek add --opencode
+seek add --parser <name>
+
+# List available parser schemas + detection status
+seek parsers list
 ```
 
 ## Collection Types
@@ -166,6 +174,36 @@ seek add --pdf /path/to/pdfs -n mydocs
 | `codex` | `~/.codex/` | Codex sessions + screenshots |
 | `images` | Any directory | Image files (png/jpg/webp) with VL embedding |
 | `pdf` | Any directory | PDF pages rasterized to PNG, VL embedding per page + OCR text (if enabled) |
+| `parser` | External SQLite/JSONL | Schema-driven: opencode, copilot-cli, zed, claude (text-only), codex (text-only) |
+
+### Schema-driven parsers
+
+Some conversation platforms are indexed via declarative YAML schemas (no Go code per platform). These are `parser` collections — they support the `--workspace` filter for cross-platform project filtering.
+
+**Adding parser collections:**
+
+```bash
+seek add --opencode        # opencode CLI sessions
+seek add --copilot         # GitHub Copilot CLI sessions
+seek add --zed             # Zed Agent panel threads
+seek add --claude-schema   # Claude conversations (text-only, no image extraction)
+seek add --codex-schema    # Codex conversations (text-only, no image extraction)
+seek add --parser <name>   # any parser schema by name
+```
+
+**Listing available schemas:**
+
+```bash
+seek parsers list          # shows all schemas, detection status, linked collections
+```
+
+**User overrides** — drop a YAML file in `~/.config/seek/parsers/<name>.yaml` to replace a built-in schema.
+
+**Workspace filtering** — parser collections extract workspace metadata into a common field:
+
+```bash
+seek search "deploy" --workspace /home/user/myproject
+```
 
 Run `seek status` to see which collections the user has configured.
 

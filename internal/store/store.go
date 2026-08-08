@@ -22,6 +22,7 @@ const (
 	CollectionTypeCodex    CollectionType = "codex"
 	CollectionTypeImages   CollectionType = "images"
 	CollectionTypePDF      CollectionType = "pdf"
+	CollectionTypeParser   CollectionType = "parser"
 )
 
 type ChunkType int
@@ -133,14 +134,34 @@ func (f *PathFilter) ToSQL() (string, []interface{}) {
 	return "d.path GLOB ?", []interface{}{cleaned}
 }
 
+// FastFieldFilter filters documents by a fast-field value (e.g. workspace).
+// Uses the fast_fields table for indexed lookups.
+type FastFieldFilter struct {
+	Field string // fast field name (e.g. "workspace")
+	Value string // fast field value
+}
+
+func (f *FastFieldFilter) ToSQL() (string, []interface{}) {
+	// Fast field values are JSON-encoded on write (see encodeFastFieldValue),
+	// so we must JSON-encode the comparison value too.
+	encoded, err := encodeFastFieldValue(f.Value)
+	if err != nil {
+		return "", nil
+	}
+	return "d.id IN (SELECT doc_id FROM fast_fields WHERE field_name = ? AND field_value = ?)",
+		[]interface{}{f.Field, encoded}
+}
+
 type Collection struct {
-	ID        int64
-	Name      string
-	Type      CollectionType
-	Path      string
-	Pattern   string
-	CreatedAt string
-	UpdatedAt string
+	ID            int64
+	Name          string
+	Type          CollectionType
+	Path          string
+	Pattern       string
+	ParserName    string // for "parser" collections: the schema name
+	ParserVersion int    // for "parser" collections: the detected schema version
+	CreatedAt     string
+	UpdatedAt     string
 }
 
 type Document struct {
@@ -307,6 +328,8 @@ func (s *Store) migrate() error {
 		`ALTER TABLE chunks ADD COLUMN image_path TEXT`,
 		`ALTER TABLE documents ADD COLUMN metadata TEXT DEFAULT '{}'`,
 		`ALTER TABLE chunks ADD COLUMN content_zstd BLOB`,
+		`ALTER TABLE collections ADD COLUMN parser_name TEXT`,
+		`ALTER TABLE collections ADD COLUMN parser_version INTEGER DEFAULT 0`,
 	}
 	for _, stmt := range alterStmts {
 		s.execIgnoreDuplicate(stmt)
@@ -342,19 +365,59 @@ func (s *Store) CreateCollection(name string, typ CollectionType, path, pattern 
 	return &Collection{ID: id, Name: name, Type: typ, Path: path, Pattern: pattern}, nil
 }
 
-func (s *Store) GetCollectionByName(name string) (*Collection, error) {
-	c := &Collection{}
-	err := s.db.QueryRow(
-		`SELECT id, name, type, path, pattern, created_at, updated_at FROM collections WHERE name = ?`, name,
-	).Scan(&c.ID, &c.Name, &c.Type, &c.Path, &c.Pattern, &c.CreatedAt, &c.UpdatedAt)
+// CreateParserCollection creates a "parser" collection referencing a schema-driven parser.
+func (s *Store) CreateParserCollection(name, path, pattern, parserName string) (*Collection, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.db.Exec(
+		`INSERT INTO collections (name, type, path, pattern, parser_name, parser_version, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		name, CollectionTypeParser, path, pattern, parserName, 0, now, now,
+	)
 	if err != nil {
 		return nil, err
 	}
+	id, _ := res.LastInsertId()
+	return &Collection{ID: id, Name: name, Type: CollectionTypeParser, Path: path, Pattern: pattern, ParserName: parserName}, nil
+}
+
+// UpdateCollectionParserVersion sets the detected schema version for a parser collection.
+func (s *Store) UpdateCollectionParserVersion(colID int64, version int) error {
+	_, err := s.db.Exec(`UPDATE collections SET parser_version = ? WHERE id = ?`, version, colID)
+	return err
+}
+
+// MaxDocumentMtime returns the maximum mtime among documents in a collection,
+// or zero if there are no documents. Used for incremental sync of parser collections.
+func (s *Store) MaxDocumentMtime(collectionID int64) (float64, error) {
+	var maxMtime sql.NullFloat64
+	err := s.db.QueryRow(
+		`SELECT MAX(mtime) FROM documents WHERE collection_id = ?`, collectionID,
+	).Scan(&maxMtime)
+	if err != nil {
+		return 0, err
+	}
+	if !maxMtime.Valid {
+		return 0, nil
+	}
+	return maxMtime.Float64, nil
+}
+
+func (s *Store) GetCollectionByName(name string) (*Collection, error) {
+	c := &Collection{}
+	var parserName sql.NullString
+	err := s.db.QueryRow(
+		`SELECT id, name, type, path, pattern, parser_name, parser_version, created_at, updated_at
+		 FROM collections WHERE name = ?`, name,
+	).Scan(&c.ID, &c.Name, &c.Type, &c.Path, &c.Pattern, &parserName, &c.ParserVersion, &c.CreatedAt, &c.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	c.ParserName = parserName.String
 	return c, nil
 }
 
 func (s *Store) ListCollections() ([]Collection, error) {
-	rows, err := s.db.Query(`SELECT id, name, type, path, pattern, created_at, updated_at FROM collections ORDER BY name`)
+	rows, err := s.db.Query(`SELECT id, name, type, path, pattern, parser_name, parser_version, created_at, updated_at FROM collections ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -362,9 +425,11 @@ func (s *Store) ListCollections() ([]Collection, error) {
 	var cols []Collection
 	for rows.Next() {
 		var c Collection
-		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.Path, &c.Pattern, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		var parserName sql.NullString
+		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.Path, &c.Pattern, &parserName, &c.ParserVersion, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
+		c.ParserName = parserName.String
 		cols = append(cols, c)
 	}
 	return cols, nil

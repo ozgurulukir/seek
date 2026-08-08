@@ -24,6 +24,7 @@ var cli struct {
 	Auth    cmd.AuthCmd    `cmd:"" help:"Manage API authentication"`
 	Config  cmd.ConfigCmd  `cmd:"" help:"Show or edit config"`
 	Schema  cmd.SchemaCmd  `cmd:"" help:"Show or validate schema"`
+	Parsers cmd.ParsersCmd `cmd:"" help:"Manage schema-driven parser definitions"`
 }
 
 func main() {

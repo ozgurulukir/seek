@@ -1,0 +1,20 @@
+format: 1
+name: codex
+description: Codex conversations (~/.codex/sessions/, JSONL)
+
+sources:
+  - driver: jsonl
+    when: { dir_exists: "~/.codex/sessions" }
+    paths: ["~/.codex/sessions", "~/.codex/archived_sessions"]
+    exclude: ["session_index.jsonl"]
+    versions:
+      - version: 1
+        sessions:
+          id: "payload.id"
+          cursor_from_mtime: true
+          cursor_format: epoch_s
+        messages:
+          line_filter: ["response_item"]
+          role_field: "payload.role"
+          content_path: "payload.content"
+          text_types: ["input_text", "output_text"]

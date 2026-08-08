@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ozgurulukir/seek/internal/chunk"
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/source"
+	"github.com/ozgurulukir/seek/internal/source/parserdef"
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
@@ -54,6 +56,8 @@ func (idx *Indexer) SyncCollection(col *store.Collection) error {
 		return idx.syncImage(col)
 	case "pdf":
 		return idx.syncPdf(col)
+	case "parser":
+		return idx.syncParserDef(col)
 	default:
 		return fmt.Errorf("unknown collection type: %s", col.Type)
 	}
@@ -379,4 +383,177 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 
 	idx.log.Printf("PDFs: %d indexed, %d skipped\n", indexed, skipped)
 	return nil
+}
+
+// syncParserDef indexes a schema-driven parser collection (§6.6).
+// Flow: load → match → version check (reindex vs incremental) → SyncSessions →
+// document upsert → FTS + chunks → metadata (FastFields) → orphan cleanup.
+func (idx *Indexer) syncParserDef(col *store.Collection) error {
+	// 1. Load the parser schema (embedded default + user override).
+	def, err := parserdef.Load(col.ParserName)
+	if err != nil {
+		return fmt.Errorf("load parser %q: %w", col.ParserName, err)
+	}
+
+	// 2. Match: detect source + version from the environment.
+	src, ver, files, err := def.Match()
+	if err != nil {
+		return fmt.Errorf("detect source for %q: %w", col.ParserName, err)
+	}
+
+	// 3. Version check: if the schema version changed, do a full reindex.
+	reindex := col.ParserVersion != ver.Version
+	var since time.Time
+	if reindex {
+		idx.log.Printf("  Parser %q version changed: %d → %d (full reindex)\n",
+			col.ParserName, col.ParserVersion, ver.Version)
+		if err := idx.reindexParserCollection(col); err != nil {
+			return fmt.Errorf("reindex: %w", err)
+		}
+		if err := idx.db.UpdateCollectionParserVersion(col.ID, ver.Version); err != nil {
+			return fmt.Errorf("update parser version: %w", err)
+		}
+		col.ParserVersion = ver.Version
+		// since stays zero → full fetch.
+	} else {
+		// Incremental: only sessions with cursor > max(existing mtime).
+		// We store cursors as milliseconds (see write path below) so sub-second
+		// precision is preserved — critical for epoch_ms cursors (opencode).
+		maxMtime, _ := idx.db.MaxDocumentMtime(col.ID)
+		if maxMtime > 0 {
+			since = time.UnixMilli(int64(maxMtime))
+		}
+	}
+
+	// 4. Fetch sessions.
+	sessions, sErrs, err := parserdef.SyncSessions(src, ver, files, since)
+	if err != nil {
+		return fmt.Errorf("sync sessions: %w", err)
+	}
+	for _, se := range sErrs {
+		idx.log.Printf("  WARN: session %s: %v\n", se.SessionID, se.Err)
+	}
+
+	// 5. Index each session.
+	var indexed, skipped int
+	seenPaths := make(map[string]bool)
+	for _, sess := range sessions {
+		docPath := sess.SrcPath + "#" + sess.ID
+		seenPaths[docPath] = true
+
+		// Messages == nil means "unchanged" (incremental sync skip) — the
+		// session still exists in the source, so track it for orphan detection.
+		if sess.Messages == nil {
+			skipped++
+			continue
+		}
+
+		// Messages present but empty — skip indexing (no content).
+		if len(sess.Messages) == 0 {
+			skipped++
+			continue
+		}
+
+		// Title: schema title → first user message fallback.
+		title := sess.Title
+		if title == "" {
+			for _, m := range sess.Messages {
+				if m.Role == source.RoleUser {
+					title = source.Truncate(m.Content, source.TitleMaxLen)
+					break
+				}
+			}
+		}
+		if title == "" {
+			title = sess.ID
+		}
+
+		// Convert messages to text (same format as native claude/codex).
+		text := parserMessagesToText(sess.Messages)
+		cursorUnix := 0.0
+		if !sess.Cursor.IsZero() {
+			cursorUnix = float64(sess.Cursor.UnixMilli())
+		}
+
+		docID, err := idx.db.UpsertDocument(col.ID, docPath, title, "", cursorUnix, len(sess.Messages))
+		if err != nil {
+			idx.log.Printf("  WARN: upsert %s: %v\n", docPath, err)
+			continue
+		}
+
+		// FTS: full rewrite (sessions are non-append-only).
+		if err := idx.db.UpsertFTS(docID, title, text); err != nil {
+			idx.log.Printf("  WARN: fts %s: %v\n", docPath, err)
+		}
+
+		// Chunks: delete old + insert new.
+		idx.db.DeleteChunksForDocument(docID)
+		chunks := chunk.ChunkConversation(text, 0)
+		for _, c := range chunks {
+			if err := idx.db.InsertChunk(docID, c.Seq, c.Content, nil); err != nil {
+				idx.log.Printf("  WARN: chunk %s: %v\n", docPath, err)
+			}
+		}
+
+		// Metadata enrichment (§6.13): write known fields to fast_fields.
+		for field, value := range sess.Metadata {
+			if value == "" {
+				continue
+			}
+			if err := idx.db.FastFields().Set(docID, field, value); err != nil {
+				idx.log.Printf("  WARN: metadata %s=%s: %v\n", field, value, err)
+			}
+		}
+
+		indexed++
+	}
+
+	// 6. Orphan cleanup: remove documents for sessions no longer in the source.
+	// Skip cleanup if any source DB failed to scan — a transient error (busy
+	// timeout, locked DB) would otherwise cause us to delete sessions that are
+	// still present but couldn't be read this cycle.
+	if len(sErrs) == 0 {
+		if existingPaths, err := idx.db.ListDocumentPaths(col.ID); err == nil {
+			removed := 0
+			for path, docID := range existingPaths {
+				if !seenPaths[path] {
+					idx.db.FastFields().DeleteForDocument(docID)
+					idx.db.DeleteDocument(docID)
+					removed++
+				}
+			}
+			if removed > 0 {
+				idx.log.Printf("  Removed %d stale sessions\n", removed)
+			}
+		}
+	} else {
+		idx.log.Printf("  Skipping orphan cleanup due to %d scan error(s)\n", len(sErrs))
+	}
+
+	idx.log.Printf("  Synced: %d indexed, %d unchanged\n", indexed, skipped)
+	return nil
+}
+
+// reindexParserCollection deletes all documents/chunks/FTS for a parser collection
+// so the next sync is a full re-fetch (§6.6).
+func (idx *Indexer) reindexParserCollection(col *store.Collection) error {
+	existingPaths, err := idx.db.ListDocumentPaths(col.ID)
+	if err != nil {
+		return err
+	}
+	for _, docID := range existingPaths {
+		idx.db.FastFields().DeleteForDocument(docID)
+		idx.db.DeleteDocument(docID)
+	}
+	return nil
+}
+
+// parserMessagesToText converts parserdef messages to the [role]: content format
+// used by the native claude/codex parsers (ClaudeConversationToText, codex.go:364).
+func parserMessagesToText(messages []parserdef.Message) string {
+	var b strings.Builder
+	for _, m := range messages {
+		fmt.Fprintf(&b, "[%s]: %s\n\n", m.Role, m.Content)
+	}
+	return b.String()
 }

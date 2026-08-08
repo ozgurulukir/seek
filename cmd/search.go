@@ -18,11 +18,12 @@ type SearchCmd struct {
 
 	// New filter flags
 	Collection string `help:"Filter by collection name"`
-	DocType    string `help:"Filter by document type (markdown, claude, codex, images, pdf)"`
+	DocType    string `help:"Filter by document type (markdown, claude, codex, images, pdf, parser)"`
 	After      string `help:"Filter documents after this date (RFC3339)"`
 	Before     string `help:"Filter documents before this date (RFC3339)"`
 	ChunkType  string `help:"Filter by chunk type (text, image)"`
 	Path       string `help:"Filter by path pattern (GLOB)"`
+	Workspace  string `help:"Filter parser collections by workspace directory (fast field)"`
 
 	// Aggregation flags
 	Aggs []string `help:"Aggregations to run (e.g., type:terms, created_at:histogram:month)"`
@@ -84,7 +85,7 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 
 	// Build filters
 	var filters *store.FilterSet
-	if c.Collection != "" || c.DocType != "" || c.After != "" || c.Before != "" || c.ChunkType != "" || c.Path != "" {
+	if c.Collection != "" || c.DocType != "" || c.After != "" || c.Before != "" || c.ChunkType != "" || c.Path != "" || c.Workspace != "" {
 		filters = store.NewFilterSet()
 		if c.Collection != "" {
 			filters.Add(&store.CollectionFilter{Name: c.Collection})
@@ -104,6 +105,9 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 		}
 		if c.Path != "" {
 			filters.Add(&store.PathFilter{Pattern: c.Path})
+		}
+		if c.Workspace != "" {
+			filters.Add(&store.FastFieldFilter{Field: "workspace", Value: c.Workspace})
 		}
 	}
 

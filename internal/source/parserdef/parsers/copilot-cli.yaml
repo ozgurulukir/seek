@@ -1,0 +1,29 @@
+format: 1
+name: copilot-cli
+description: GitHub Copilot CLI oturumları (~/.copilot/session-store.db)
+
+sources:
+  - driver: sqlite
+    when: { file_exists: "~/.copilot/session-store.db" }
+    paths: ["~/.copilot/session-store.db"]
+    versions:
+      - version: 1
+        sessions:
+          query: |
+            SELECT id, summary, cwd, updated_at FROM sessions
+          id: id
+          title: summary
+          cursor: updated_at
+          cursor_format: rfc3339
+          metadata:
+            workspace: cwd
+        messages:
+          query: |
+            SELECT turn_index, 1 AS half, 'user' AS role, user_message AS content
+            FROM turns WHERE session_id = :session_id
+            UNION ALL
+            SELECT turn_index, 2, 'assistant', assistant_response
+            FROM turns WHERE session_id = :session_id
+            ORDER BY turn_index, half
+          role: role
+          content: content

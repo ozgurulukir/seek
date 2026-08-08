@@ -1,0 +1,25 @@
+format: 1
+name: claude
+description: Claude Code conversations (~/.claude/projects/, JSONL)
+
+sources:
+  - driver: jsonl
+    when: { dir_exists: "~/.claude/projects" }
+    paths: ["~/.claude/projects"]
+    versions:
+      - version: 1
+        sessions:
+          id_from_filename: true
+          cursor_from_mtime: true
+          cursor_format: epoch_s
+          metadata:
+            workspace: "cwd"
+        messages:
+          line_filter: ["user", "assistant"]
+          role_field: "type"
+          # Modern format: message is a wrapper dict {role, content: [...]}.
+          # Legacy format: message is the content directly (array or string).
+          # Comma-separated fallback: try message.content first, then message.
+          content_path: "message.content,message"
+          content_path_user: "message.content,message"
+          text_types: ["text"]

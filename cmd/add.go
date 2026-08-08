@@ -10,6 +10,7 @@ import (
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/indexer"
+	"github.com/ozgurulukir/seek/internal/source/parserdef"
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
@@ -18,10 +19,20 @@ type AddCmd struct {
 	Name    string `short:"n" help:"Name of the collection (defaults to folder name)"`
 	Pattern string `short:"p" help:"Glob pattern for markdown files (default: **/*.md)"`
 
-	Claude bool `help:"Add Claude Code conversations (~/.claude/projects/)"`
-	Codex  bool `help:"Add Codex conversations (~/.codex/)"`
-	Images bool `help:"Add an image directory (png/jpg/webp)"`
-	Pdf    bool `help:"Add a PDF directory (rasterized for VL embedding)"`
+	Claude bool   `help:"Add Claude Code conversations (~/.claude/projects/)"`
+	Codex  bool   `help:"Add Codex conversations (~/.codex/)"`
+	Images bool   `help:"Add an image directory (png/jpg/webp)"`
+	Pdf    bool   `help:"Add a PDF directory (rasterized for VL embedding)"`
+	Parser string `help:"Add a schema-driven parser collection (e.g. opencode, copilot-cli, zed)"`
+
+	// Convenience aliases for the common built-in parser schemas.
+	Opencode bool `help:"Shortcut for --parser opencode"`
+	Copilot  bool `help:"Shortcut for --parser copilot-cli"`
+	Zed      bool `help:"Shortcut for --parser zed"`
+
+	// Schema-driven alternatives to the native parsers (text-only, no image extraction).
+	ClaudeSchema bool `help:"Shortcut for --parser claude (schema-driven, text-only)"`
+	CodexSchema  bool `help:"Shortcut for --parser codex (schema-driven, text-only)"`
 }
 
 func (c *AddCmd) Run(cfg *config.AppConfig) error {
@@ -42,6 +53,53 @@ func (c *AddCmd) Run(cfg *config.AppConfig) error {
 	}
 	if c.Pdf {
 		return c.addPdfs(cfg, db)
+	}
+
+	// Resolve convenience flags into the generic --parser path.
+	// Only one parser source may be selected at a time.
+	var parserFlags []string
+	if c.Opencode {
+		parserFlags = append(parserFlags, "--opencode")
+	}
+	if c.Copilot {
+		parserFlags = append(parserFlags, "--copilot")
+	}
+	if c.Zed {
+		parserFlags = append(parserFlags, "--zed")
+	}
+	if c.ClaudeSchema {
+		parserFlags = append(parserFlags, "--claude-schema")
+	}
+	if c.CodexSchema {
+		parserFlags = append(parserFlags, "--codex-schema")
+	}
+	if c.Parser != "" {
+		parserFlags = append(parserFlags, "--parser")
+	}
+	if len(parserFlags) > 1 {
+		return fmt.Errorf("multiple parser sources selected (%s); specify only one",
+			strings.Join(parserFlags, ", "))
+	}
+
+	parserName := c.Parser
+	if c.Opencode {
+		parserName = "opencode"
+	}
+	if c.Copilot {
+		parserName = "copilot-cli"
+	}
+	if c.Zed {
+		parserName = "zed"
+	}
+	if c.ClaudeSchema {
+		parserName = "claude"
+	}
+	if c.CodexSchema {
+		parserName = "codex"
+	}
+	if parserName != "" {
+		c.Parser = parserName
+		return c.addParser(cfg, db)
 	}
 
 	return c.addMarkdown(cfg, db)
@@ -187,6 +245,44 @@ func (c *AddCmd) addPdfs(cfg *config.AppConfig, db *store.Store) error {
 	}
 
 	fmt.Printf("Created collection %q (pdf) → %s\n", col.Name, col.Path)
+	return indexer.New(cfg, db).SyncCollection(col)
+}
+
+func (c *AddCmd) addParser(cfg *config.AppConfig, db *store.Store) error {
+	// Validate the schema exists and detects a source before creating the collection.
+	// This is fail-fast: if the schema is broken or no source matches, we refuse.
+	def, err := parserdef.Load(c.Parser)
+	if err != nil {
+		return fmt.Errorf("load parser schema: %w", err)
+	}
+	src, ver, files, err := def.Match()
+	if err != nil {
+		return fmt.Errorf("detect source for parser %q: %w", c.Parser, err)
+	}
+
+	name := c.Name
+	if name == "" {
+		name = c.Parser + "-conversations"
+	}
+
+	if existing, err := db.GetCollectionByName(name); err == nil {
+		fmt.Printf("Collection %q already exists (id=%d)\n", existing.Name, existing.ID)
+		return nil
+	}
+
+	// The collection path is the primary source directory (for status display).
+	primaryPath := ""
+	if len(files) > 0 {
+		primaryPath = filepath.Dir(files[0])
+	}
+
+	col, err := db.CreateParserCollection(name, primaryPath, "*", c.Parser)
+	if err != nil {
+		return fmt.Errorf("create collection: %w", err)
+	}
+
+	fmt.Printf("Created collection %q (parser: %s v%d, %d source files) → %s\n",
+		col.Name, c.Parser, ver.Version, len(files), src.Paths)
 	return indexer.New(cfg, db).SyncCollection(col)
 }
 
