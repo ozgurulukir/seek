@@ -17,7 +17,9 @@ ln -sf $(pwd)/seek /usr/local/bin/seek
 As a [skill](https://skills.sh) (Claude Code, Codex, Cursor, etc.):
 
 ```bash
-bunx skills add ethan-huo/seek
+# Copy the skill from this repo to your skills directory
+mkdir -p ~/.agents/skills
+cp -r skills/seek ~/.agents/skills/seek
 ```
 
 ## Quickstart
