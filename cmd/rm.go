@@ -23,8 +23,14 @@ func (c *RmCmd) Run(cfg *config.AppConfig) error {
 		return fmt.Errorf("collection %q not found", c.Name)
 	}
 
-	docs, _ := db.CountDocuments(col.ID)
-	chunks, _ := db.CountChunks(col.ID)
+	docs, err := db.CountDocuments(col.ID)
+	if err != nil {
+		return fmt.Errorf("count documents: %w", err)
+	}
+	chunks, err := db.CountChunks(col.ID)
+	if err != nil {
+		return fmt.Errorf("count chunks: %w", err)
+	}
 
 	if err := db.DeleteCollection(col.ID); err != nil {
 		return fmt.Errorf("delete: %w", err)

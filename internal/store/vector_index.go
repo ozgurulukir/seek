@@ -261,7 +261,10 @@ func NewVectorIndex(cfg *config.AppConfig) (VectorIndex, error) {
 			if _, err := os.Stat(path); err == nil {
 				if err := idx.Load(path); err != nil {
 					// Corrupt index — fall back to fresh HNSW
-					idx, _ = newHNSWIndex(dim, m, efSearch)
+					idx, err = newHNSWIndex(dim, m, efSearch)
+					if err != nil {
+						return nil, fmt.Errorf("rebuild hnsw index: %w", err)
+					}
 				}
 			}
 		}

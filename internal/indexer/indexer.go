@@ -86,7 +86,12 @@ func (idx *Indexer) syncConversation(
 			continue
 		}
 
-		lineCount, _ := source.CountLines(f.Path)
+		lineCount, err := source.CountLines(f.Path)
+		if err != nil {
+			idx.log.Printf("  WARN: count lines %s: %v\n", f.Path, err)
+			failed++
+			continue
+		}
 		if existing != nil && existing.LineCount >= lineCount {
 			idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
 			skipped++

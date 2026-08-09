@@ -29,8 +29,14 @@ func (c *StatusCmd) Run(cfg *config.AppConfig) error {
 	fmt.Printf("Database: %s\n\n", cfg.DBPath)
 
 	for _, col := range collections {
-		docs, _ := db.CountDocuments(col.ID)
-		chunks, _ := db.CountChunks(col.ID)
+		docs, err := db.CountDocuments(col.ID)
+		if err != nil {
+			return fmt.Errorf("count documents for %q: %w", col.Name, err)
+		}
+		chunks, err := db.CountChunks(col.ID)
+		if err != nil {
+			return fmt.Errorf("count chunks for %q: %w", col.Name, err)
+		}
 
 		fmt.Printf("%-25s  type=%-10s  docs=%-5d  chunks=%-5d\n",
 			col.Name, col.Type, docs, chunks)

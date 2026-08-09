@@ -672,8 +672,12 @@ func (s *Store) ListDocumentPaths(collectionID int64) (map[string]int64, error) 
 
 // DeleteDocument removes a document and its chunks/FTS entries.
 func (s *Store) DeleteDocument(docID int64) error {
-	s.db.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID)
-	s.db.Exec(`DELETE FROM chunks WHERE document_id = ?`, docID)
+	if _, err := s.db.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
+		return fmt.Errorf("delete fts entry: %w", err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM chunks WHERE document_id = ?`, docID); err != nil {
+		return fmt.Errorf("delete chunks: %w", err)
+	}
 	_, err := s.db.Exec(`DELETE FROM documents WHERE id = ?`, docID)
 	return err
 }
@@ -687,7 +691,9 @@ func (s *Store) UpdateDocumentMtime(docID int64, mtime float64) error {
 
 func (s *Store) UpsertFTS(docID int64, title, content string) error {
 	// Delete existing then insert (FTS5 doesn't support upsert)
-	s.db.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID)
+	if _, err := s.db.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
+		return fmt.Errorf("delete fts entry: %w", err)
+	}
 	_, err := s.db.Exec(`INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, title, content)
 	return err
 }
@@ -702,7 +708,9 @@ func (s *Store) AppendFTS(docID int64, newContent string) error {
 		return err
 	}
 	combined := existingContent + "\n" + newContent
-	s.db.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID)
+	if _, err := s.db.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
+		return fmt.Errorf("delete fts entry: %w", err)
+	}
 	_, err = s.db.Exec(`INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, existingTitle, combined)
 	return err
 }
