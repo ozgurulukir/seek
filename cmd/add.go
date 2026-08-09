@@ -25,6 +25,17 @@ type AddCmd struct {
 	Pdf    bool   `help:"Add a PDF directory (rasterized for VL embedding)"`
 	Parser string `help:"Add a schema-driven parser collection (e.g. opencode, copilot-cli, zed)"`
 
+	// Documents is a universal rich-document collection (docx/xlsx/pptx/epub/
+	// html/eml/csv/...). Extraction is handled by the configured backend
+	// (builtin or xberg); xberg is the typical choice since it supports 100+
+	// formats. See --backend and the [extractor] config section.
+	Documents bool `help:"Add a documents directory via the extraction backend (docx/xlsx/pptx/epub/html/...)"`
+
+	// Backend overrides the extraction backend for this command (builtin|xberg).
+	// Empty uses the config default (config.Extractor.Backend). Affects how PDF
+	// and documents collections are extracted.
+	Backend string `help:"Override the extraction backend (builtin|xberg)"`
+
 	// Convenience aliases for the common built-in parser schemas.
 	Opencode bool `help:"Shortcut for --parser opencode"`
 	Copilot  bool `help:"Shortcut for --parser copilot-cli"`
@@ -42,6 +53,11 @@ func (c *AddCmd) Run(cfg *config.AppConfig) error {
 	}
 	defer db.Close()
 
+	// Validate --backend early so a bad value fails before any work.
+	if c.Backend != "" && c.Backend != "builtin" && c.Backend != "xberg" {
+		return fmt.Errorf("invalid --backend %q (want builtin or xberg)", c.Backend)
+	}
+
 	if c.Claude {
 		return c.addClaude(cfg, db)
 	}
@@ -53,6 +69,9 @@ func (c *AddCmd) Run(cfg *config.AppConfig) error {
 	}
 	if c.Pdf {
 		return c.addPdfs(cfg, db)
+	}
+	if c.Documents {
+		return c.addDocuments(cfg, db)
 	}
 
 	// Resolve convenience flags into the generic --parser path.
@@ -137,7 +156,7 @@ func (c *AddCmd) addMarkdown(cfg *config.AppConfig, db *store.Store) error {
 	}
 
 	fmt.Printf("Created collection %q (markdown) → %s\n", col.Name, col.Path)
-	return indexer.New(cfg, db).SyncCollection(col)
+	return c.newIndexer(cfg, db).SyncCollection(col)
 }
 
 func (c *AddCmd) addClaude(cfg *config.AppConfig, db *store.Store) error {
@@ -159,7 +178,7 @@ func (c *AddCmd) addClaude(cfg *config.AppConfig, db *store.Store) error {
 	}
 
 	fmt.Printf("Created collection %q (claude) → %s\n", col.Name, col.Path)
-	return indexer.New(cfg, db).SyncCollection(col)
+	return c.newIndexer(cfg, db).SyncCollection(col)
 }
 
 func (c *AddCmd) addCodex(cfg *config.AppConfig, db *store.Store) error {
@@ -181,7 +200,7 @@ func (c *AddCmd) addCodex(cfg *config.AppConfig, db *store.Store) error {
 	}
 
 	fmt.Printf("Created collection %q (codex) → %s\n", col.Name, col.Path)
-	return indexer.New(cfg, db).SyncCollection(col)
+	return c.newIndexer(cfg, db).SyncCollection(col)
 }
 
 func (c *AddCmd) addImages(cfg *config.AppConfig, db *store.Store) error {
@@ -213,7 +232,7 @@ func (c *AddCmd) addImages(cfg *config.AppConfig, db *store.Store) error {
 	}
 
 	fmt.Printf("Created collection %q (images) → %s\n", col.Name, col.Path)
-	return indexer.New(cfg, db).SyncCollection(col)
+	return c.newIndexer(cfg, db).SyncCollection(col)
 }
 
 func (c *AddCmd) addPdfs(cfg *config.AppConfig, db *store.Store) error {
@@ -245,7 +264,59 @@ func (c *AddCmd) addPdfs(cfg *config.AppConfig, db *store.Store) error {
 	}
 
 	fmt.Printf("Created collection %q (pdf) → %s\n", col.Name, col.Path)
-	return indexer.New(cfg, db).SyncCollection(col)
+	return c.newIndexer(cfg, db).SyncCollection(col)
+}
+
+// addDocuments creates a universal documents collection (docx/xlsx/pptx/epub/
+// html/eml/csv/...). Extraction is delegated to the configured backend
+// (builtin or xberg, overridable via --backend). For the rich formats this
+// collection targets, xberg is the intended backend — warn if builtin is in
+// effect, since it only handles markdown/pdf/images and will report everything
+// else as unsupported.
+func (c *AddCmd) addDocuments(cfg *config.AppConfig, db *store.Store) error {
+	if c.Path == "" {
+		return fmt.Errorf("path is required for documents collection")
+	}
+
+	absPath, err := filepath.Abs(c.Path)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return fmt.Errorf("path does not exist: %s", absPath)
+	}
+
+	name := c.Name
+	if name == "" {
+		name = filepath.Base(absPath)
+	}
+
+	if existing, err := db.GetCollectionByName(name); err == nil {
+		fmt.Printf("Collection %q already exists (id=%d, path=%s)\n", existing.Name, existing.ID, existing.Path)
+		return nil
+	}
+
+	// Resolve the effective backend for the user-facing note + log line.
+	// Only the explicit --backend override is persisted on the collection (an
+	// empty backend means "follow the config default"), so changing the config
+	// default later still applies to existing collections unless they were
+	// created with an explicit --backend.
+	effectiveBackend := c.Backend
+	if effectiveBackend == "" {
+		effectiveBackend = cfg.Config.Extractor.Backend
+	}
+	if effectiveBackend == "" || effectiveBackend == "builtin" {
+		fmt.Printf("Note: documents collection with the builtin backend only indexes markdown/pdf/images.\n")
+		fmt.Printf("      For docx/xlsx/pptx/epub/html/... use: --backend xberg (or set extractor.backend: xberg).\n")
+	}
+
+	col, err := db.CreateCollectionWithBackend(name, store.CollectionTypeDocuments, absPath, "**/*", c.Backend)
+	if err != nil {
+		return fmt.Errorf("create collection: %w", err)
+	}
+
+	fmt.Printf("Created collection %q (documents, backend=%s) → %s\n", col.Name, effectiveBackend, col.Path)
+	return c.newIndexer(cfg, db).SyncCollection(col)
 }
 
 func (c *AddCmd) addParser(cfg *config.AppConfig, db *store.Store) error {
@@ -283,7 +354,29 @@ func (c *AddCmd) addParser(cfg *config.AppConfig, db *store.Store) error {
 
 	fmt.Printf("Created collection %q (parser: %s v%d, %d source files) → %s\n",
 		col.Name, c.Parser, ver.Version, len(files), src.Paths)
-	return indexer.New(cfg, db).SyncCollection(col)
+	return c.newIndexer(cfg, db).SyncCollection(col)
+}
+
+// newIndexer builds an indexer, applying the --backend override when set.
+// When --backend is given, it takes precedence over both the per-collection
+// backend and the config default (wired via WithExtractor). When --backend is
+// empty, the indexer resolves the backend per collection (col.Backend, else the
+// config default), which is what sync needs to honor each collection's recorded
+// backend. All add* helpers route through here so backend selection is central.
+func (c *AddCmd) newIndexer(cfg *config.AppConfig, db *store.Store) *indexer.Indexer {
+	idx := indexer.New(cfg, db)
+	if c.Backend == "" {
+		return idx
+	}
+	// Build the override extractor and inject it as the explicit backend.
+	ext, err := indexer.NewExtractor(cfg, c.Backend)
+	if err != nil {
+		// Surface the error through the sync result rather than panicking here;
+		// SyncCollection will return it immediately when ext.Extract is called.
+		fmt.Fprintf(os.Stderr, "WARN: --backend %s: %v\n", c.Backend, err)
+		return idx
+	}
+	return idx.WithExtractor(ext)
 }
 
 func newEmbedClient(cfg *config.AppConfig) *embed.Client {

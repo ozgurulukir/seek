@@ -67,6 +67,7 @@ seek search "functional programming architecture"   # hybrid: BM25 + vector + RR
 | `embed` | required | — | Generates embeddings |
 | `add --pdf` (text-based PDFs) | — | — | Embedded text indexed via FTS5 |
 | `add --pdf` (scanned PDFs, searchable) | — | required | OCR extracts text from rasterized pages |
+| `add --docs` (docx/xlsx/pptx/epub/html/...) | — | — | Rich formats via the xberg extraction backend |
 
 ### Migrating from Option A to B
 
@@ -105,6 +106,7 @@ seek add --claude                          # Claude Code conversations (native, 
 seek add --codex                           # Codex conversations (native, +images)
 seek add --images /path/to/images -n pics  # image files (png/jpg/webp)
 seek add --pdf /path/to/pdfs -n docs      # PDFs (pages rasterized for VL embedding)
+seek add --docs /path/to/papers -n docs   # rich docs (docx/xlsx/pptx/epub/html/...) via xberg
 
 # Schema-driven parser collections (text-only, no image extraction)
 seek add --opencode                        # opencode CLI sessions (SQLite)
@@ -169,7 +171,37 @@ aggregations:
 compression:
   algorithm: zstd           # "zstd" (default), "lz4", or "none"
   level: 3                  # compression level (1-22 for zstd)
+
+# Extraction backend — how files become indexable text
+extractor:
+  backend: builtin          # "builtin" (markdown/pdf/images, default) or "xberg"
+  output_format: markdown   # format requested from xberg: plain|markdown|djot|html
+  xberg_base_url: http://127.0.0.1:8000   # xberg serve endpoint
+  timeout: 180s             # per-request timeout for xberg extraction
 ```
+
+### Document extraction (rich formats via xberg)
+
+The builtin backend handles markdown, PDF, and images. For rich document formats
+(docx/xlsx/pptx/epub/html/eml/csv/...), point seek at a running
+[xberg](https://github.com/xberg-io/xberg) server:
+
+```bash
+# 1. Start xberg (one-time per session; see xberg docs for install)
+xberg serve -p 8000 &
+
+# 2. Configure seek to use it
+#    either set extractor.backend: xberg in config.yaml (above)
+#    or pass --backend xberg per command
+
+# 3. Add a documents collection — formats auto-detected
+seek add --docs ./reports/ --backend xberg      # docx, xlsx, pptx, epub, html, ...
+seek sync                                        # re-extracts on subsequent runs
+```
+
+The `--backend` flag overrides the config default for a single command, so you
+can mix backends: `--pdf` with the builtin (go-fitz rasterization) and `--docs`
+with xberg in the same seek instance.
 
 > **Note:** `dimensions` is fixed at index time. If you change models or dimensions, re-run `seek rm <collection>` and `seek add` to rebuild the index.
 
