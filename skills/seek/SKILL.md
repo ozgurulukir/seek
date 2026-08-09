@@ -1,11 +1,17 @@
 ---
 name: seek
 description: Search user's personal notes, markdown docs, Claude Code and Codex conversation history. Use when user asks about past conversations, notes, or "do I have notes about X".
+license: MIT
+compatibility: Requires seek binary installed and in PATH. Hybrid/vector search requires an embedding API key configured in ~/.config/seek/config.yaml.
+metadata:
+  author: ozgurulukir
+  version: "1.0"
+allowed-tools: Bash(seek:*) Read
 ---
 
 # seek — Personal Knowledge Search
 
-`seek` is the user's local search engine. It indexes markdown notes, Claude Code conversations, and Codex conversations with BM25 + vector hybrid search. Text and images share the same vector space via a configurable embedding provider — defaults to **qwen3-vl-embedding** (multimodal) on Alibaba Bailian (DashScope), but any OpenAI-compatible provider works.
+`seek` is the user's local search engine. It indexes markdown notes, Claude Code conversations, Codex conversations, and opencode sessions with BM25 + vector hybrid search. Text and images share the same vector space via a configurable embedding provider — defaults to **qwen3-vl-embedding** (multimodal) on Alibaba Bailian (DashScope), but any OpenAI-compatible provider works.
 
 Binary location: `seek`
 
@@ -16,7 +22,7 @@ Binary location: `seek`
 - You need context from previous work sessions
 - User asks you to search their knowledge base
 
-## Search Commands
+## Quick Start
 
 ```bash
 # Hybrid search (BM25 + vector, best quality, RECOMMENDED)
@@ -29,79 +35,7 @@ seek search "exact keyword" --lex -l 10
 seek search "conceptual question" --vec -l 10
 ```
 
-### Query Syntax
-
-Structured queries are parsed by default:
-
-```bash
-# Boolean
-seek search "term1 AND term2"
-seek search "term1 OR term2"
-seek search "NOT term"
-
-# Phrase
-seek search '"exact phrase"'
-
-# Prefix
-seek search "pref*"
-
-# Fuzzy (maps to prefix expansion)
-seek search "term~2"
-
-# Field-scoped
-seek search "title:term"
-seek search "content:term"
-
-# Proximity
-seek search "NEAR(term1 term2, 5)"
-```
-
-Invalid syntax falls back to raw FTS5 MATCH automatically.
-
-### Filters
-
-```bash
-seek search "query" --collection mynotes
-seek search "query" --doc-type markdown
-seek search "query" --after 2024-01-01 --before 2024-12-31
-seek search "query" --chunk-type image
-seek search "query" --path "docs/*.md"
-seek search "query" --workspace /path/to/project   # parser collections only
-```
-
-Filters work with both `--lex` and `--vec` modes.
-
-### Aggregations
-
-```bash
-seek search "query" --aggs "type:terms"
-seek search "query" --aggs "collection:terms"
-seek search "query" --aggs "created_at:histogram:month"
-seek search "query" --aggs "line_count:range:0-100,100-500"
-seek search "query" --aggs "count"
-```
-
-### Autocomplete
-
-```bash
-seek search "hel" --autocomplete
-```
-
-### Text Analysis
-
-```bash
-seek analyze "running" --lang en    # English stemming: [run]
-seek analyze "kitaplar" --lang tr   # Turkish stemming: [kitap]
-```
-
-### Schema
-
-```bash
-seek schema --show      # Show field types and options
-seek schema --validate  # Validate schema against DB
-```
-
-### Search Strategy
+## Search Strategy
 
 1. **Start with `--lex`** for exact terms, names, error messages, file paths
 2. **Use default (hybrid)** for conceptual questions like "how to deploy" or "best practices for X"
@@ -110,7 +44,7 @@ seek schema --validate  # Validate schema against DB
 5. **Use filters** to narrow results: `--collection`, `--doc-type`, `--after/--before`, `--chunk-type`, `--path`, `--workspace`
 6. **Use `--aggs`** to get facet counts and statistics alongside search results
 
-### Reading Output
+## Reading Results
 
 ```
 # Text result
@@ -136,10 +70,9 @@ Only run these when user explicitly asks to update the index:
 
 ```bash
 # Sync new/changed files (incremental, fast)
-# Also extracts base64 images from Claude/Codex conversations → ~/.cache/seek/images/
 seek sync
 
-# Generate embeddings for new chunks (VL multimodal API, text + images)
+# Generate embeddings for new chunks
 seek embed
 
 # Force re-embed all chunks (e.g. after model change)
@@ -151,85 +84,23 @@ seek status
 # Add a new markdown collection
 seek add /path/to/dir --name myname
 
-# Add an image directory (png/jpg/webp — VL embedding for visual search)
-seek add --images /path/to/images -n myimages
-
-# Add a PDF directory (each page rasterized to PNG, then VL-embedded)
-seek add --pdf /path/to/pdfs -n mydocs
-
-# Add schema-driven parser collections (opencode, copilot, zed, etc.)
-seek add --opencode
-seek add --parser <name>
+# Add agent conversation collections
+seek add --claude        # Claude Code conversations
+seek add --codex         # Codex conversations
+seek add --opencode      # opencode CLI sessions
+seek add --copilot       # GitHub Copilot CLI sessions
+seek add --parser <name> # any parser schema by name
 
 # List available parser schemas + detection status
 seek parsers list
 ```
 
-## Collection Types
+## Detailed References
 
-| Type | Source | What's indexed |
-|---|---|---|
-| `markdown` | Any directory | `.md` files — FTS + chunks + embeddings |
-| `claude` | `~/.claude/projects/` | Claude Code conversations + screenshots |
-| `codex` | `~/.codex/` | Codex sessions + screenshots |
-| `images` | Any directory | Image files (png/jpg/webp) with VL embedding |
-| `pdf` | Any directory | PDF pages rasterized to PNG, VL embedding per page + OCR text (if enabled) |
-| `parser` | External SQLite/JSONL | Schema-driven: opencode, copilot-cli, zed, claude (text-only), codex (text-only) |
-
-### Schema-driven parsers
-
-Some conversation platforms are indexed via declarative YAML schemas (no Go code per platform). These are `parser` collections — they support the `--workspace` filter for cross-platform project filtering.
-
-**Adding parser collections:**
-
-```bash
-seek add --opencode        # opencode CLI sessions
-seek add --copilot         # GitHub Copilot CLI sessions
-seek add --zed             # Zed Agent panel threads
-seek add --claude-schema   # Claude conversations (text-only, no image extraction)
-seek add --codex-schema    # Codex conversations (text-only, no image extraction)
-seek add --parser <name>   # any parser schema by name
-```
-
-**Listing available schemas:**
-
-```bash
-seek parsers list          # shows all schemas, detection status, linked collections
-```
-
-**User overrides** — drop a YAML file in `~/.config/seek/parsers/<name>.yaml` to replace a built-in schema.
-
-**Workspace filtering** — parser collections extract workspace metadata into a common field:
-
-```bash
-seek search "deploy" --workspace /home/user/myproject
-```
-
-Run `seek status` to see which collections the user has configured.
-
-## Multimodal
-
-- Images from conversations are extracted and cached at `~/.cache/seek/images/`
-- PDF pages are rasterized to PNG at `~/.cache/seek/pdf/` and embedded the same way (DashScope's multimodal API accepts `image/*`, not PDF directly)
-- Embedded PDF text is indexed for keyword search; scanned pages are OCR'd when `ocr.enabled` is set (any OpenAI-compatible vision model, default `qwen-vl-ocr`)
-- Text and image chunks use the same embedding model (unified vector space)
-- Vector search naturally finds relevant images alongside text results
-
-### Embedding provider config (`~/.config/seek/config.yaml`)
-
-```yaml
-embedding:
-  base_url: https://api.openai.com/v1   # any OpenAI-compatible endpoint
-  api_key: ${OPENAI_API_KEY}
-  model: text-embedding-3-small
-  dimensions: 1024
-  # multimodal: true                    # enable image+text (VL) embedding
-  # vl_base_url: https://...            # VL endpoint; unset → DashScope default
-```
-
-- `multimodal` is auto-detected from model names containing `vl-embedding`/`multimodal`, or forced via `multimodal: true`.
-- `vl_base_url` defaults to DashScope's qwen3-vl-embedding; point it elsewhere to use a different vision-language provider.
-- Changing `model` or `dimensions` requires re-indexing (`seek rm <collection>` then `seek add`).
+- [Query Syntax](references/query-syntax.md) — boolean, phrase, prefix, fuzzy, field-scoped, proximity
+- [Filters](references/filters.md) — collection, doc-type, date range, chunk-type, path, workspace
+- [Collection Types](references/collection-types.md) — markdown, claude, codex, images, pdf, parser
+- [Troubleshooting](references/troubleshooting.md) — no results, API errors, index issues
 
 ## Important Notes
 
