@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -88,6 +89,24 @@ type CompressionConfig struct {
 	Level int `yaml:"level,omitempty"`
 }
 
+// ExtractorConfig configures the extraction domain — how files on disk are
+// turned into indexable text. The backend is selected globally: "builtin"
+// (native Go extractors, the default) or "xberg" (a remote xberg serve HTTP
+// service supporting 100+ document formats). It may be overridden per-command
+// via the --backend flag.
+type ExtractorConfig struct {
+	// Backend is the extractor backend: "builtin" or "xberg".
+	Backend string `yaml:"backend,omitempty"`
+	// OutputFormat is the text format requested from xberg ("plain", "markdown",
+	// "djot", "html"). Ignored by the builtin backend.
+	OutputFormat string `yaml:"output_format,omitempty"`
+	// XbergBaseURL is the xberg serve endpoint (e.g. http://127.0.0.1:8000).
+	XbergBaseURL string `yaml:"xberg_base_url,omitempty"`
+	// Timeout is the per-request timeout for xberg extraction. Defaults to
+	// DefaultXbergTimeout when zero.
+	Timeout time.Duration `yaml:"timeout,omitempty"`
+}
+
 // Config holds all configuration sections.
 type Config struct {
 	Embedding    EmbeddingConfig   `yaml:"embedding"`
@@ -97,6 +116,7 @@ type Config struct {
 	Aggregations AggregationConfig `yaml:"aggregations,omitempty"`
 	VectorIndex  VectorIndexConfig `yaml:"vector_index,omitempty"`
 	Compression  CompressionConfig `yaml:"compression,omitempty"`
+	Extractor    ExtractorConfig   `yaml:"extractor,omitempty"`
 }
 
 type AppConfig struct {
@@ -157,6 +177,12 @@ func Load() (*AppConfig, error) {
 		Algorithm: DefaultCompressionAlgorithm,
 		Level:     DefaultCompressionLevel,
 	}
+	ac.Config.Extractor = ExtractorConfig{
+		Backend:      DefaultExtractorBackend,
+		OutputFormat: DefaultExtractorOutputFormat,
+		XbergBaseURL: DefaultXbergBaseURL,
+		Timeout:      DefaultXbergTimeout,
+	}
 
 	cfgPath := filepath.Join(cfgDir, "config.yaml")
 	if data, err := os.ReadFile(cfgPath); err == nil {
@@ -178,6 +204,22 @@ func Load() (*AppConfig, error) {
 	}
 	if ac.Config.OCR.Model == "" {
 		ac.Config.OCR.Model = DefaultOCRModel
+	}
+
+	// Extractor defaults: fill any unset field. BaseURL may embed env vars
+	// (e.g. ${XBERG_HOST}), so expand it like the API keys above.
+	ac.Config.Extractor.XbergBaseURL = expandEnv(ac.Config.Extractor.XbergBaseURL)
+	if ac.Config.Extractor.Backend == "" {
+		ac.Config.Extractor.Backend = DefaultExtractorBackend
+	}
+	if ac.Config.Extractor.OutputFormat == "" {
+		ac.Config.Extractor.OutputFormat = DefaultExtractorOutputFormat
+	}
+	if ac.Config.Extractor.XbergBaseURL == "" {
+		ac.Config.Extractor.XbergBaseURL = DefaultXbergBaseURL
+	}
+	if ac.Config.Extractor.Timeout == 0 {
+		ac.Config.Extractor.Timeout = DefaultXbergTimeout
 	}
 
 	return ac, nil

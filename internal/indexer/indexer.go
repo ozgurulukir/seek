@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,9 @@ import (
 	"github.com/ozgurulukir/seek/internal/chunk"
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/embed"
+	"github.com/ozgurulukir/seek/internal/extractor"
+	"github.com/ozgurulukir/seek/internal/extractor/builtin"
+	"github.com/ozgurulukir/seek/internal/extractor/xberg"
 	"github.com/ozgurulukir/seek/internal/source"
 	"github.com/ozgurulukir/seek/internal/source/parserdef"
 	"github.com/ozgurulukir/seek/internal/store"
@@ -29,15 +33,87 @@ type Indexer struct {
 	cfg *config.AppConfig
 	db  *store.Store
 	log Logger
+	// ext is an explicit override for the extraction backend, taking precedence
+	// over both per-collection backend and the config default. Set via
+	// WithExtractor (e.g. from a --backend flag). When nil, the backend is
+	// resolved per collection (see extractorFor).
+	ext extractor.Extractor
+	// extCache memoizes extractors by backend name so repeated syncs of
+	// collections with the same backend don't rebuild (and, for xberg,
+	// re-probe health) on every collection.
+	extCache map[string]extractor.Extractor
 }
 
 func New(cfg *config.AppConfig, db *store.Store) *Indexer {
 	return &Indexer{
-		cfg: cfg,
-		db:  db,
-		log: defaultLogger{},
+		cfg:      cfg,
+		db:       db,
+		log:      defaultLogger{},
+		extCache: make(map[string]extractor.Extractor),
 	}
 }
+
+// WithExtractor overrides the extraction backend for all collections (e.g. from
+// a --backend flag). Pass nil to revert to per-collection / config resolution.
+func (idx *Indexer) WithExtractor(ext extractor.Extractor) *Indexer {
+	idx.ext = ext
+	return idx
+}
+
+// extractorFor resolves the extractor to use for a collection. Precedence:
+//  1. idx.ext (explicit override, e.g. --backend flag);
+//  2. col.Backend (per-collection override persisted at add time);
+//  3. cfg.Config.Extractor.Backend (global config default).
+//
+// Empty backend strings fall through to the config default. Extractors are
+// memoized by backend name so the xberg health probe runs at most once.
+func (idx *Indexer) extractorFor(col *store.Collection) (extractor.Extractor, error) {
+	if idx.ext != nil {
+		return idx.ext, nil
+	}
+	backend := col.Backend
+	if backend == "" {
+		backend = idx.cfg.Config.Extractor.Backend
+	}
+	if cached, ok := idx.extCache[backend]; ok {
+		return cached, nil
+	}
+	ext, err := NewExtractor(idx.cfg, backend)
+	if err != nil {
+		return nil, err
+	}
+	idx.extCache[backend] = ext
+	return ext, nil
+}
+
+// NewExtractor builds the extractor named by backend. An empty backend selects
+// the config default. It lives here (not in the extractor package) to avoid an
+// import cycle: both backends import extractor for the interface, so the
+// constructor that picks between them must sit above them. For xberg it uses
+// NewWithHealthCheck so an unreachable server fails fast at sync start rather
+// than silently marking every file unsupported.
+func NewExtractor(cfg *config.AppConfig, backend string) (extractor.Extractor, error) {
+	if backend == "" {
+		backend = cfg.Config.Extractor.Backend
+	}
+	var ocr extractor.OCR
+	if cfg.Config.OCR.Enabled && cfg.Config.OCR.APIKey != "" {
+		ocr = embed.NewOCRClient(cfg.Config.OCR.BaseURL, cfg.Config.OCR.APIKey, cfg.Config.OCR.Model)
+	}
+	switch backend {
+	case "", "builtin":
+		return builtin.New(ocr, cfg.CacheDir), nil
+	case "xberg":
+		return xberg.NewWithHealthCheck(cfg.Config.Extractor, cfg.CacheDir)
+	default:
+		return nil, fmt.Errorf("unknown extractor backend %q (want builtin or xberg)", backend)
+	}
+}
+
+// ctx returns the context for extraction calls. Today this is Background; the
+// indirection leaves room to plumb a command-level cancellation context later
+// without touching every call site.
+func (idx *Indexer) ctx() context.Context { return context.Background() }
 
 func (idx *Indexer) WithLogger(l Logger) *Indexer {
 	idx.log = l
@@ -56,6 +132,8 @@ func (idx *Indexer) SyncCollection(col *store.Collection) error {
 		return idx.syncImage(col)
 	case "pdf":
 		return idx.syncPdf(col)
+	case "documents":
+		return idx.syncDocuments(col)
 	case "parser":
 		return idx.syncParserDef(col)
 	default:
@@ -361,9 +439,9 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 		}
 	}
 
-	var ocr source.TextExtractor
-	if idx.cfg.Config.OCR.Enabled && idx.cfg.Config.OCR.APIKey != "" {
-		ocr = embed.NewOCRClient(idx.cfg.Config.OCR.BaseURL, idx.cfg.Config.OCR.APIKey, idx.cfg.Config.OCR.Model)
+	ext, err := idx.extractorFor(col)
+	if err != nil {
+		return fmt.Errorf("extractor: %w", err)
 	}
 
 	var indexed, skipped, failed int
@@ -374,14 +452,19 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 			continue
 		}
 
-		pages, err := source.RasterizePDF(f.Path, idx.cfg.CacheDir, 150, ocr)
+		// The builtin backend rasterizes pages (Result.Pages) and extracts
+		// embedded/OCR text; xberg returns page text in Result.Content with no
+		// page images. We handle both: store page images when present, else
+		// fall back to chunking the extracted text.
+		res, err := ext.Extract(idx.ctx(), f.Path)
 		if err != nil {
-			idx.log.Printf("  WARN: rasterize %s: %v\n", f.Path, err)
+			idx.log.Printf("  WARN: extract %s: %v\n", f.Path, err)
 			failed++
 			continue
 		}
 
-		docID, err := idx.db.UpsertDocument(col.ID, f.Path, f.Name, f.ContentHash, f.Mtime, len(pages))
+		pageCount := len(res.Pages)
+		docID, err := idx.db.UpsertDocument(col.ID, f.Path, f.Name, f.ContentHash, f.Mtime, pageCount)
 		if err != nil {
 			idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
 			failed++
@@ -390,26 +473,131 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 
 		idx.db.DeleteChunksForDocument(docID)
 
-		var pageText strings.Builder
-		for _, pg := range pages {
-			content := fmt.Sprintf("PDF page %d of %s", pg.Seq+1, f.Name)
-			if pg.Text != "" {
-				content += "\n" + pg.Text
-				pageText.WriteString(pg.Text)
-				pageText.WriteString("\n")
+		if pageCount > 0 {
+			// Page-oriented result (builtin PDF path): one image chunk per page.
+			var pageText strings.Builder
+			for _, pg := range res.Pages {
+				content := fmt.Sprintf("PDF page %d of %s", pg.Seq+1, f.Name)
+				if pg.Text != "" {
+					content += "\n" + pg.Text
+					pageText.WriteString(pg.Text)
+					pageText.WriteString("\n")
+				}
+				idx.db.InsertImageChunk(docID, pg.Seq, content, pg.Path, nil)
 			}
-			idx.db.InsertImageChunk(docID, pg.Seq, content, pg.Path, nil)
-		}
-
-		if pageText.Len() > 0 {
-			idx.db.UpsertFTS(docID, f.Name, pageText.String())
+			if pageText.Len() > 0 {
+				idx.db.UpsertFTS(docID, f.Name, pageText.String())
+			}
+		} else if res.Content != "" {
+			// Text-only result (e.g. xberg backend for PDF): chunk as markdown.
+			idx.db.UpsertFTS(docID, f.Name, res.Content)
+			for _, c := range chunk.ChunkMarkdown(res.Content, 0, 0) {
+				idx.db.InsertChunk(docID, c.Seq, c.Content, nil)
+			}
 		}
 
 		indexed++
-		idx.log.Printf("  Indexed %s (%d pages)\n", f.Name, len(pages))
+		if pageCount > 0 {
+			idx.log.Printf("  Indexed %s (%d pages)\n", f.Name, pageCount)
+		} else {
+			idx.log.Printf("  Indexed %s\n", f.Name)
+		}
 	}
 
 	idx.log.Printf("PDFs: %d indexed, %d skipped", indexed, skipped)
+	if failed > 0 {
+		idx.log.Printf(", %d failed", failed)
+	}
+	idx.log.Printf("\n")
+	return nil
+}
+
+// syncDocuments indexes a universal documents collection. Unlike markdown/pdf/
+// images, the source files are rich formats (docx/xlsx/pptx/epub/html/eml/...)
+// that require an extraction backend to produce text. The active backend
+// (builtin or xberg) is resolved from config; xberg is the typical choice here
+// since the builtin backend only handles markdown/pdf/images.
+//
+// Flow mirrors syncMarkdown: scan → orphan cleanup → hash-skip → extract →
+// upsert → FTS → markdown-chunk → insert. xberg returns markdown, which chunks
+// well and preserves structure (headings, tables, lists).
+func (idx *Indexer) syncDocuments(col *store.Collection) error {
+	files, err := source.ScanDocuments(col.Path)
+	if err != nil {
+		return err
+	}
+
+	diskPaths := make(map[string]bool, len(files))
+	for _, f := range files {
+		diskPaths[f.Path] = true
+	}
+	if existingPaths, err := idx.db.ListDocumentPaths(col.ID); err == nil {
+		removed := 0
+		for path, docID := range existingPaths {
+			if !diskPaths[path] {
+				idx.db.DeleteDocument(docID)
+				removed++
+			}
+		}
+		if removed > 0 {
+			idx.log.Printf("  Removed %d stale documents\n", removed)
+		}
+	}
+
+	ext, err := idx.extractorFor(col)
+	if err != nil {
+		return fmt.Errorf("extractor: %w", err)
+	}
+
+	var indexed, skipped, failed, unsupported int
+	for _, f := range files {
+		existing, err := idx.db.GetDocument(col.ID, f.Path)
+		if err == nil && existing.ContentHash == f.ContentHash {
+			if existing.Mtime != f.Mtime {
+				idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
+			}
+			skipped++
+			continue
+		}
+
+		// Skip files the active backend doesn't handle (e.g. a format in the
+		// scanner set that xberg's /formats doesn't list). Counted separately
+		// from failures so the summary distinguishes "unsupported" from "errored".
+		if !ext.Supports(f.Path) {
+			unsupported++
+			continue
+		}
+
+		res, err := ext.Extract(idx.ctx(), f.Path)
+		if err != nil {
+			idx.log.Printf("  WARN: extract %s: %v\n", f.Path, err)
+			failed++
+			continue
+		}
+
+		lineCount := strings.Count(res.Content, "\n") + 1
+		docID, err := idx.db.UpsertDocument(col.ID, f.Path, res.Title, f.ContentHash, f.Mtime, lineCount)
+		if err != nil {
+			idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
+			failed++
+			continue
+		}
+
+		if err := idx.db.UpsertFTS(docID, res.Title, res.Content); err != nil {
+			idx.log.Printf("  WARN: fts %s: %v\n", f.Path, err)
+		}
+
+		idx.db.DeleteChunksForDocument(docID)
+		for _, c := range chunk.ChunkMarkdown(res.Content, 0, 0) {
+			idx.db.InsertChunk(docID, c.Seq, c.Content, nil)
+		}
+		indexed++
+	}
+
+	idx.log.Printf("Documents: %d indexed, %d unchanged", indexed, skipped)
+	if unsupported > 0 {
+		idx.log.Printf(", %d unsupported", unsupported)
+	}
 	if failed > 0 {
 		idx.log.Printf(", %d failed", failed)
 	}

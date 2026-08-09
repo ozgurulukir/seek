@@ -66,4 +66,18 @@ const (
 	DefaultCompressionAlgorithm = "zstd"
 	// DefaultCompressionLevel is the default compression level.
 	DefaultCompressionLevel = 3
+
+	// DefaultExtractorBackend selects the extraction domain backend.
+	// "builtin" uses native Go extractors (go-fitz PDF rasterization, markdown
+	// text read). "xberg" delegates to a remote xberg serve HTTP API that
+	// handles 100+ document formats.
+	DefaultExtractorBackend = "builtin"
+	// DefaultXbergBaseURL is the default xberg serve endpoint.
+	DefaultXbergBaseURL = "http://127.0.0.1:8000"
+	// DefaultXbergTimeout is the default timeout for xberg extraction requests.
+	// Document extraction (esp. OCR) can be slow, so this is generous.
+	DefaultXbergTimeout = 180 * time.Second
+	// DefaultExtractorOutputFormat is the text format requested from xberg.
+	// "markdown" preserves structure (headings, tables, lists) which chunks well.
+	DefaultExtractorOutputFormat = "markdown"
 )
