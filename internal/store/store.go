@@ -746,20 +746,22 @@ func (s *Store) AppendFTS(docID int64, newContent string) error {
 func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]SearchResult, error) {
 	// bm25 column weights follow the table's column order (title, content),
 	// so title matches (FTSTitleWeight=10.0) rank above body matches (1.0).
-	sqlQuery := `SELECT d.id, d.title, d.path, c.name, snippet(documents_fts, 1, '>>>', '<<<', '...', 40) as snip, bm25(documents_fts, ` + fmt.Sprintf("%g", FTSTitleWeight) + `, 1.0)
+	sqlQuery := `SELECT d.id, d.title, d.path, c.name, snippet(documents_fts, 1, '>>>', '<<<', '...', 40) as snip, bm25(documents_fts, ?, 1.0)
 		 FROM documents_fts f
 		 JOIN documents d ON d.id = f.rowid
-		 JOIN collections c ON c.id = d.collection_id`
+		 JOIN collections c ON c.id = d.collection_id
+		 WHERE documents_fts MATCH ?`
 	var args []interface{}
+	args = append(args, FTSTitleWeight, query)
 	if filters != nil {
 		clause, fargs := filters.ToSQL()
 		if clause != "" {
-			sqlQuery += " WHERE " + clause
+			sqlQuery += " AND " + clause
 			args = append(args, fargs...)
 		}
 	}
-	sqlQuery += " ORDER BY bm25(documents_fts, " + fmt.Sprintf("%g", FTSTitleWeight) + ", 1.0) LIMIT ?"
-	args = append(args, limit)
+	sqlQuery += " ORDER BY bm25(documents_fts, ?, 1.0) LIMIT ?"
+	args = append(args, FTSTitleWeight, limit)
 
 	rows, err := s.db.Query(sqlQuery, args...)
 	if err != nil {
