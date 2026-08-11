@@ -110,6 +110,9 @@ func syncSQLiteSessions(src *SourceSpec, ver *VersionSpec, files []string, since
 			continue
 		}
 
+		var batchIDs []string
+		var batchIndices []int
+
 		for _, raw := range rawRows {
 			// Normalize cursor.
 			var cursor time.Time
@@ -148,16 +151,39 @@ func syncSQLiteSessions(src *SourceSpec, ver *VersionSpec, files []string, since
 					continue
 				}
 				sess.Messages = msgs
+				sessions = append(sessions, sess)
 			} else {
-				msgs, mErr := fetchSQLiteMessages(db, ver, raw.id)
-				if mErr != nil {
-					errs = append(errs, SessionError{SessionID: raw.id, Err: fmt.Errorf("messages: %w", mErr)})
-					continue
+				idx := len(sessions)
+				sessions = append(sessions, sess)
+				batchIDs = append(batchIDs, raw.id)
+				batchIndices = append(batchIndices, idx)
+
+				if len(batchIDs) >= 500 {
+					msgMap, mErr := fetchSQLiteMessagesBatch(db, ver, batchIDs)
+					if mErr != nil {
+						errs = append(errs, SessionError{SessionID: dbPath, Err: fmt.Errorf("batch messages: %w", mErr)})
+					} else {
+						for i, id := range batchIDs {
+							sessions[batchIndices[i]].Messages = msgMap[id]
+						}
+					}
+					batchIDs = batchIDs[:0]
+					batchIndices = batchIndices[:0]
 				}
-				sess.Messages = msgs
 			}
-			sessions = append(sessions, sess)
 		}
+
+		if len(batchIDs) > 0 && !ver.Messages.Inline {
+			msgMap, mErr := fetchSQLiteMessagesBatch(db, ver, batchIDs)
+			if mErr != nil {
+				errs = append(errs, SessionError{SessionID: dbPath, Err: fmt.Errorf("batch messages: %w", mErr)})
+			} else {
+				for i, id := range batchIDs {
+					sessions[batchIndices[i]].Messages = msgMap[id]
+				}
+			}
+		}
+
 		db.Close()
 	}
 
