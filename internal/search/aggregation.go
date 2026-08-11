@@ -32,6 +32,17 @@ type Bucket struct {
 
 // --- Aggregation Types ---
 
+// escapeColumnName escapes a column identifier to prevent SQL injection.
+// It handles compound identifiers (e.g. c.name) by escaping each part individually.
+func escapeColumnName(name string) string {
+	parts := strings.Split(name, ".")
+	for i, p := range parts {
+		// Wrap in double quotes and escape existing double quotes
+		parts[i] = `"` + strings.ReplaceAll(p, `"`, `""`) + `"`
+	}
+	return strings.Join(parts, ".")
+}
+
 // TermAggregation counts documents by a field value.
 type TermAggregation struct {
 	Field string
@@ -57,7 +68,8 @@ func (a *TermAggregation) SQL() (string, []interface{}) {
 			field = "c." + field
 		}
 	}
-	return fmt.Sprintf("SELECT %s as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY %s ORDER BY count DESC", field, field), nil
+	escapedField := escapeColumnName(field)
+	return fmt.Sprintf("SELECT %s as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY %s ORDER BY count DESC", escapedField, escapedField), nil
 }
 
 func (a *TermAggregation) Scan(rows *sql.Rows) ([]Bucket, error) {

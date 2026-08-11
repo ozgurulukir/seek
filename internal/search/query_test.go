@@ -126,3 +126,28 @@ func TestParseAggregation(t *testing.T) {
 		}
 	}
 }
+
+func TestTermAggregationSQLInjection(t *testing.T) {
+	// A malicious payload mimicking an injection attempt
+	maliciousField := "type; DROP TABLE documents; --"
+	agg := &TermAggregation{Field: maliciousField}
+	query, _ := agg.SQL()
+
+	// Ensure the generated SQL safely quotes the entire identifier (e.g. "c"."type; DROP TABLE documents; --")
+	// so that it cannot break out of the SELECT and GROUP BY clauses.
+	expectedQueryStr := `SELECT "c"."type; DROP TABLE documents; --" as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY "c"."type; DROP TABLE documents; --" ORDER BY count DESC`
+
+	if query != expectedQueryStr {
+		t.Errorf("Expected SQL query to escape malicious field.\nGot: %s\nWant: %s", query, expectedQueryStr)
+	}
+
+	// Another test to check if embedded quotes are escaped properly
+	maliciousField2 := `type"; DROP TABLE documents; --`
+	agg2 := &TermAggregation{Field: maliciousField2}
+	query2, _ := agg2.SQL()
+	expectedQueryStr2 := `SELECT "c"."type""; DROP TABLE documents; --" as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY "c"."type""; DROP TABLE documents; --" ORDER BY count DESC`
+
+	if query2 != expectedQueryStr2 {
+		t.Errorf("Expected SQL query to escape double quotes.\nGot: %s\nWant: %s", query2, expectedQueryStr2)
+	}
+}
