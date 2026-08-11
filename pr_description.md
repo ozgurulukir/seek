@@ -1,0 +1,5 @@
+🎯 What: Add comprehensive tests for aggregation logic in `internal/search/aggregation.go`. This covers `CountAggregation.Scan`, `TermAggregation.Scan`, `HistogramAggregation.Scan`, `RangeAggregation.Scan`, their respective `SQL` implementations, and `ExecuteAggregation`. The tests utilize an in-memory SQLite database (`:memory:`) to accurately mimic `sql.Rows` behavior.
+
+📊 Coverage: The tests cover happy paths (correctly initialized buckets) and error paths (scanning incompatible types) for the `Scan` methods. They also ensure the correctness of the generated `SQL` fragments and parameters for all standard aggregation types. Finally, it tests `ExecuteAggregation` over an actual initialized table structure to confirm proper query synthesis. Test coverage for `aggregation.go` is now robust.
+
+✨ Result: Replaces formerly untested code sections. All aggregations implementations now have strong verification against their `SQL` logic and row-scanning capabilities, raising coverage and establishing deterministic database tests for future regressions.
