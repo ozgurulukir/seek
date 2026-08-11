@@ -1,6 +1,10 @@
 package store
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // TestCollectionBackendPersistence verifies that a backend override set via
 // CreateCollectionWithBackend survives a Get/List round-trip, and that a plain
@@ -71,5 +75,48 @@ func TestCollectionBackendMigration(t *testing.T) {
 	}
 	if got.Backend != "builtin" {
 		t.Errorf("Backend = %q, want builtin", got.Backend)
+	}
+}
+
+func TestBackendSync(t *testing.T) {
+	// This guards the Bug 2 fix: sync must read the same backend that add wrote.
+
+	// Setup temporary directory for the store
+	dir, err := os.MkdirTemp("", "seek-backend-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	dbPath := filepath.Join(dir, "seek.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	// Add wrote this backend
+	_, err = db.CreateCollectionWithBackend("bug2", CollectionTypeDocuments, "/tmp/bug2", "**/*", "xberg-custom")
+	if err != nil {
+		t.Fatalf("CreateCollectionWithBackend: %v", err)
+	}
+
+	// Sync reads collections
+	cols, err := db.ListCollections()
+	if err != nil {
+		t.Fatalf("ListCollections: %v", err)
+	}
+
+	found := false
+	for _, c := range cols {
+		if c.Name == "bug2" {
+			found = true
+			if c.Backend != "xberg-custom" {
+				t.Errorf("sync read backend = %q, want %q", c.Backend, "xberg-custom")
+			}
+		}
+	}
+	if !found {
+		t.Error("collection 'bug2' not found by sync")
 	}
 }
