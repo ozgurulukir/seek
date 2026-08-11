@@ -130,19 +130,22 @@ type RangeAggregation struct {
 func (a *RangeAggregation) SQL() (string, []interface{}) {
 	field := "d.line_count"
 	var cases []string
+	var args []interface{}
 	for _, r := range a.Ranges {
 		parts := strings.SplitN(r, "-", 2)
 		if len(parts) == 2 {
 			low, high := parts[0], parts[1]
 			if high == "" {
-				cases = append(cases, fmt.Sprintf("WHEN %s >= %s THEN '%s'", field, low, r))
+				cases = append(cases, fmt.Sprintf("WHEN %s >= ? THEN ?", field))
+				args = append(args, low, r)
 			} else {
-				cases = append(cases, fmt.Sprintf("WHEN %s >= %s AND %s < %s THEN '%s'", field, low, field, high, r))
+				cases = append(cases, fmt.Sprintf("WHEN %s >= ? AND %s < ? THEN ?", field, field))
+				args = append(args, low, high, r)
 			}
 		}
 	}
 	caseSQL := strings.Join(cases, " ")
-	return fmt.Sprintf("SELECT CASE %s ELSE 'other' END as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY key ORDER BY key", caseSQL), nil
+	return fmt.Sprintf("SELECT CASE %s ELSE 'other' END as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY key ORDER BY key", caseSQL), args
 }
 
 func (a *RangeAggregation) Scan(rows *sql.Rows) ([]Bucket, error) {

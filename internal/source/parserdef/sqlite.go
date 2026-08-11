@@ -111,27 +111,8 @@ func tableExists(db *sql.DB, table string) bool {
 	return err == nil
 }
 
-// isSafeIdentifier checks that a string is a plausible SQL identifier
-// (alphanumeric + underscore). Used to guard PRAGMA table_info interpolation.
-func isSafeIdentifier(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r != '_' && !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
-			return false
-		}
-	}
-	return true
-}
-
 func columnExists(db *sql.DB, table, column string) bool {
-	// PRAGMA can't bind the table name, so we validate it's a sane identifier
-	// (letters, digits, underscore only) before interpolation.
-	if !isSafeIdentifier(table) {
-		return false
-	}
-	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info("%s")`, table))
+	rows, err := db.Query(`SELECT cid, name, type, notnull, dflt_value, pk FROM pragma_table_info(?)`, table)
 	if err != nil {
 		return false
 	}
