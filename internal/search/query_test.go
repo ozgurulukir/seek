@@ -1,6 +1,7 @@
 package search
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -123,6 +124,35 @@ func TestParseAggregation(t *testing.T) {
 		}
 		if !tt.wantErr && err != nil {
 			t.Errorf("ParseAggregation(%q) unexpected error: %v", tt.spec, err)
+		}
+	}
+}
+
+func TestRangeAggregationSQL(t *testing.T) {
+	agg := &RangeAggregation{
+		Field: "line_count",
+		Ranges: []string{"0-100", "100-500", "500-"},
+	}
+	query, args := agg.SQL()
+
+	expectedQueryFragment := "WHEN d.line_count >= ? AND d.line_count < ? THEN ?"
+	if !strings.Contains(query, expectedQueryFragment) {
+		t.Errorf("expected query to contain %q, but got: %s", expectedQueryFragment, query)
+	}
+
+	expectedQueryFragment2 := "WHEN d.line_count >= ? THEN ?"
+	if !strings.Contains(query, expectedQueryFragment2) {
+		t.Errorf("expected query to contain %q, but got: %s", expectedQueryFragment2, query)
+	}
+
+	if len(args) != 8 {
+		t.Errorf("expected 8 args, but got %d: %v", len(args), args)
+	}
+
+	expectedArgs := []interface{}{"0", "100", "0-100", "100", "500", "100-500", "500", "500-"}
+	for i, arg := range args {
+		if arg != expectedArgs[i] {
+			t.Errorf("arg[%d] = %v, expected %v", i, arg, expectedArgs[i])
 		}
 	}
 }
