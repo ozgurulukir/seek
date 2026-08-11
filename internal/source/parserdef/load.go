@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,7 +17,7 @@ var embeddedSchemas embed.FS
 
 // parserOverrideDir returns the user override directory for schemas.
 // Defaults to ~/.config/seek/parsers/.
-func parserOverrideDir() string {
+var parserOverrideDir = func() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "seek", "parsers")
 }
@@ -75,8 +76,13 @@ func List() ([]LoadedDef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read embedded schemas: %w", err)
 	}
-	var result []LoadedDef
-	seen := make(map[string]bool)
+
+	var (
+		result []LoadedDef
+		seen   = make(map[string]bool)
+		mu     sync.Mutex
+		wg     sync.WaitGroup
+	)
 
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
@@ -84,42 +90,59 @@ func List() ([]LoadedDef, error) {
 		}
 		name := strings.TrimSuffix(e.Name(), ".yaml")
 
-		// If a user override exists, it completely wins (consistent with Load).
-		overridePath := filepath.Join(parserOverrideDir(), name+".yaml")
-		if overrideData, oErr := os.ReadFile(overridePath); oErr == nil {
-			def, err := parseSchema(overrideData, overridePath)
+		wg.Add(1)
+		go func(entry os.DirEntry, schemaName string) {
+			defer wg.Done()
+
+			// If a user override exists, it completely wins (consistent with Load).
+			overridePath := filepath.Join(parserOverrideDir(), schemaName+".yaml")
+			if overrideData, oErr := os.ReadFile(overridePath); oErr == nil {
+				def, err := parseSchema(overrideData, overridePath)
+				loaded := LoadedDef{
+					Name:     schemaName,
+					Embedded: true, // an embedded version exists
+					Override: true, // but the user override is what's actually loaded
+					Def:      def,
+				}
+				if err != nil {
+					loaded.Def = nil // parse error → nil def
+				}
+
+				mu.Lock()
+				result = append(result, loaded)
+				seen[schemaName] = true
+				mu.Unlock()
+				return
+			}
+
+			// No override — use the embedded version.
+			data, err := embeddedSchemas.ReadFile("parsers/" + entry.Name())
+			if err != nil {
+				return
+			}
+			def, err := parseSchema(data, "embed:parsers/"+entry.Name())
+			if err != nil {
+				mu.Lock()
+				result = append(result, LoadedDef{Name: schemaName, Embedded: true, Def: nil})
+				mu.Unlock()
+				return
+			}
+
+			mu.Lock()
 			result = append(result, LoadedDef{
-				Name:     name,
-				Embedded: true, // an embedded version exists
-				Override: true, // but the user override is what's actually loaded
+				Name:     schemaName,
+				Embedded: true,
+				Override: false,
 				Def:      def,
 			})
-			if err != nil {
-				result[len(result)-1].Def = nil // parse error → nil def
-			}
-			seen[name] = true
-			continue
-		}
-
-		// No override — use the embedded version.
-		data, err := embeddedSchemas.ReadFile("parsers/" + e.Name())
-		if err != nil {
-			continue
-		}
-		def, err := parseSchema(data, "embed:parsers/"+e.Name())
-		if err != nil {
-			result = append(result, LoadedDef{Name: name, Embedded: true, Def: nil})
-			continue
-		}
-
-		result = append(result, LoadedDef{
-			Name:     name,
-			Embedded: true,
-			Override: false,
-			Def:      def,
-		})
-		seen[name] = true
+			seen[schemaName] = true
+			mu.Unlock()
+		}(e, name)
 	}
+
+	// Wait for embedded schemas to finish before checking user-only schemas,
+	// so that seen map is fully populated.
+	wg.Wait()
 
 	// Collect user-only schemas (not shadowing embedded).
 	overrideDir := parserOverrideDir()
@@ -129,26 +152,41 @@ func List() ([]LoadedDef, error) {
 				continue
 			}
 			name := strings.TrimSuffix(e.Name(), ".yaml")
+
+			// We can check 'seen' without locking here since wg.Wait() was called
 			if seen[name] {
 				continue // already handled as embedded+override
 			}
-			data, err := os.ReadFile(filepath.Join(overrideDir, e.Name()))
-			if err != nil {
-				continue
-			}
-			def, err := parseSchema(data, filepath.Join(overrideDir, e.Name()))
-			if err != nil {
-				result = append(result, LoadedDef{Name: name, Def: nil})
-				continue
-			}
-			result = append(result, LoadedDef{
-				Name:     name,
-				Embedded: false,
-				Override: true,
-				Def:      def,
-			})
+
+			wg.Add(1)
+			go func(entry os.DirEntry, schemaName string) {
+				defer wg.Done()
+
+				data, err := os.ReadFile(filepath.Join(overrideDir, entry.Name()))
+				if err != nil {
+					return
+				}
+				def, err := parseSchema(data, filepath.Join(overrideDir, entry.Name()))
+				if err != nil {
+					mu.Lock()
+					result = append(result, LoadedDef{Name: schemaName, Def: nil})
+					mu.Unlock()
+					return
+				}
+
+				mu.Lock()
+				result = append(result, LoadedDef{
+					Name:     schemaName,
+					Embedded: false,
+					Override: true,
+					Def:      def,
+				})
+				mu.Unlock()
+			}(e, name)
 		}
 	}
+
+	wg.Wait()
 
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Name < result[j].Name
