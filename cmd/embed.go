@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -164,20 +165,37 @@ func (c *EmbedCmd) embedWithVL(cfg *config.AppConfig, db *store.Store, textChunk
 				end = len(imageChunks)
 			}
 
+			type readResult struct {
+				dataURI string
+				err     error
+			}
+			results := make([]readResult, end-i)
+			var wg sync.WaitGroup
+
+			for j := i; j < end; j++ {
+				wg.Add(1)
+				go func(idx int, ch store.Chunk) {
+					defer wg.Done()
+					mediaType := embed.ImagePathToMediaType(ch.ImagePath)
+					dataURI, err := embed.ImageToDataURI(ch.ImagePath, mediaType)
+					results[idx-i] = readResult{dataURI, err}
+				}(j, imageChunks[j])
+			}
+			wg.Wait()
+
 			items := make([]embed.EmbedItem, 0, end-i)
 			validIndices := make([]int, 0, end-i)
 
 			for j := i; j < end; j++ {
 				ch := imageChunks[j]
-				mediaType := embed.ImagePathToMediaType(ch.ImagePath)
-				dataURI, err := embed.ImageToDataURI(ch.ImagePath, mediaType)
-				if err != nil {
-					fmt.Printf("  WARN: read image %s: %v\n", ch.ImagePath, err)
+				res := results[j-i]
+				if res.err != nil {
+					fmt.Printf("  WARN: read image %s: %v\n", ch.ImagePath, res.err)
 					continue
 				}
 				items = append(items, embed.EmbedItem{
 					Text:     ch.Content,
-					ImageURI: dataURI,
+					ImageURI: res.dataURI,
 				})
 				validIndices = append(validIndices, j)
 			}
