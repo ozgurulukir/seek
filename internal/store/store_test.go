@@ -143,3 +143,43 @@ func BenchmarkBubbleSort(b *testing.B) {
 		}
 	})
 }
+
+func TestSearchFTS(t *testing.T) {
+	store := newTestStore(t)
+
+	col, err := store.CreateCollection("test-col", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	// Insert test documents
+	doc1ID, err := store.UpsertDocument(col.ID, "/path/to/doc1", "Doc 1", "hash1", 1, 1)
+	if err != nil {
+		t.Fatalf("InsertDocument 1: %v", err)
+	}
+	if err := store.UpsertFTS(doc1ID, "Security Vulnerability Fix", "Content describing an SQL injection issue in search logic."); err != nil {
+		t.Fatalf("UpsertFTS 1: %v", err)
+	}
+
+	doc2ID, err := store.UpsertDocument(col.ID, "/path/to/doc2", "Doc 2", "hash2", 1, 1)
+	if err != nil {
+		t.Fatalf("InsertDocument 2: %v", err)
+	}
+	if err := store.UpsertFTS(doc2ID, "Performance Update", "Optimizing the indexer performance and chunking speed."); err != nil {
+		t.Fatalf("UpsertFTS 2: %v", err)
+	}
+
+	// Test regular SearchFTS execution
+	results, err := store.SearchFTS("injection", 10, nil)
+	if err != nil {
+		t.Fatalf("SearchFTS failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	if results[0].DocumentID != doc1ID {
+		t.Errorf("expected to find doc1 (id %d), got id %d", doc1ID, results[0].DocumentID)
+	}
+}
