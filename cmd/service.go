@@ -81,7 +81,7 @@ func seekBinary() string {
 func runLaunchctl(args ...string) ([]byte, error) {
 	for _, arg := range args {
 		if strings.ContainsRune(arg, '\x00') {
-			return nil, fmt.Errorf("invalid argument: contains null byte")
+			return nil, fmt.Errorf("launchctl arg %q contains null byte", arg)
 		}
 	}
 	// #nosec G204 -- arguments are sanitized, command is constant
