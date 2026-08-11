@@ -33,6 +33,7 @@ type Bucket struct {
 // --- Aggregation Types ---
 
 // escapeColumnName escapes a column identifier to prevent SQL injection.
+// It produces delimited (double-quoted) identifiers.
 // It handles compound identifiers (e.g. c.name) by escaping each part individually.
 func escapeColumnName(name string) string {
 	parts := strings.Split(name, ".")

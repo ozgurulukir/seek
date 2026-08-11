@@ -1,6 +1,7 @@
 package search
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -149,5 +150,29 @@ func TestTermAggregationSQLInjection(t *testing.T) {
 
 	if query2 != expectedQueryStr2 {
 		t.Errorf("Expected SQL query to escape double quotes.\nGot: %s\nWant: %s", query2, expectedQueryStr2)
+	}
+}
+
+func TestTermAggregationSQL(t *testing.T) {
+	// Test standard mapped fields that should pass through normally
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{"type", `"c"."type"`},
+		{"created_at", `"d"."created_at"`},
+		{"line_count", `"d"."line_count"`},
+		{"path", `"d"."path"`},
+		{"collection", `"c"."name"`},
+		{"some_other", `"c"."some_other"`},
+	}
+
+	for _, tc := range cases {
+		agg := &TermAggregation{Field: tc.input}
+		query, _ := agg.SQL()
+		expectedSQL := fmt.Sprintf(`SELECT %s as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY %s ORDER BY count DESC`, tc.expected, tc.expected)
+		if query != expectedSQL {
+			t.Errorf("Expected SQL query for %q to be:\n%s\nGot:\n%s", tc.input, expectedSQL, query)
+		}
 	}
 }
