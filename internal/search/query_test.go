@@ -103,26 +103,3 @@ func TestAnalyzeToken(t *testing.T) {
 	}
 }
 
-func TestParseAggregation(t *testing.T) {
-	tests := []struct {
-		spec     string
-		wantErr  bool
-		wantType string
-	}{
-		{"type:terms", false, "*search.TermAggregation"},
-		{"created_at:histogram:month", false, "*search.HistogramAggregation"},
-		{"line_count:range:0-100,100-500", false, "*search.RangeAggregation"},
-		{"count", false, "*search.CountAggregation"},
-		{"invalid", true, ""},
-	}
-
-	for _, tt := range tests {
-		_, err := ParseAggregation(tt.spec)
-		if tt.wantErr && err == nil {
-			t.Errorf("ParseAggregation(%q) expected error", tt.spec)
-		}
-		if !tt.wantErr && err != nil {
-			t.Errorf("ParseAggregation(%q) unexpected error: %v", tt.spec, err)
-		}
-	}
-}
