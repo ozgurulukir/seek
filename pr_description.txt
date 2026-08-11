@@ -1,0 +1,16 @@
+🔒 [fix SQL injection in FTS queries by parameterizing weights]
+
+🎯 What
+This PR fixes a SQL injection vulnerability in the `Store.SearchFTS` function where `fmt.Sprintf` was used to directly concatenate `FTSTitleWeight` into the SQLite query string for `bm25` weight calculations. In addition, it fixes a severe bug where the `SearchFTS` function completely ignored the provided `query` parameter because the `WHERE documents_fts MATCH ?` clause was completely missing from the query string.
+
+⚠️ Risk
+Although `FTSTitleWeight` is currently a constant (`10.0`), concatenating its value via string formatting establishes a dangerous pattern. Any future developer making it dynamic (e.g. user-configurable ranking weights) would inadvertently open a direct SQL Injection vector since SQLite FTS5 rank functions evaluate dynamically in the statement. Furthermore, a missing `MATCH ?` clause caused the search function to ignore user search parameters entirely.
+
+🛡️ Solution
+The SQL statements have been rewritten to strictly use parameterized binding (`?`) in all instances:
+- The `bm25` positional weight argument now passes `FTSTitleWeight` safely via standard bindings.
+- Added the missing `WHERE documents_fts MATCH ?` clause into the core query text, securely binding the `query` function parameter.
+- Filter clauses now correctly append via an `AND` operator since a `WHERE` is already present.
+- Added parameter bindings for the `ORDER BY bm25(...)` query trailing text.
+
+All tests passed locally to ensure regression stability.
