@@ -103,7 +103,7 @@ func TestAnalyzeToken(t *testing.T) {
 	}
 }
 
-func TestParseAggregation(t *testing.T) {
+func TestParseAggregationQuery(t *testing.T) {
 	tests := []struct {
 		spec     string
 		wantErr  bool
