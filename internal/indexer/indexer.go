@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -477,12 +478,27 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 			// Page-oriented result (builtin PDF path): one image chunk per page.
 			var pageText strings.Builder
 			for _, pg := range res.Pages {
-				content := fmt.Sprintf("PDF page %d of %s", pg.Seq+1, f.Name)
+				var cb strings.Builder
+				seqStr := strconv.Itoa(pg.Seq + 1)
+
+				length := len("PDF page ") + len(seqStr) + len(" of ") + len(f.Name)
 				if pg.Text != "" {
-					content += "\n" + pg.Text
+					length += 1 + len(pg.Text)
+				}
+				cb.Grow(length)
+
+				cb.WriteString("PDF page ")
+				cb.WriteString(seqStr)
+				cb.WriteString(" of ")
+				cb.WriteString(f.Name)
+
+				if pg.Text != "" {
+					cb.WriteByte('\n')
+					cb.WriteString(pg.Text)
 					pageText.WriteString(pg.Text)
 					pageText.WriteString("\n")
 				}
+				content := cb.String()
 				idx.db.InsertImageChunk(docID, pg.Seq, content, pg.Path, nil)
 			}
 			if pageText.Len() > 0 {
