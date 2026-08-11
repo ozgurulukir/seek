@@ -1,8 +1,0 @@
-🎯 **What:** The vulnerability fixed
-A SQL injection vulnerability existed in `internal/search/aggregation.go:132` where values from `a.Ranges` were directly formatted into a SQL query string using `fmt.Sprintf` without parameter binding.
-
-⚠️ **Risk:** The potential impact if left unfixed
-An attacker could provide malicious range values that would execute arbitrary SQL commands on the database, allowing for data extraction, modification, or deletion.
-
-🛡️ **Solution:** How the fix addresses the vulnerability
-Replaced the inline string formatting with parameterized query markers (`?`) in the `RangeAggregation.SQL()` method and populated the `args` slice with the appropriate values. Additionally, added a unit test `TestRangeAggregationSQL` to ensure the generated query and its arguments are correct and parameterized.
