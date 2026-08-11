@@ -1,7 +1,9 @@
 package search
 
 import (
+	"context"
 	"math"
+	"path/filepath"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/store"
@@ -241,5 +243,112 @@ func TestRRFFusionBM25TakesPrecedenceOnTie(t *testing.T) {
 	// BM25 metadata should win for the overlapping doc.
 	if result[0].Title != "from-bm25" {
 		t.Errorf("expected BM25 title, got %q", result[0].Title)
+	}
+}
+
+func newTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	s, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
+func TestRunAggregations(t *testing.T) {
+	s := newTestStore(t)
+	engine := NewEngine(s, nil)
+	ctx := context.Background()
+
+	// 1. Setup collections and documents
+	colMD, err := s.CreateCollection("col-md", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatalf("CreateCollection markdown: %v", err)
+	}
+	colCode, err := s.CreateCollection("col-code", "code", "/tmp", "**/*.go")
+	if err != nil {
+		t.Fatalf("CreateCollection code: %v", err)
+	}
+
+	// Docs for markdown (type will be markdown)
+	_, _ = s.UpsertDocument(colMD.ID, "/tmp/doc1.md", "doc1", "hash1", 1, 5)
+	_, _ = s.UpsertDocument(colMD.ID, "/tmp/doc2.md", "doc2", "hash2", 1, 15)
+
+	// Docs for code (type will be code)
+	_, _ = s.UpsertDocument(colCode.ID, "/tmp/doc3.go", "doc3", "hash3", 1, 50)
+	_, _ = s.UpsertDocument(colCode.ID, "/tmp/doc4.go", "doc4", "hash4", 1, 150)
+	_, _ = s.UpsertDocument(colCode.ID, "/tmp/doc5.go", "doc5", "hash5", 1, 20)
+
+	// 2. Test successful aggregations
+	specs := []string{
+		"type:terms",
+		"line_count:range:0-10,10-100",
+		"count",
+	}
+
+	result, err := engine.RunAggregations(ctx, specs, nil)
+	if err != nil {
+		t.Fatalf("RunAggregations failed: %v", err)
+	}
+
+	// Verify type:terms
+	typeTerms, ok := result["type:terms"]
+	if !ok {
+		t.Fatalf("missing type:terms in results")
+	}
+
+	termCounts := make(map[string]int)
+	for _, b := range typeTerms {
+		termCounts[b.Key] = b.Count
+	}
+
+	if termCounts["code"] != 3 {
+		t.Errorf("expected 3 code documents, got %d", termCounts["code"])
+	}
+	if termCounts["markdown"] != 2 {
+		t.Errorf("expected 2 markdown documents, got %d", termCounts["markdown"])
+	}
+
+	// Verify line_count:range
+	lineRanges, ok := result["line_count:range:0-10,10-100"]
+	if !ok {
+		t.Fatalf("missing line_count:range in results")
+	}
+
+	rangeCounts := make(map[string]int)
+	for _, b := range lineRanges {
+		rangeCounts[b.Key] = b.Count
+	}
+
+	if rangeCounts["0-10"] != 1 { // doc1(5)
+		t.Errorf("expected 1 document in 0-10, got %d", rangeCounts["0-10"])
+	}
+	if rangeCounts["10-100"] != 3 { // doc2(15), doc3(50), doc5(20)
+		t.Errorf("expected 3 documents in 10-100, got %d", rangeCounts["10-100"])
+	}
+	if rangeCounts["other"] != 1 { // doc4(150)
+		t.Errorf("expected 1 document in other, got %d", rangeCounts["other"])
+	}
+
+	// Verify count
+	countRes, ok := result["count"]
+	if !ok {
+		t.Fatalf("missing count in results")
+	}
+	if len(countRes) != 1 || countRes[0].Count != 5 {
+		t.Errorf("expected total count 5, got %v", countRes)
+	}
+
+	// 3. Test parsing error
+	_, err = engine.RunAggregations(ctx, []string{"invalid_spec_format"}, nil)
+	if err == nil {
+		t.Errorf("expected error for invalid spec, got nil")
+	}
+
+	// 4. Test execution error
+	_, err = engine.RunAggregations(ctx, []string{"invalid_column_name:terms"}, nil)
+	if err == nil {
+		t.Errorf("expected error for invalid column execution, got nil")
 	}
 }
