@@ -201,3 +201,60 @@ func TestRangeAggregationSQL(t *testing.T) {
 		}
 	}
 }
+
+func TestLowerToken(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"HELLO", "hello"},
+		{"world", "world"},
+		{"MiXeD", "mixed"},
+		{"123", "123"},
+		{"", ""},
+		{"ÄÖÜ", "äöü"},
+		{"Γεια", "γεια"},
+		{"Привет", "привет"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := LowerToken(tt.input); got != tt.want {
+				t.Errorf("LowerToken(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestToFTS5WithAnalyzer(t *testing.T) {
+	a := NewAnalyzer("en", true, true)
+	tests := []struct {
+		q         Query
+		want      string
+		wantFuzzy bool
+	}{
+		{nil, "", false},
+		{&TermQuery{Value: "running"}, "run*", false},
+		{&TermQuery{Value: "the"}, "the", false},
+		{&PhraseQuery{Terms: []string{"running", "jumps"}}, `"run*" "jump*"`, false},
+		{&PhraseQuery{Terms: []string{"the", "running"}}, `"the" "run*"`, false},
+		{&PrefixQuery{Prefix: "running"}, "run*", false},
+		{&PrefixQuery{Prefix: "the"}, "the*", false},
+		{&FuzzyQuery{Term: "running", N: 2}, "run*", true},
+		{&FuzzyQuery{Term: "the", N: 2}, "the*", true},
+		{&FieldQuery{Field: "title", Query: &TermQuery{Value: "running"}}, "title:run*", false},
+		{&NearQuery{Terms: []string{"running", "jumps"}, N: 5}, "NEAR(run* jump*, 5)", false},
+		{&BooleanQuery{Left: &TermQuery{Value: "running"}, Op: "AND", Right: &TermQuery{Value: "jumps"}}, "(run* AND jump*)", false},
+		{&BooleanQuery{Left: &TermQuery{Value: "running"}, Op: "NOT", Right: &TermQuery{Value: "jumps"}}, "(run* NOT jump*)", false},
+	}
+
+	for _, tt := range tests {
+		got, fuzzy := ToFTS5WithAnalyzer(tt.q, a)
+		if got != tt.want {
+			t.Errorf("ToFTS5WithAnalyzer(%T) = %q, want %q", tt.q, got, tt.want)
+		}
+		if fuzzy != tt.wantFuzzy {
+			t.Errorf("ToFTS5WithAnalyzer(%T) fuzzy = %v, want %v", tt.q, fuzzy, tt.wantFuzzy)
+		}
+	}
+}
