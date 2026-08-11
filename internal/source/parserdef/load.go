@@ -17,7 +17,7 @@ var embeddedSchemas embed.FS
 
 // parserOverrideDir returns the user override directory for schemas.
 // Defaults to ~/.config/seek/parsers/.
-var parserOverrideDir = func() string {
+func parserOverrideDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "seek", "parsers")
 }
@@ -71,6 +71,10 @@ type LoadedDef struct {
 // List returns all available parser definitions: embedded defaults plus any
 // user overrides that don't shadow an embedded schema.
 func List() ([]LoadedDef, error) {
+	return listFrom(parserOverrideDir())
+}
+
+func listFrom(overrideDir string) ([]LoadedDef, error) {
 	// Collect embedded schema names.
 	entries, err := embeddedSchemas.ReadDir("parsers")
 	if err != nil {
@@ -95,7 +99,7 @@ func List() ([]LoadedDef, error) {
 			defer wg.Done()
 
 			// If a user override exists, it completely wins (consistent with Load).
-			overridePath := filepath.Join(parserOverrideDir(), schemaName+".yaml")
+			overridePath := filepath.Join(overrideDir, schemaName+".yaml")
 			if overrideData, oErr := os.ReadFile(overridePath); oErr == nil {
 				def, err := parseSchema(overrideData, overridePath)
 				loaded := LoadedDef{
@@ -145,7 +149,7 @@ func List() ([]LoadedDef, error) {
 	wg.Wait()
 
 	// Collect user-only schemas (not shadowing embedded).
-	overrideDir := parserOverrideDir()
+
 	if overrideEntries, err := os.ReadDir(overrideDir); err == nil {
 		for _, e := range overrideEntries {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
