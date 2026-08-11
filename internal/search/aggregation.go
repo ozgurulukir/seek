@@ -3,6 +3,7 @@ package search
 import (
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -54,7 +55,15 @@ func (a *TermAggregation) SQL() (string, []interface{}) {
 	default:
 		// Assume it's a collection field
 		if !strings.Contains(field, ".") {
-			field = "c." + field
+			if matched, _ := regexp.MatchString("^[a-zA-Z0-9_]+$", field); matched {
+				field = "c." + field
+			} else {
+				field = "c.id" // safe fallback
+			}
+		} else {
+			if matched, _ := regexp.MatchString("^[a-zA-Z0-9_]+\\.[a-zA-Z0-9_]+$", field); !matched {
+				field = "c.id" // safe fallback
+			}
 		}
 	}
 	return fmt.Sprintf("SELECT %s as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY %s ORDER BY count DESC", field, field), nil
@@ -93,7 +102,7 @@ func (a *HistogramAggregation) SQL() (string, []interface{}) {
 	default:
 		format = "%Y-%m"
 	}
-	return fmt.Sprintf("SELECT strftime('%s', %s) as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY key ORDER BY key", format, field), nil
+	return fmt.Sprintf("SELECT strftime(?, %s) as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY key ORDER BY key", field), []interface{}{format}
 }
 
 func (a *HistogramAggregation) Scan(rows *sql.Rows) ([]Bucket, error) {
@@ -117,19 +126,22 @@ type RangeAggregation struct {
 func (a *RangeAggregation) SQL() (string, []interface{}) {
 	field := "d.line_count"
 	var cases []string
+	var args []interface{}
 	for _, r := range a.Ranges {
 		parts := strings.SplitN(r, "-", 2)
 		if len(parts) == 2 {
 			low, high := parts[0], parts[1]
 			if high == "" {
-				cases = append(cases, fmt.Sprintf("WHEN %s >= %s THEN '%s'", field, low, r))
+				cases = append(cases, fmt.Sprintf("WHEN %s >= ? THEN ?", field))
+				args = append(args, low, r)
 			} else {
-				cases = append(cases, fmt.Sprintf("WHEN %s >= %s AND %s < %s THEN '%s'", field, low, field, high, r))
+				cases = append(cases, fmt.Sprintf("WHEN %s >= ? AND %s < ? THEN ?", field, field))
+				args = append(args, low, high, r)
 			}
 		}
 	}
 	caseSQL := strings.Join(cases, " ")
-	return fmt.Sprintf("SELECT CASE %s ELSE 'other' END as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY key ORDER BY key", caseSQL), nil
+	return fmt.Sprintf("SELECT CASE %s ELSE 'other' END as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY key ORDER BY key", caseSQL), args
 }
 
 func (a *RangeAggregation) Scan(rows *sql.Rows) ([]Bucket, error) {
