@@ -1,9 +1,14 @@
 package search
 
 import (
+	"context"
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
+	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
@@ -241,5 +246,144 @@ func TestRRFFusionBM25TakesPrecedenceOnTie(t *testing.T) {
 	// BM25 metadata should win for the overlapping doc.
 	if result[0].Title != "from-bm25" {
 		t.Errorf("expected BM25 title, got %q", result[0].Title)
+	}
+}
+
+
+func newTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	s, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
+func newTestEmbedClient(t *testing.T, handler http.HandlerFunc) *embed.Client {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return embed.NewClient(srv.URL, "test-key", "test-model", 2)
+}
+
+func TestSearchHybridBasic(t *testing.T) {
+	s := newTestStore(t)
+
+	col, _ := s.CreateCollection("test", "markdown", "/tmp", "*.md")
+	doc1, _ := s.UpsertDocument(col.ID, "/tmp/doc1.md", "apple doc", "hash1", 1, 1)
+	doc2, _ := s.UpsertDocument(col.ID, "/tmp/doc2.md", "grape doc", "hash2", 1, 1)
+
+	_ = s.InsertChunk(doc1, 0, "apple banana", []float32{1.0, 0.0})
+	_ = s.UpsertFTS(doc1, "apple doc", "apple banana")
+
+	_ = s.InsertChunk(doc2, 0, "grape orange", []float32{0.0, 1.0})
+	_ = s.UpsertFTS(doc2, "grape doc", "grape orange")
+
+	embedClient := newTestEmbedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"data":[{"embedding":[1.0, 0.0],"index":0}]}`))
+	})
+
+	engine := NewEngine(s, embedClient)
+
+	ctx := context.Background()
+	results, err := engine.SearchHybrid(ctx, "apple", 10, Options{})
+	if err != nil {
+		t.Fatalf("SearchHybrid error: %v", err)
+	}
+
+	if len(results) == 0 {
+		t.Fatalf("expected results, got 0")
+	}
+	if results[0].DocumentID != doc1 {
+		t.Errorf("expected doc1, got %d", results[0].DocumentID)
+	}
+}
+
+func TestSearchHybridFallback(t *testing.T) {
+	s := newTestStore(t)
+
+	col, _ := s.CreateCollection("test", "markdown", "/tmp", "*.md")
+	doc1, _ := s.UpsertDocument(col.ID, "/tmp/doc1.md", "apple doc", "hash1", 1, 1)
+	doc2, _ := s.UpsertDocument(col.ID, "/tmp/doc2.md", "apple second", "hash2", 1, 1)
+
+	_ = s.InsertChunk(doc1, 0, "apple banana", []float32{1.0, 0.0})
+	_ = s.UpsertFTS(doc1, "apple doc", "apple banana")
+
+	_ = s.InsertChunk(doc2, 0, "apple grape", []float32{0.0, 1.0})
+	_ = s.UpsertFTS(doc2, "apple second", "apple grape")
+
+	// Embedding server returns error to force fallback to BM25
+	embedClient := newTestEmbedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`"Internal Server Error"`))
+	})
+
+	engine := NewEngine(s, embedClient)
+
+	ctx := context.Background()
+	results, err := engine.SearchHybrid(ctx, "apple", 1, Options{})
+	if err != nil {
+		t.Fatalf("SearchHybrid error: %v", err)
+	}
+
+	// Should fallback to BM25 and truncate to limit 1
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].DocumentID != doc1 && results[0].DocumentID != doc2 {
+		t.Errorf("expected doc1 or doc2, got %d", results[0].DocumentID)
+	}
+}
+
+func TestSearchHybridZeroLimit(t *testing.T) {
+	s := newTestStore(t)
+	col, _ := s.CreateCollection("test", "markdown", "/tmp", "*.md")
+	doc1, _ := s.UpsertDocument(col.ID, "/tmp/doc1.md", "apple", "hash1", 1, 1)
+	_ = s.InsertChunk(doc1, 0, "apple", []float32{1.0, 0.0})
+	_ = s.UpsertFTS(doc1, "apple", "apple")
+
+	embedClient := newTestEmbedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"data":[{"embedding":[1.0, 0.0],"index":0}]}`))
+	})
+	engine := NewEngine(s, embedClient)
+
+	// limit <= 0 should use DefaultLimit
+	results, err := engine.SearchHybrid(context.Background(), "apple", 0, Options{})
+	if err != nil {
+		t.Fatalf("SearchHybrid error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+}
+
+func TestSearchHybridVLClient(t *testing.T) {
+	s := newTestStore(t)
+	col, _ := s.CreateCollection("test", "markdown", "/tmp", "*.md")
+	doc1, _ := s.UpsertDocument(col.ID, "/tmp/doc1.md", "apple", "hash1", 1, 1)
+	_ = s.InsertChunk(doc1, 0, "apple", []float32{1.0, 0.0})
+	_ = s.UpsertFTS(doc1, "apple", "apple")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"output":{"embeddings":[{"embedding":[1.0, 0.0]}]}}`)) // Dashscope format
+	}))
+	t.Cleanup(srv.Close)
+
+	vlClient := embed.NewVLClient(srv.URL, "test-key", 2, "test-model")
+	engine := NewEngineWithVL(s, nil, vlClient)
+
+	results, err := engine.SearchHybrid(context.Background(), "apple", 10, Options{})
+	if err != nil {
+		t.Fatalf("SearchHybrid error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 }
