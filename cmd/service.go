@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -77,6 +78,16 @@ func seekBinary() string {
 	return real
 }
 
+func runLaunchctl(args ...string) ([]byte, error) {
+	for _, arg := range args {
+		if strings.ContainsRune(arg, '\x00') {
+			return nil, fmt.Errorf("invalid argument: contains null byte")
+		}
+	}
+	// #nosec G204 -- arguments are sanitized, command is constant
+	return exec.Command("launchctl", args...).CombinedOutput()
+}
+
 func (c *ServiceStartCmd) Run(cfg *config.AppConfig) error {
 	path := plistPath()
 
@@ -112,10 +123,10 @@ func (c *ServiceStartCmd) Run(cfg *config.AppConfig) error {
 	f.Close()
 
 	// Unload first in case it's already loaded
-	exec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d", os.Getuid()), path).Run()
+	runLaunchctl("bootout", fmt.Sprintf("gui/%d", os.Getuid()), path)
 
 	// Load the agent
-	out, err := exec.Command("launchctl", "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), path).CombinedOutput()
+	out, err := runLaunchctl("bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), path)
 	if err != nil {
 		return fmt.Errorf("launchctl bootstrap: %s (%w)", string(out), err)
 	}
@@ -134,7 +145,7 @@ func (c *ServiceStopCmd) Run(cfg *config.AppConfig) error {
 		return nil
 	}
 
-	out, err := exec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d", os.Getuid()), path).CombinedOutput()
+	out, err := runLaunchctl("bootout", fmt.Sprintf("gui/%d", os.Getuid()), path)
 	if err != nil {
 		// Ignore "not loaded" errors
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 3 {
@@ -157,7 +168,7 @@ func (c *ServiceStatusCmd) Run(cfg *config.AppConfig) error {
 		return nil
 	}
 
-	out, err := exec.Command("launchctl", "print", fmt.Sprintf("gui/%d/%s", os.Getuid(), plistLabel)).CombinedOutput()
+	out, err := runLaunchctl("print", fmt.Sprintf("gui/%d/%s", os.Getuid(), plistLabel))
 	if err != nil {
 		fmt.Println("Service installed but not running.")
 		fmt.Printf("  Plist: %s\n", path)
