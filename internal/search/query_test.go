@@ -1,6 +1,7 @@
 package search
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -127,6 +128,55 @@ func TestParseAggregation(t *testing.T) {
 	}
 }
 
+func TestTermAggregationSQLInjection(t *testing.T) {
+	// A malicious payload mimicking an injection attempt
+	maliciousField := "type; DROP TABLE documents; --"
+	agg := &TermAggregation{Field: maliciousField}
+	query, _ := agg.SQL()
+
+	// Ensure the generated SQL safely quotes the entire identifier (e.g. "c"."type; DROP TABLE documents; --")
+	// so that it cannot break out of the SELECT and GROUP BY clauses.
+	expectedQueryStr := `SELECT "c"."type; DROP TABLE documents; --" as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY "c"."type; DROP TABLE documents; --" ORDER BY count DESC`
+
+	if query != expectedQueryStr {
+		t.Errorf("Expected SQL query to escape malicious field.\nGot: %s\nWant: %s", query, expectedQueryStr)
+	}
+
+	// Another test to check if embedded quotes are escaped properly
+	maliciousField2 := `type"; DROP TABLE documents; --`
+	agg2 := &TermAggregation{Field: maliciousField2}
+	query2, _ := agg2.SQL()
+	expectedQueryStr2 := `SELECT "c"."type""; DROP TABLE documents; --" as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY "c"."type""; DROP TABLE documents; --" ORDER BY count DESC`
+
+	if query2 != expectedQueryStr2 {
+		t.Errorf("Expected SQL query to escape double quotes.\nGot: %s\nWant: %s", query2, expectedQueryStr2)
+	}
+}
+
+func TestTermAggregationSQL(t *testing.T) {
+	// Test standard mapped fields that should pass through normally
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{"type", `"c"."type"`},
+		{"created_at", `"d"."created_at"`},
+		{"line_count", `"d"."line_count"`},
+		{"path", `"d"."path"`},
+		{"collection", `"c"."name"`},
+		{"some_other", `"c"."some_other"`},
+	}
+
+	for _, tc := range cases {
+		agg := &TermAggregation{Field: tc.input}
+		query, _ := agg.SQL()
+		expectedSQL := fmt.Sprintf(`SELECT %s as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY %s ORDER BY count DESC`, tc.expected, tc.expected)
+		if query != expectedSQL {
+			t.Errorf("Expected SQL query for %q to be:\n%s\nGot:\n%s", tc.input, expectedSQL, query)
+		}
+	}
+}
+
 func TestRangeAggregationSQL(t *testing.T) {
 	agg := &RangeAggregation{
 		Field:  "line_count",
@@ -141,7 +191,7 @@ func TestRangeAggregationSQL(t *testing.T) {
 	}
 
 	if len(args) != 8 {
-		t.Fatalf("expected 8 args, got %d", len(args))
+		t.Fatalf("expected 8 args, got %d: %v", len(args), args)
 	}
 
 	expectedArgs := []interface{}{"0", "100", "0-100", "100", "500", "100-500", "500", "500-"}
