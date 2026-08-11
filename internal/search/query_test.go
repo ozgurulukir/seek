@@ -126,3 +126,28 @@ func TestParseAggregation(t *testing.T) {
 		}
 	}
 }
+
+func TestRangeAggregationSQL(t *testing.T) {
+	agg := &RangeAggregation{
+		Field:  "line_count",
+		Ranges: []string{"0-100", "100-500", "500-"},
+	}
+	query, args := agg.SQL()
+
+	expectedQuery := "SELECT CASE WHEN d.line_count >= ? AND d.line_count < ? THEN ? WHEN d.line_count >= ? AND d.line_count < ? THEN ? WHEN d.line_count >= ? THEN ? ELSE 'other' END as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY key ORDER BY key"
+
+	if query != expectedQuery {
+		t.Errorf("expected query %q, got %q", expectedQuery, query)
+	}
+
+	if len(args) != 8 {
+		t.Fatalf("expected 8 args, got %d", len(args))
+	}
+
+	expectedArgs := []interface{}{"0", "100", "0-100", "100", "500", "100-500", "500", "500-"}
+	for i, arg := range args {
+		if arg != expectedArgs[i] {
+			t.Errorf("arg %d: expected %v, got %v", i, expectedArgs[i], arg)
+		}
+	}
+}
