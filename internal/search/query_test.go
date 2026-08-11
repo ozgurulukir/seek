@@ -130,7 +130,7 @@ func TestParseAggregation(t *testing.T) {
 
 func TestRangeAggregationSQL(t *testing.T) {
 	agg := &RangeAggregation{
-		Field: "line_count",
+		Field:  "line_count",
 		Ranges: []string{"0-100", "100-500", "500-"},
 	}
 	query, args := agg.SQL()
