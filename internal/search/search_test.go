@@ -243,3 +243,37 @@ func TestRRFFusionBM25TakesPrecedenceOnTie(t *testing.T) {
 		t.Errorf("expected BM25 title, got %q", result[0].Title)
 	}
 }
+
+func TestNewEngine(t *testing.T) {
+	// We can use nil pointers since NewEngine simply assigns them.
+	e := NewEngine(nil, nil)
+	if e == nil {
+		t.Fatal("NewEngine returned nil")
+	}
+	if e.store != nil {
+		t.Errorf("expected store to be nil, got %v", e.store)
+	}
+	if e.embedClient != nil {
+		t.Errorf("expected embedClient to be nil, got %v", e.embedClient)
+	}
+	if e.vlClient != nil {
+		t.Errorf("expected vlClient to be nil, got %v", e.vlClient)
+	}
+}
+
+func TestNewEngineWithVL(t *testing.T) {
+	// We can use nil pointers since NewEngineWithVL simply assigns them.
+	e := NewEngineWithVL(nil, nil, nil)
+	if e == nil {
+		t.Fatal("NewEngineWithVL returned nil")
+	}
+	if e.store != nil {
+		t.Errorf("expected store to be nil, got %v", e.store)
+	}
+	if e.embedClient != nil {
+		t.Errorf("expected embedClient to be nil, got %v", e.embedClient)
+	}
+	if e.vlClient != nil {
+		t.Errorf("expected vlClient to be nil, got %v", e.vlClient)
+	}
+}
