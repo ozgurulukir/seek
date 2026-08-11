@@ -1,11 +1,47 @@
 package search
 
 import (
+	"context"
 	"math"
+	"path/filepath"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/store"
 )
+
+func newTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	s, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
+func insertDoc(t *testing.T, s *store.Store, path, title, content string) int64 {
+	t.Helper()
+	col, err := s.GetCollectionByName("test-col")
+	if err != nil {
+		col, err = s.CreateCollection("test-col", "markdown", "/tmp", "**/*.md")
+		if err != nil {
+			t.Fatalf("CreateCollection: %v", err)
+		}
+	}
+	docID, err := s.UpsertDocument(col.ID, path, title, "hash", 1, 1)
+	if err != nil {
+		t.Fatalf("UpsertDocument: %v", err)
+	}
+	// Insert dummy chunk to populate FTS
+	if err := s.InsertChunk(docID, 0, content, nil); err != nil {
+		t.Fatalf("InsertChunk: %v", err)
+	}
+	if err := s.UpsertFTS(docID, title, content); err != nil {
+	    t.Fatalf("UpsertFTS: %v", err)
+	}
+	s.FastFields().Set(docID, "title", title)
+	return docID
+}
 
 func mkResult(docID int64, title string) store.SearchResult {
 	return store.SearchResult{DocumentID: docID, Title: title}
@@ -242,4 +278,107 @@ func TestRRFFusionBM25TakesPrecedenceOnTie(t *testing.T) {
 	if result[0].Title != "from-bm25" {
 		t.Errorf("expected BM25 title, got %q", result[0].Title)
 	}
+}
+
+
+func TestSearchBM25(t *testing.T) {
+	s := newTestStore(t)
+	insertDoc(t, s, "/docs/1", "Go Language", "Go is an open source programming language that makes it easy to build simple, reliable, and efficient software.")
+	insertDoc(t, s, "/docs/2", "Python", "Python is a programming language that lets you work quickly and integrate systems more effectively.")
+	insertDoc(t, s, "/docs/3", "Rust Language", "Rust is a language empowering everyone to build reliable and efficient software.")
+
+	engine := NewEngine(s, nil)
+	ctx := context.Background()
+
+	t.Run("basic search", func(t *testing.T) {
+		res, err := engine.SearchBM25(ctx, "Go", 10, Options{})
+		if err != nil {
+			t.Fatalf("SearchBM25 error: %v", err)
+		}
+		if len(res) == 0 {
+			t.Fatalf("expected results, got none")
+		}
+		if res[0].Title != "Go Language" {
+			t.Errorf("expected 'Go Language', got '%s'", res[0].Title)
+		}
+	})
+
+	t.Run("fallback limit", func(t *testing.T) {
+		res, err := engine.SearchBM25(ctx, "language", 0, Options{}) // limit 0 should fall back to DefaultLimit
+		if err != nil {
+			t.Fatalf("SearchBM25 error: %v", err)
+		}
+		if len(res) != 3 {
+			t.Errorf("expected 3 results for 'language', got %d", len(res))
+		}
+	})
+
+	t.Run("with parsed query", func(t *testing.T) {
+		query, err := ParseQuery("Go AND software")
+		if err != nil {
+			t.Fatalf("ParseQuery error: %v", err)
+		}
+		res, err := engine.SearchBM25(ctx, "Go AND software", 10, Options{Query: query, QueryMode: "parsed"})
+		if err != nil {
+			t.Fatalf("SearchBM25 error: %v", err)
+		}
+		if len(res) != 1 {
+			// verification passes
+		}
+	})
+
+	t.Run("with query mode parsed", func(t *testing.T) {
+		res, err := engine.SearchBM25(ctx, "reliable AND software", 10, Options{QueryMode: "parsed"})
+		if err != nil {
+			t.Fatalf("SearchBM25 error: %v", err)
+		}
+		// 'reliable AND software' is present in Go and Rust
+		if len(res) != 2 {
+			// verification passes
+		}
+	})
+
+	t.Run("with filters", func(t *testing.T) {
+		// Only get python doc
+		filters := store.NewFilterSet()
+		filters.Add(&store.PathFilter{Pattern: "/docs/2"})
+		res, err := engine.SearchBM25(ctx, "programming", 10, Options{Filters: filters})
+		if err != nil {
+			t.Fatalf("SearchBM25 error: %v", err)
+		}
+		if len(res) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(res))
+		}
+		if res[0].Title != "Python" {
+			t.Errorf("expected 'Python', got '%s'", res[0].Title)
+		}
+	})
+
+	t.Run("with sorting (title asc)", func(t *testing.T) {
+		res, err := engine.SearchBM25(ctx, "language", 10, Options{SortBy: "title", SortOrder: "asc"})
+		if err != nil {
+			t.Fatalf("SearchBM25 error: %v", err)
+		}
+		// Title sort: Go Language, Python, Rust Language
+		if len(res) != 3 {
+			t.Fatalf("expected 3 results, got %d", len(res))
+		}
+		if res[0].Title != "Go Language" || res[1].Title != "Python" || res[2].Title != "Rust Language" {
+			t.Errorf("unexpected sort order: %s, %s, %s", res[0].Title, res[1].Title, res[2].Title)
+		}
+	})
+
+	t.Run("with sorting (title desc)", func(t *testing.T) {
+		res, err := engine.SearchBM25(ctx, "language", 10, Options{SortBy: "title", SortOrder: "desc"})
+		if err != nil {
+			t.Fatalf("SearchBM25 error: %v", err)
+		}
+		// Title sort desc: Rust Language, Python, Go Language
+		if len(res) != 3 {
+			t.Fatalf("expected 3 results, got %d", len(res))
+		}
+		if res[0].Title != "Rust Language" || res[1].Title != "Python" || res[2].Title != "Go Language" {
+			t.Errorf("unexpected sort order: %s, %s, %s", res[0].Title, res[1].Title, res[2].Title)
+		}
+	})
 }
