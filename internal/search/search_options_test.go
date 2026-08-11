@@ -2,9 +2,9 @@ package search
 
 import (
 	"context"
+	"github.com/ozgurulukir/seek/internal/store"
 	"path/filepath"
 	"testing"
-	"github.com/ozgurulukir/seek/internal/store"
 )
 
 func TestEngine_SearchWithOptions(t *testing.T) {
