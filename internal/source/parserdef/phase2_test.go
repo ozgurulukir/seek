@@ -278,13 +278,36 @@ func createZedFixtureDB(t *testing.T, path string) {
 	t1 := "2026-07-29T22:26:24.023418304+00:00"
 	t2 := "2026-07-29T22:28:34.503829599+00:00"
 
-	insertThread(t, db, "zed-thread-1", "Test Thread One", t1, "/home/user/project-a", "", thread1)
-	insertThread(t, db, "zed-thread-2", "Test Thread Two", t2, "/home/user/project-b", "zed-thread-1", thread2)
+	insertThread(t, db, threadInsertParams{
+		id:      "zed-thread-1",
+		summary: "Test Thread One",
+		updated: t1,
+		folder:  "/home/user/project-a",
+		parent:  "",
+		obj:     thread1,
+	})
+	insertThread(t, db, threadInsertParams{
+		id:      "zed-thread-2",
+		summary: "Test Thread Two",
+		updated: t2,
+		folder:  "/home/user/project-b",
+		parent:  "zed-thread-1",
+		obj:     thread2,
+	})
 }
 
-func insertThread(t *testing.T, db *sql.DB, id, summary, updated, folder, parent string, obj map[string]interface{}) {
+type threadInsertParams struct {
+	id      string
+	summary string
+	updated string
+	folder  string
+	parent  string
+	obj     map[string]interface{}
+}
+
+func insertThread(t *testing.T, db *sql.DB, p threadInsertParams) {
 	t.Helper()
-	jsonBytes, err := json.Marshal(obj)
+	jsonBytes, err := json.Marshal(p.obj)
 	if err != nil {
 		t.Fatalf("marshal thread json: %v", err)
 	}
@@ -297,9 +320,9 @@ func insertThread(t *testing.T, db *sql.DB, id, summary, updated, folder, parent
 	enc.Close()
 
 	_, err = db.Exec(`INSERT INTO threads (id, summary, updated_at, data_type, data, parent_id, folder_paths) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, summary, updated, "zstd", compressed, parent, folder)
+		p.id, p.summary, p.updated, "zstd", compressed, p.parent, p.folder)
 	if err != nil {
-		t.Fatalf("insert thread %s: %v", id, err)
+		t.Fatalf("insert thread %s: %v", p.id, err)
 	}
 }
 
