@@ -3,10 +3,10 @@ package parserdef
 import (
 	"database/sql"
 	"encoding/json"
-	"regexp"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -266,7 +266,6 @@ func detectSQLiteSource(def *ParserDef) (*SourceSpec, *VersionSpec, []string, er
 		def.Name, len(def.Sources))
 }
 
-// scanSQLiteSessions runs the sessions query against a DB file and returns raw rows.
 var (
 	reSessionBind = regexp.MustCompile(`(?i)([\w.]+)\s*=\s*:session_id`)
 	reSelect      = regexp.MustCompile(`(?i)\bSELECT\b`)
@@ -294,6 +293,7 @@ func buildBatchQuery(query string) (string, int, error) {
 	return q, count, nil
 }
 
+// scanSQLiteSessions runs the sessions query against a DB file and returns raw rows.
 func scanSQLiteSessions(db *sql.DB, ver *VersionSpec) ([]sqliteSessionRow, error) {
 	rows, err := db.Query(ver.Sessions.Query)
 	if err != nil {
@@ -365,6 +365,51 @@ func scanSQLiteSessions(db *sql.DB, ver *VersionSpec) ([]sqliteSessionRow, error
 }
 
 // fetchSQLiteMessages runs the messages query for a single session (Mode A).
+func fetchSQLiteMessages(db *sql.DB, ver *VersionSpec, sessionID string) ([]Message, error) {
+	rows, err := db.Query(ver.Messages.Query, sql.Named("session_id", sessionID))
+	if err != nil {
+		return nil, fmt.Errorf("messages query: %w", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("messages columns: %w", err)
+	}
+	colIdx := make(map[string]int)
+	for i, c := range cols {
+		colIdx[c] = i
+	}
+	roleIdx := colIdx[ver.Messages.Role]
+	contentIdx := colIdx[ver.Messages.Content]
+
+	var messages []Message
+	for rows.Next() {
+		vals := make([]sql.NullString, len(cols))
+		ptrs := make([]interface{}, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, fmt.Errorf("scan message row: %w", err)
+		}
+		role := ""
+		content := ""
+		if roleIdx >= 0 {
+			role = vals[roleIdx].String
+		}
+		if contentIdx >= 0 {
+			content = vals[contentIdx].String
+		}
+		// Skip empty rows (per plan §6.9: warn + skip, no silent swallow).
+		// Skip empty rows (per plan §6.9: warn + skip, no silent swallow).
+		if strings.TrimSpace(content) == "" {
+			continue
+		}
+		messages = append(messages, Message{Role: role, Content: content})
+	}
+	return messages, rows.Err()
+}
 
 // fetchSQLiteMessagesBatch runs the messages query for multiple sessions.
 func fetchSQLiteMessagesBatch(db *sql.DB, ver *VersionSpec, sessionIDs []string) (map[string][]Message, error) {
@@ -428,6 +473,7 @@ func fetchSQLiteMessagesBatch(db *sql.DB, ver *VersionSpec, sessionIDs []string)
 		if contentIdx >= 0 {
 			content = vals[contentIdx].String
 		}
+		// Skip empty rows (per plan §6.9: warn + skip, no silent swallow).
 		if strings.TrimSpace(content) == "" {
 			continue
 		}

@@ -161,7 +161,15 @@ func syncSQLiteSessions(src *SourceSpec, ver *VersionSpec, files []string, since
 				if len(batchIDs) >= 500 {
 					msgMap, mErr := fetchSQLiteMessagesBatch(db, ver, batchIDs)
 					if mErr != nil {
-						errs = append(errs, SessionError{SessionID: dbPath, Err: fmt.Errorf("batch messages: %w", mErr)})
+						// Fallback to individual fetches on batch query failure
+						for i, id := range batchIDs {
+							msgs, fErr := fetchSQLiteMessages(db, ver, id)
+							if fErr != nil {
+								errs = append(errs, SessionError{SessionID: id, Err: fmt.Errorf("messages fallback: %w", fErr)})
+							} else {
+								sessions[batchIndices[i]].Messages = msgs
+							}
+						}
 					} else {
 						for i, id := range batchIDs {
 							sessions[batchIndices[i]].Messages = msgMap[id]
@@ -176,7 +184,15 @@ func syncSQLiteSessions(src *SourceSpec, ver *VersionSpec, files []string, since
 		if len(batchIDs) > 0 && !ver.Messages.Inline {
 			msgMap, mErr := fetchSQLiteMessagesBatch(db, ver, batchIDs)
 			if mErr != nil {
-				errs = append(errs, SessionError{SessionID: dbPath, Err: fmt.Errorf("batch messages: %w", mErr)})
+				// Fallback to individual fetches on batch query failure
+				for i, id := range batchIDs {
+					msgs, fErr := fetchSQLiteMessages(db, ver, id)
+					if fErr != nil {
+						errs = append(errs, SessionError{SessionID: id, Err: fmt.Errorf("messages fallback: %w", fErr)})
+					} else {
+						sessions[batchIndices[i]].Messages = msgs
+					}
+				}
 			} else {
 				for i, id := range batchIDs {
 					sessions[batchIndices[i]].Messages = msgMap[id]
