@@ -29,12 +29,12 @@ go build -tags fts5 -o seek.exe .
 # go install -tags fts5 .
 ```
 
-### Install Agent Skill (Direct from Repo)
+### Install Agent Skill
 
 Install the `seek` skill directly into your AI coding agent (Claude Code, Codex, Antigravity, Cursor):
 
 ```bash
-# Copy from this repository to your agent's skills directory:
+# Copy to your agent's skills directory:
 mkdir -p ~/.agents/skills/seek
 cp -r skills/seek/* ~/.agents/skills/seek/
 
@@ -176,6 +176,30 @@ Run full hybrid search + Cross-Encoder re-ranking with **zero cloud dependencies
    seek embed -f -r                              # generate vectors via Ollama
    seek search "how does vector search work" -C 1  # hybrid search + FlashRank re-rank
    ```
+
+### Standalone Helper Services (`tools/`)
+
+The repository includes zero-config, single-file server scripts in `tools/` with inline PEP 723 dependency metadata. Run them directly via `uv`:
+
+- **Local FlashRank Re-ranker (Port 8000):**
+  ```bash
+  uv run tools/flashrank_server/server.py
+  ```
+  Provides a fast CPU Cross-Encoder re-ranking endpoint (`POST /rerank`) using ONNX.
+
+- **Local xberg Rich Document Extractor (Port 8001):**
+  ```bash
+  uv run tools/xberg_server/server.py
+  ```
+  Enables indexing 100+ rich document formats (`docx`, `xlsx`, `pdf`, `html`, `csv`) with `seek add <dir> --docs`.
+
+```yaml
+# In ~/.config/seek/config.yaml for xberg:
+extractor:
+  backend: xberg
+  xberg_base_url: http://127.0.0.1:8001
+  output_format: markdown
+```
 
 ---
 
