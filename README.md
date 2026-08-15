@@ -16,10 +16,11 @@ ln -sf $(pwd)/seek /usr/local/bin/seek
 
 **Windows** (PowerShell, requires Go 1.24+ and a C compiler like `zig` or MinGW `gcc`):
 ```powershell
-$env:CC="zig cc"        # or gcc
-$env:CGO_ENABLED="1"
+$env:CC="zig cc"; $env:CGO_ENABLED="1"
 go build -tags fts5 -o seek.exe .
-# Optional: move seek.exe to a directory in your PATH (e.g. ~/scoop/shims or ~/bin)
+
+# Optional: install directly to your Go bin (~/go/bin) or any directory in your PATH:
+# go install -tags fts5 .
 ```
 
 As a [skill](https://skills.sh) (Claude Code, Codex, Cursor, etc.):

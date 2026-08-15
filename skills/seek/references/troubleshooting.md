@@ -47,4 +47,4 @@ which seek
 Get-Command seek
 ```
 
-If not found, copy or move the binary to a directory in your PATH (e.g. `~/.local/bin/` on POSIX or `~/scoop/shims` on Windows).
+If not found, copy or move the binary to a directory in your PATH (e.g. `~/.local/bin/` on POSIX or `$env:USERPROFILE\go\bin` on Windows).
