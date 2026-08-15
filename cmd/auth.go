@@ -1,10 +1,11 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
-	"syscall"
+	"unicode/utf8"
 
 	"github.com/ozgurulukir/seek/internal/config"
 	"golang.org/x/term"
@@ -43,6 +44,13 @@ var providers = []provider{
 	},
 }
 
+func maskKey(key string) string {
+	if len(key) <= 8 {
+		return "********"
+	}
+	return key[:4] + "..." + key[len(key)-4:]
+}
+
 func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 	fmt.Println("\nSelect embedding provider:")
 	for i, p := range providers {
@@ -73,7 +81,7 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 	}
 
 	fmt.Print("\nAPI Key (input hidden): ")
-	keyBytes, err := term.ReadPassword(int(syscall.Stdin))
+	keyBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println()
 	if err != nil {
 		return fmt.Errorf("read key: %w", err)
@@ -111,7 +119,7 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 	fmt.Printf("\nSaved to %s\n", cfg.ConfigPath())
 	fmt.Printf("  Provider: %s\n", providers[choice].Name)
 	fmt.Printf("  Model:    %s\n", model)
-	fmt.Printf("  Key:      %s...%s\n", apiKey[:4], apiKey[len(apiKey)-4:])
+	fmt.Printf("  Key:      %s\n", maskKey(apiKey))
 
 	return nil
 }
@@ -123,10 +131,9 @@ func (c *AuthStatusCmd) Run(cfg *config.AppConfig) error {
 		return nil
 	}
 
-	masked := key[:4] + "..." + key[len(key)-4:]
 	fmt.Printf("Provider:  %s\n", cfg.Config.Embedding.BaseURL)
 	fmt.Printf("Model:     %s\n", cfg.Config.Embedding.Model)
-	fmt.Printf("API Key:   %s\n", masked)
+	fmt.Printf("API Key:   %s\n", maskKey(key))
 	if cfg.Config.Embedding.IsMultimodal() {
 		vl := cfg.Config.Embedding.VLBaseURL
 		if vl == "" {
@@ -139,47 +146,73 @@ func (c *AuthStatusCmd) Run(cfg *config.AppConfig) error {
 	return nil
 }
 
-// readLine reads a line in raw mode, handling ESC, backspace, and Ctrl-C cleanly.
+// readLine reads a line in raw mode, handling ESC, backspace, paste, and Ctrl-C cleanly.
 func readLine() string {
-	fd := int(syscall.Stdin)
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		return strings.TrimSpace(line)
+	}
+
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
-		// Fallback: just read without raw mode
-		var buf [256]byte
-		n, _ := os.Stdin.Read(buf[:])
-		return strings.TrimSpace(string(buf[:n]))
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		return strings.TrimSpace(line)
 	}
 	defer term.Restore(fd, oldState)
 
-	var line []byte
-	buf := make([]byte, 16) // big enough for any escape sequence
+	var line []rune
+	buf := make([]byte, 1024)
 	for {
 		n, err := os.Stdin.Read(buf)
 		if err != nil || n == 0 {
 			break
 		}
-		// If we read multiple bytes at once, it's likely an escape sequence — skip it
-		if n > 1 {
+
+		input := buf[:n]
+		// Handle single byte controls first
+		if n == 1 {
+			ch := input[0]
+			switch {
+			case ch == '\r' || ch == '\n':
+				os.Stdout.Write([]byte("\r\n"))
+				return string(line)
+			case ch == 3: // Ctrl-C
+				os.Stdout.Write([]byte("^C\r\n"))
+				os.Exit(130)
+			case ch == 27: // Bare ESC
+				continue
+			case ch == 127 || ch == 8: // Backspace / DEL
+				if len(line) > 0 {
+					line = line[:len(line)-1]
+					os.Stdout.Write([]byte("\b \b"))
+				}
+				continue
+			}
+		}
+
+		// Escape sequence detection (e.g. arrow keys, CSI sequences)
+		if input[0] == 27 {
 			continue
 		}
-		ch := buf[0]
-		switch {
-		case ch == '\r' || ch == '\n':
-			os.Stdout.Write([]byte("\r\n"))
-			return string(line)
-		case ch == 3: // Ctrl-C
-			os.Stdout.Write([]byte("^C\r\n"))
-			os.Exit(130)
-		case ch == 27: // Bare ESC — ignore
-			continue
-		case ch == 127 || ch == 8: // Backspace / DEL
-			if len(line) > 0 {
-				line = line[:len(line)-1]
-				os.Stdout.Write([]byte("\b \b"))
+
+		// Process input runes (handles paste and UTF-8 characters)
+		str := string(input)
+		for _, r := range str {
+			if r == '\r' || r == '\n' {
+				os.Stdout.Write([]byte("\r\n"))
+				return string(line)
+			} else if r == 3 {
+				os.Stdout.Write([]byte("^C\r\n"))
+				os.Exit(130)
+			} else if r >= 32 || r == '\t' {
+				line = append(line, r)
+				var runeBytes [utf8.UTFMax]byte
+				rlen := utf8.EncodeRune(runeBytes[:], r)
+				os.Stdout.Write(runeBytes[:rlen])
 			}
-		case ch >= 32 && ch < 127: // Printable ASCII
-			line = append(line, ch)
-			os.Stdout.Write([]byte{ch})
 		}
 	}
 	return string(line)
