@@ -21,26 +21,36 @@ type AuthLoginCmd struct{}
 type AuthStatusCmd struct{}
 
 type provider struct {
-	Name    string
-	BaseURL string
-	Model   string
+	Name       string
+	BaseURL    string
+	Model      string
+	Dimensions int
 }
 
 var providers = []provider{
 	{
-		Name:    "dashscope (阿里百炼)",
-		BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-		Model:   "text-embedding-v4",
+		Name:       "dashscope (阿里百炼)",
+		BaseURL:    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		Model:      "text-embedding-v4",
+		Dimensions: 1024,
 	},
 	{
-		Name:    "openai",
-		BaseURL: "https://api.openai.com/v1",
-		Model:   "text-embedding-3-small",
+		Name:       "openai",
+		BaseURL:    "https://api.openai.com/v1",
+		Model:      "text-embedding-3-small",
+		Dimensions: 1536,
 	},
 	{
-		Name:    "custom (OpenAI-compatible)",
-		BaseURL: "",
-		Model:   "",
+		Name:       "ollama (local - nomic-embed-text)",
+		BaseURL:    "http://localhost:11434/v1",
+		Model:      "nomic-embed-text",
+		Dimensions: 768,
+	},
+	{
+		Name:       "custom (OpenAI-compatible)",
+		BaseURL:    "",
+		Model:      "",
+		Dimensions: 0,
 	},
 }
 
@@ -49,6 +59,11 @@ func maskKey(key string) string {
 		return "********"
 	}
 	return key[:4] + "..." + key[len(key)-4:]
+}
+
+func isLocalEndpoint(url string) bool {
+	lower := strings.ToLower(url)
+	return strings.Contains(lower, "localhost") || strings.Contains(lower, "127.0.0.1") || strings.Contains(lower, "::1")
 }
 
 func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
@@ -71,24 +86,49 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 	p := providers[choice]
 	baseURL := p.BaseURL
 	model := p.Model
+	dimensions := p.Dimensions
 
 	if p.BaseURL == "" {
-		fmt.Print("Base URL: ")
+		fmt.Print("Base URL (e.g. http://localhost:11434/v1 or https://api.example.com/v1): ")
 		baseURL = readLine()
+		if baseURL == "" {
+			return fmt.Errorf("base URL cannot be empty")
+		}
 
-		fmt.Print("Model name: ")
+		fmt.Print("Model name (e.g. text-embedding-3-small, bge-m3): ")
 		model = readLine()
+		if model == "" {
+			return fmt.Errorf("model name cannot be empty")
+		}
+
+		fmt.Print("Dimensions [1024]: ")
+		dimStr := readLine()
+		if dimStr != "" {
+			fmt.Sscanf(dimStr, "%d", &dimensions)
+		}
+		if dimensions <= 0 {
+			dimensions = 1024
+		}
 	}
 
-	fmt.Print("\nAPI Key (input hidden): ")
-	keyBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Println()
-	if err != nil {
-		return fmt.Errorf("read key: %w", err)
-	}
-	apiKey := strings.TrimSpace(string(keyBytes))
-	if apiKey == "" {
-		return fmt.Errorf("API key cannot be empty")
+	var apiKey string
+	if isLocalEndpoint(baseURL) {
+		fmt.Print("\nAPI Key (leave blank for local 'ollama'): ")
+		apiKey = strings.TrimSpace(readLine())
+		if apiKey == "" {
+			apiKey = "ollama"
+		}
+	} else {
+		fmt.Print("\nAPI Key (input hidden): ")
+		keyBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		if err != nil {
+			return fmt.Errorf("read key: %w", err)
+		}
+		apiKey = strings.TrimSpace(string(keyBytes))
+		if apiKey == "" {
+			return fmt.Errorf("API key cannot be empty")
+		}
 	}
 
 	multimodal := config.EmbeddingConfig{Model: model}.IsMultimodal()
@@ -102,24 +142,27 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 		vlBaseURL = strings.TrimSpace(readLine())
 	}
 
-	newCfg := config.Config{
-		Embedding: config.EmbeddingConfig{
-			BaseURL:    baseURL,
-			APIKey:     apiKey,
-			Model:      model,
-			Multimodal: multimodal,
-			VLBaseURL:  vlBaseURL,
-		},
+	// Preserve existing configuration sections (rerank, extractor, vector_index, etc.)
+	savedCfg := cfg.Config
+	savedCfg.Embedding = config.EmbeddingConfig{
+		BaseURL:    baseURL,
+		APIKey:     apiKey,
+		Model:      model,
+		Dimensions: dimensions,
+		Multimodal: multimodal,
+		VLBaseURL:  vlBaseURL,
 	}
 
-	if err := config.Save(newCfg); err != nil {
+	if err := config.Save(savedCfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 
 	fmt.Printf("\nSaved to %s\n", cfg.ConfigPath())
-	fmt.Printf("  Provider: %s\n", providers[choice].Name)
-	fmt.Printf("  Model:    %s\n", model)
-	fmt.Printf("  Key:      %s\n", maskKey(apiKey))
+	fmt.Printf("  Provider:   %s\n", providers[choice].Name)
+	fmt.Printf("  Base URL:   %s\n", baseURL)
+	fmt.Printf("  Model:      %s\n", model)
+	fmt.Printf("  Dimensions: %d\n", dimensions)
+	fmt.Printf("  Key:        %s\n", maskKey(apiKey))
 
 	return nil
 }
@@ -131,9 +174,10 @@ func (c *AuthStatusCmd) Run(cfg *config.AppConfig) error {
 		return nil
 	}
 
-	fmt.Printf("Provider:  %s\n", cfg.Config.Embedding.BaseURL)
-	fmt.Printf("Model:     %s\n", cfg.Config.Embedding.Model)
-	fmt.Printf("API Key:   %s\n", maskKey(key))
+	fmt.Printf("Provider:   %s\n", cfg.Config.Embedding.BaseURL)
+	fmt.Printf("Model:      %s\n", cfg.Config.Embedding.Model)
+	fmt.Printf("Dimensions: %d\n", cfg.Config.Embedding.Dimensions)
+	fmt.Printf("API Key:    %s\n", maskKey(key))
 	if cfg.Config.Embedding.IsMultimodal() {
 		vl := cfg.Config.Embedding.VLBaseURL
 		if vl == "" {
@@ -143,6 +187,18 @@ func (c *AuthStatusCmd) Run(cfg *config.AppConfig) error {
 	} else {
 		fmt.Printf("Multimodal: false\n")
 	}
+
+	if cfg.Config.Rerank.Enabled {
+		fmt.Printf("Re-ranking: enabled (model: %s, endpoint: %s, top_n: %d)\n",
+			cfg.Config.Rerank.Model, cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.TopN)
+	} else {
+		fmt.Printf("Re-ranking: disabled\n")
+	}
+
+	if cfg.Config.Extractor.Backend != "" {
+		fmt.Printf("Extractor:  %s (%s)\n", cfg.Config.Extractor.Backend, cfg.Config.Extractor.XbergBaseURL)
+	}
+
 	return nil
 }
 
