@@ -90,9 +90,16 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 
 	if p.BaseURL == "" {
 		fmt.Print("Base URL (e.g. http://localhost:11434/v1 or https://api.example.com/v1): ")
-		baseURL = readLine()
+		baseURL = strings.TrimSpace(readLine())
 		if baseURL == "" {
 			return fmt.Errorf("base URL cannot be empty")
+		}
+		if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+			if isLocalEndpoint(baseURL) {
+				baseURL = "http://" + baseURL
+			} else {
+				baseURL = "https://" + baseURL
+			}
 		}
 
 		fmt.Print("Model name (e.g. text-embedding-3-small, bge-m3): ")
@@ -236,6 +243,7 @@ func readLine() string {
 				os.Stdout.Write([]byte("\r\n"))
 				return string(line)
 			case ch == 3: // Ctrl-C
+				term.Restore(fd, oldState)
 				os.Stdout.Write([]byte("^C\r\n"))
 				os.Exit(130)
 			case ch == 27: // Bare ESC
@@ -261,6 +269,7 @@ func readLine() string {
 				os.Stdout.Write([]byte("\r\n"))
 				return string(line)
 			} else if r == 3 {
+				term.Restore(fd, oldState)
 				os.Stdout.Write([]byte("^C\r\n"))
 				os.Exit(130)
 			} else if r >= 32 || r == '\t' {
