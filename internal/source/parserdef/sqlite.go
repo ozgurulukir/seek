@@ -402,7 +402,6 @@ func fetchSQLiteMessages(db *sql.DB, ver *VersionSpec, sessionID string) ([]Mess
 			content = vals[contentIdx].String
 		}
 		// Skip empty rows (per plan §6.9: warn + skip, no silent swallow).
-		// Skip empty rows (per plan §6.9: warn + skip, no silent swallow).
 		if strings.TrimSpace(content) == "" {
 			continue
 		}
