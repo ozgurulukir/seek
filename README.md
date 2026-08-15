@@ -1,10 +1,16 @@
 # seek
 
-Personal hybrid search engine for markdown notes, Claude Code conversations, and Codex conversations. BM25 full-text + vector semantic search with multimodal embedding.
+> **Personal hybrid search engine (BM25 + Vector + Re-ranking) for source code, markdown notes, and AI agent conversations with 100% local/offline support.**
 
-## Why
+`seek` gives humans and AI agents instant, unified recall across your entire workspace:
+- 🔍 **Hybrid Fusion Search:** SQLite FTS5 (BM25) + HNSW Vector Search + RRF (Reciprocal Rank Fusion)
+- 💻 **Source Code & Notes:** 35+ programming languages (`.gitignore`-aware), Markdown, PDFs, and rich documents
+- 🤖 **AI Agent Memory:** Claude Code, Codex, Opencode, and Copilot CLI sessions (including multimodal screenshots)
+- 🎯 **Precision Source Addressing:** Clickable 1-based line ranges (`file.go:L25-L68`) with surrounding context expansion (`-C 1`)
+- ⚡ **100% Local / Offline Support:** Zero cloud keys required; optionally supercharged with local Ollama (`nomic-embed-text`) and FlashRank (`ms-marco-TinyBERT`)
+- 🧠 **Cross-Encoder Re-ranking:** Config-driven reranking via FlashRank, BGE-Reranker, Cohere, or Jina
 
-AI agents lose context between sessions. `seek` indexes everything — your notes, every Claude Code conversation, every Codex session, including screenshots — so agents can recall what you discussed weeks ago.
+---
 
 ## Install
 
@@ -19,15 +25,21 @@ ln -sf $(pwd)/seek /usr/local/bin/seek
 $env:CC="zig cc"; $env:CGO_ENABLED="1"
 go build -tags fts5 -o seek.exe .
 
-# Optional: install directly to your Go bin (~/go/bin) or any directory in your PATH:
+# Optional: install directly to your Go bin (~/go/bin) or PATH:
 # go install -tags fts5 .
 ```
 
-As a [skill](https://skills.sh) (Claude Code, Codex, Cursor, etc.):
+### Install Agent Skill (Direct from Repo)
+
+Install the `seek` skill directly into your AI coding agent (Claude Code, Codex, Antigravity, Cursor):
+
 ```bash
-# Copy the skill from this repo to your skills directory
-mkdir -p ~/.agents/skills
-cp -r skills/seek ~/.agents/skills/seek
+# Copy from this repository to your agent's skills directory:
+mkdir -p ~/.agents/skills/seek
+cp -r skills/seek/* ~/.agents/skills/seek/
+
+# Or create a symbolic link to keep it automatically updated:
+# ln -sf $(pwd)/skills/seek ~/.agents/skills/seek
 ```
 
 ## Quickstart
