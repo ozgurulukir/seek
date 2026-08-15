@@ -110,6 +110,9 @@ func syncSQLiteSessions(src *SourceSpec, ver *VersionSpec, files []string, since
 			continue
 		}
 
+		var batchIDs []string
+		var batchIndices []int
+
 		for _, raw := range rawRows {
 			// Normalize cursor.
 			var cursor time.Time
@@ -148,16 +151,55 @@ func syncSQLiteSessions(src *SourceSpec, ver *VersionSpec, files []string, since
 					continue
 				}
 				sess.Messages = msgs
+				sessions = append(sessions, sess)
 			} else {
-				msgs, mErr := fetchSQLiteMessages(db, ver, raw.id)
-				if mErr != nil {
-					errs = append(errs, SessionError{SessionID: raw.id, Err: fmt.Errorf("messages: %w", mErr)})
-					continue
+				idx := len(sessions)
+				sessions = append(sessions, sess)
+				batchIDs = append(batchIDs, raw.id)
+				batchIndices = append(batchIndices, idx)
+
+				if len(batchIDs) >= 500 {
+					msgMap, mErr := fetchSQLiteMessagesBatch(db, ver, batchIDs)
+					if mErr != nil {
+						// Fallback to individual fetches on batch query failure
+						for i, id := range batchIDs {
+							msgs, fErr := fetchSQLiteMessages(db, ver, id)
+							if fErr != nil {
+								errs = append(errs, SessionError{SessionID: id, Err: fmt.Errorf("messages fallback: %w", fErr)})
+							} else {
+								sessions[batchIndices[i]].Messages = msgs
+							}
+						}
+					} else {
+						for i, id := range batchIDs {
+							sessions[batchIndices[i]].Messages = msgMap[id]
+						}
+					}
+					batchIDs = batchIDs[:0]
+					batchIndices = batchIndices[:0]
 				}
-				sess.Messages = msgs
 			}
-			sessions = append(sessions, sess)
 		}
+
+		if len(batchIDs) > 0 {
+			msgMap, mErr := fetchSQLiteMessagesBatch(db, ver, batchIDs)
+			if mErr != nil {
+				// Fallback to individual fetches on batch query failure
+				for i, id := range batchIDs {
+					msgs, fErr := fetchSQLiteMessages(db, ver, id)
+					if fErr != nil {
+						errs = append(errs, SessionError{SessionID: id, Err: fmt.Errorf("messages fallback: %w", fErr)})
+					} else {
+						sessions[batchIndices[i]].Messages = msgs
+					}
+				}
+			} else {
+				for i, id := range batchIDs {
+					sessions[batchIndices[i]].Messages = msgMap[id]
+				}
+			}
+		}
+
 		db.Close()
 	}
 

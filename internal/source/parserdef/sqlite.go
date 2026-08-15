@@ -2,9 +2,11 @@ package parserdef
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -245,6 +247,41 @@ func detectSQLiteSource(def *ParserDef) (*SourceSpec, *VersionSpec, []string, er
 		def.Name, len(def.Sources))
 }
 
+var (
+	reSessionBind = regexp.MustCompile(`(?i)([\w.]+)\s*=\s*:session_id`)
+	reSelect      = regexp.MustCompile(`(?i)\bSELECT\b`)
+)
+
+// buildBatchQuery rewrites a query designed for a single session
+// to one that queries multiple sessions using json_each.
+func buildBatchQuery(query string) (string, int, error) {
+	match := reSessionBind.FindStringSubmatch(query)
+	if len(match) < 2 {
+		return "", 0, fmt.Errorf("could not find \"= :session_id\" in query")
+	}
+	col := match[1]
+
+	// Heuristic to only inject _session_id into the top-level SELECTs (handling UNION/UNION ALL),
+	// avoiding breaking subqueries like `... AND id IN (SELECT ...)`.
+	q := query
+
+	// Replace the very first SELECT
+	firstSelect := regexp.MustCompile(`(?i)^\s*SELECT\b`)
+	q = firstSelect.ReplaceAllString(q, "SELECT "+col+" AS _session_id,")
+
+	// Replace any SELECT immediately following a UNION or UNION ALL
+	unionSelect := regexp.MustCompile(`(?i)\b(UNION(?:\s+ALL)?\s+)SELECT\b`)
+	q = unionSelect.ReplaceAllString(q, "${1}SELECT "+col+" AS _session_id,")
+
+	count := 0
+	q = reSessionBind.ReplaceAllStringFunc(q, func(s string) string {
+		count++
+		return fmt.Sprintf("%s IN (SELECT value FROM json_each(?))", col)
+	})
+
+	return q, count, nil
+}
+
 // scanSQLiteSessions runs the sessions query against a DB file and returns raw rows.
 func scanSQLiteSessions(db *sql.DB, ver *VersionSpec) ([]sqliteSessionRow, error) {
 	rows, err := db.Query(ver.Sessions.Query)
@@ -360,4 +397,75 @@ func fetchSQLiteMessages(db *sql.DB, ver *VersionSpec, sessionID string) ([]Mess
 		messages = append(messages, Message{Role: role, Content: content})
 	}
 	return messages, rows.Err()
+}
+
+// fetchSQLiteMessagesBatch runs the messages query for multiple sessions.
+func fetchSQLiteMessagesBatch(db *sql.DB, ver *VersionSpec, sessionIDs []string) (map[string][]Message, error) {
+	if len(sessionIDs) == 0 {
+		return nil, nil
+	}
+
+	q, bindCount, err := buildBatchQuery(ver.Messages.Query)
+	if err != nil {
+		return nil, fmt.Errorf("build batch query: %w", err)
+	}
+
+	idsJSON, err := json.Marshal(sessionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("marshal session ids: %w", err)
+	}
+
+	args := make([]interface{}, bindCount)
+	for i := 0; i < bindCount; i++ {
+		args[i] = string(idsJSON)
+	}
+
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch messages query: %w", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("messages columns: %w", err)
+	}
+	colIdx := make(map[string]int)
+	for i, c := range cols {
+		colIdx[c] = i
+	}
+	sessionIdx := colIdx["_session_id"]
+	roleIdx := colIdx[ver.Messages.Role]
+	contentIdx := colIdx[ver.Messages.Content]
+
+	result := make(map[string][]Message, len(sessionIDs))
+
+	for rows.Next() {
+		vals := make([]sql.NullString, len(cols))
+		ptrs := make([]interface{}, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, fmt.Errorf("scan message row: %w", err)
+		}
+		sessionID := ""
+		role := ""
+		content := ""
+		if sessionIdx >= 0 {
+			sessionID = vals[sessionIdx].String
+		}
+		if roleIdx >= 0 {
+			role = vals[roleIdx].String
+		}
+		if contentIdx >= 0 {
+			content = vals[contentIdx].String
+		}
+		// Skip empty rows (per plan §6.9: warn + skip, no silent swallow).
+		if strings.TrimSpace(content) == "" {
+			continue
+		}
+		result[sessionID] = append(result[sessionID], Message{Role: role, Content: content})
+	}
+	return result, rows.Err()
 }

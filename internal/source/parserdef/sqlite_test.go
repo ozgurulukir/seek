@@ -3,6 +3,7 @@ package parserdef
 import (
 	"bytes"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -481,5 +482,128 @@ func TestMatchExclude(t *testing.T) {
 	}
 	if !found {
 		t.Error("main.db not found in results")
+	}
+}
+func TestBuildBatchQuery(t *testing.T) {
+	cases := []struct {
+		name    string
+		query   string
+		want    string
+		count   int
+		wantErr bool
+	}{
+		{
+			name:  "standard opencode",
+			query: "SELECT role, content FROM message WHERE session_id = :session_id ORDER BY time_created",
+			want:  "SELECT session_id AS _session_id, role, content FROM message WHERE session_id IN (SELECT value FROM json_each(?)) ORDER BY time_created",
+			count: 1,
+		},
+		{
+			name:  "standard copilot",
+			query: "SELECT turn_index, 1 FROM turns WHERE session_id = :session_id UNION ALL SELECT turn_index, 2 FROM turns WHERE session_id = :session_id",
+			want:  "SELECT session_id AS _session_id, turn_index, 1 FROM turns WHERE session_id IN (SELECT value FROM json_each(?)) UNION ALL SELECT session_id AS _session_id, turn_index, 2 FROM turns WHERE session_id IN (SELECT value FROM json_each(?))",
+			count: 2,
+		},
+		{
+			name:    "reversed bind (fails rewrite, falls back)",
+			query:   "SELECT role FROM message WHERE :session_id = session_id",
+			wantErr: true,
+		},
+		{
+			name:    "at bind (fails rewrite)",
+			query:   "SELECT role FROM message WHERE session_id = @session_id",
+			wantErr: true,
+		},
+		{
+			name:  "with subquery",
+			query: "SELECT role, content FROM message WHERE session_id = :session_id AND id IN (SELECT msg_id FROM tags)",
+			want:  "SELECT session_id AS _session_id, role, content FROM message WHERE session_id IN (SELECT value FROM json_each(?)) AND id IN (SELECT msg_id FROM tags)",
+			count: 1,
+		},
+		{
+			name:  "with alias",
+			query: "SELECT role FROM message m WHERE m.session_id = :session_id",
+			want:  "SELECT m.session_id AS _session_id, role FROM message m WHERE m.session_id IN (SELECT value FROM json_each(?))",
+			count: 1,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, count, err := buildBatchQuery(c.query)
+			if (err != nil) != c.wantErr {
+				t.Errorf("buildBatchQuery() error = %v, wantErr %v", err, c.wantErr)
+				return
+			}
+			if !c.wantErr {
+				if got != c.want {
+					t.Errorf("buildBatchQuery() query = %v, want %v", got, c.want)
+				}
+				if count != c.count {
+					t.Errorf("buildBatchQuery() count = %v, want %v", count, c.count)
+				}
+			}
+		})
+	}
+}
+
+func TestFetchSQLiteMessagesBatch(t *testing.T) {
+	// A simple test to cover the batch boundary.
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec("CREATE TABLE message (session_id TEXT, role TEXT, content TEXT)")
+	if err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	// Insert 600 sessions, 1 message each
+	var sessionIDs []string
+	for i := 0; i < 600; i++ {
+		sid := fmt.Sprintf("s%d", i)
+		sessionIDs = append(sessionIDs, sid)
+		db.Exec("INSERT INTO message (session_id, role, content) VALUES (?, 'user', ?)", sid, fmt.Sprintf("msg%d", i))
+	}
+
+	ver := &VersionSpec{
+		Messages: MessagesSpec{
+			Query:   "SELECT role, content FROM message WHERE session_id = :session_id",
+			Role:    "role",
+			Content: "content",
+		},
+	}
+
+	// The batch function itself doesn't chunk, syncSQLiteSessions does.
+	// But we can test it handles >500 fine up to limits (or we just pass a slice).
+	msgMap, err := fetchSQLiteMessagesBatch(db, ver, sessionIDs[:500])
+	if err != nil {
+		t.Fatalf("fetchSQLiteMessagesBatch error: %v", err)
+	}
+
+	if len(msgMap) != 500 {
+		t.Errorf("expected 500 mapped sessions, got %d", len(msgMap))
+	}
+	for i := 0; i < 500; i++ {
+		sid := fmt.Sprintf("s%d", i)
+		msgs := msgMap[sid]
+		if len(msgs) != 1 || msgs[0].Content != fmt.Sprintf("msg%d", i) {
+			t.Errorf("session %s missing or incorrect messages: %v", sid, msgs)
+		}
+	}
+
+	// Test the fallback mechanism for bad query
+	badVer := &VersionSpec{
+		Messages: MessagesSpec{
+			Query:   "SELECT role, content FROM message WHERE :session_id = session_id", // Reversed bind
+			Role:    "role",
+			Content: "content",
+		},
+	}
+	_, err = fetchSQLiteMessagesBatch(db, badVer, sessionIDs[:10])
+	if err == nil {
+		t.Error("expected error for bad query rewrite")
 	}
 }
