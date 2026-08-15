@@ -464,24 +464,33 @@ func toFTS5(q Query, a *Analyzer) (string, bool) {
 		rs, _ := toFTS5(v.Right, a)
 		op := strings.ToUpper(v.Op)
 		if op == "NOT" {
+			if ls == "" || ls == "()" || ls == `""` {
+				return fmt.Sprintf("(* NOT %s)", rs), false
+			}
 			return fmt.Sprintf("(%s NOT %s)", ls, rs), false
+		}
+		if ls == "" {
+			return rs, false
+		}
+		if rs == "" {
+			return ls, false
 		}
 		return fmt.Sprintf("(%s %s %s)", ls, op, rs), false
 	case *PhraseQuery:
-		terms := make([]string, len(v.Terms))
-		for i, t := range v.Terms {
+		var phraseTerms []string
+		for _, t := range v.Terms {
 			if a != nil {
 				analyzed := a.AnalyzeForQuery(t)
 				if len(analyzed) > 0 {
-					terms[i] = fmt.Sprintf(`"%s"`, analyzed[0])
+					phraseTerms = append(phraseTerms, analyzed[0])
 				} else {
-					terms[i] = fmt.Sprintf(`"%s"`, t)
+					phraseTerms = append(phraseTerms, t)
 				}
 			} else {
-				terms[i] = fmt.Sprintf(`"%s"`, t)
+				phraseTerms = append(phraseTerms, t)
 			}
 		}
-		return strings.Join(terms, " "), false
+		return fmt.Sprintf(`"%s"`, strings.Join(phraseTerms, " ")), false
 	case *PrefixQuery:
 		if a != nil {
 			analyzed := a.AnalyzeForQuery(v.Prefix)

@@ -436,7 +436,7 @@ func (s *Store) rebuildFTSFromDocuments() error {
 	// One pass: stream (doc_id, title, chunk_seq, chunk_content) ordered so
 	// all chunks of a document arrive together and in seq order.
 	rows, err := s.db.Query(
-		`SELECT d.id, d.title, ch.seq, ch.content
+		`SELECT d.id, d.title, ch.seq, ch.content, ch.content_zstd
 		   FROM documents d
 		   LEFT JOIN chunks ch ON ch.document_id = d.id
 		  ORDER BY d.id, ch.seq`,
@@ -467,12 +467,13 @@ func (s *Store) rebuildFTSFromDocuments() error {
 
 	for rows.Next() {
 		var (
-			id      int64
-			title   string
-			seq     sql.NullInt64
-			content sql.NullString
+			id          int64
+			title       string
+			seq         sql.NullInt64
+			content     sql.NullString
+			contentZstd []byte
 		)
-		if err := rows.Scan(&id, &title, &seq, &content); err != nil {
+		if err := rows.Scan(&id, &title, &seq, &content, &contentZstd); err != nil {
 			return err
 		}
 		if !started || id != curID {
@@ -481,11 +482,20 @@ func (s *Store) rebuildFTSFromDocuments() error {
 			}
 			curID, curTitle, started = id, title, true
 		}
-		if content.Valid && content.String != "" {
+		text := ""
+		if len(contentZstd) > 0 {
+			decomp, err := DecompressString(contentZstd)
+			if err == nil {
+				text = decomp
+			}
+		} else if content.Valid {
+			text = content.String
+		}
+		if text != "" {
 			if b.Len() > 0 {
 				b.WriteByte('\n')
 			}
-			b.WriteString(content.String)
+			b.WriteString(text)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -628,6 +638,8 @@ func (s *Store) ListCollections() ([]Collection, error) {
 }
 
 func (s *Store) DeleteCollection(id int64) error {
+	// Delete fast_fields for documents in this collection
+	_, _ = s.db.Exec(`DELETE FROM fast_fields WHERE doc_id IN (SELECT id FROM documents WHERE collection_id = ?)`, id)
 	// Delete FTS entries for documents in this collection
 	_, err := s.db.Exec(`DELETE FROM documents_fts WHERE rowid IN (SELECT id FROM documents WHERE collection_id = ?)`, id)
 	if err != nil {
@@ -700,8 +712,9 @@ func (s *Store) ListDocumentPaths(collectionID int64) (map[string]int64, error) 
 	return m, nil
 }
 
-// DeleteDocument removes a document and its chunks/FTS entries.
+// DeleteDocument removes a document and its chunks/FTS/fast_field entries.
 func (s *Store) DeleteDocument(docID int64) error {
+	_, _ = s.db.Exec(`DELETE FROM fast_fields WHERE doc_id = ?`, docID)
 	if _, err := s.db.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
 		return fmt.Errorf("delete fts entry: %w", err)
 	}
@@ -1120,10 +1133,12 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) [
 		}
 	}
 
-	// Preserve HNSW ordering
-	out := make([]SearchResult, len(results))
-	for i, r := range results {
-		out[i] = resultMap[r.ChunkID]
+	// Preserve HNSW ordering while excluding chunks that failed filters or were deleted
+	out := make([]SearchResult, 0, len(results))
+	for _, r := range results {
+		if res, ok := resultMap[r.ChunkID]; ok && res.DocumentID != 0 {
+			out = append(out, res)
+		}
 	}
 	return out
 }

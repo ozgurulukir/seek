@@ -158,6 +158,23 @@ func (idx *Indexer) syncConversation(
 		return err
 	}
 
+	diskPaths := make(map[string]bool, len(files))
+	for _, f := range files {
+		diskPaths[f.Path] = true
+	}
+	if existingPaths, err := idx.db.ListDocumentPaths(col.ID); err == nil {
+		removed := 0
+		for path, docID := range existingPaths {
+			if !diskPaths[path] {
+				idx.db.DeleteDocument(docID)
+				removed++
+			}
+		}
+		if removed > 0 {
+			idx.log.Printf("  Removed %d stale conversations\n", removed)
+		}
+	}
+
 	var indexed, skipped, totalImages, failed int
 
 	for _, f := range files {

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/google/renameio"
 )
 
 type EmbeddingConfig struct {
@@ -273,7 +275,7 @@ func Save(cfg Config) error {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(dir, "config.yaml"), data, 0600)
+	return renameio.WriteFile(filepath.Join(dir, "config.yaml"), data, 0600)
 }
 
 // expandEnv resolves $VAR and ${VAR} references anywhere in a string.

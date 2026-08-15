@@ -19,7 +19,7 @@ func expandTilde(p string) string {
 		home, _ := os.UserHomeDir()
 		return home
 	}
-	if strings.HasPrefix(p, "~/") {
+	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
 		home, _ := os.UserHomeDir()
 		return filepath.Join(home, p[2:])
 	}
@@ -52,13 +52,14 @@ func matchGlob(patterns, excludes []string) ([]string, error) {
 
 func isExcluded(path string, excludes []string) bool {
 	base := filepath.Base(path)
+	slashPath := filepath.ToSlash(path)
 	for _, ex := range excludes {
 		matched, _ := filepath.Match(ex, base)
 		if matched {
 			return true
 		}
 		// Also match against full path (exclude patterns may include dirs).
-		matched, _ = filepath.Match(ex, path)
+		matched, _ = filepath.Match(ex, slashPath)
 		if matched {
 			return true
 		}

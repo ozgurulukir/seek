@@ -59,12 +59,13 @@ func TestToFTS5(t *testing.T) {
 		wantFuzzy bool
 	}{
 		{&TermQuery{Value: "hello"}, "hello", false},
-		{&PhraseQuery{Terms: []string{"hello", "world"}}, `"hello" "world"`, false},
+		{&PhraseQuery{Terms: []string{"hello", "world"}}, `"hello world"`, false},
 		{&PrefixQuery{Prefix: "hel"}, "hel*", false},
 		{&FuzzyQuery{Term: "hello", N: 2}, "hello*", true},
 		{&FieldQuery{Field: "title", Query: &TermQuery{Value: "hello"}}, "title:hello", false},
 		{&NearQuery{Terms: []string{"hello", "world"}, N: 5}, "NEAR(hello world, 5)", false},
 		{&BooleanQuery{Left: &TermQuery{Value: "a"}, Op: "AND", Right: &TermQuery{Value: "b"}}, "(a AND b)", false},
+		{&BooleanQuery{Left: &TermQuery{Value: ""}, Op: "NOT", Right: &TermQuery{Value: "b"}}, "(* NOT b)", false},
 	}
 
 	for _, tt := range tests {
@@ -236,8 +237,8 @@ func TestToFTS5WithAnalyzer(t *testing.T) {
 		{nil, "", false},
 		{&TermQuery{Value: "running"}, "run*", false},
 		{&TermQuery{Value: "the"}, "the", false},
-		{&PhraseQuery{Terms: []string{"running", "jumps"}}, `"run*" "jump*"`, false},
-		{&PhraseQuery{Terms: []string{"the", "running"}}, `"the" "run*"`, false},
+		{&PhraseQuery{Terms: []string{"running", "jumps"}}, `"run* jump*"`, false},
+		{&PhraseQuery{Terms: []string{"the", "running"}}, `"the run*"`, false},
 		{&PrefixQuery{Prefix: "running"}, "run*", false},
 		{&PrefixQuery{Prefix: "the"}, "the*", false},
 		{&FuzzyQuery{Term: "running", N: 2}, "run*", true},

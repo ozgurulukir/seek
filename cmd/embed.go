@@ -62,6 +62,13 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
 		if err := c.embedWithVL(cfg, db, textChunks, imageChunks); err != nil {
 			return err
 		}
+		if vectorIndex {
+			fmt.Println("Syncing vector index...")
+			if err := db.SyncVectorIndex(); err != nil {
+				fmt.Printf("  WARN: vector index sync: %v\n", err)
+			}
+		}
+		return nil
 	} else if len(imageChunks) > 0 {
 		fmt.Printf("  WARNING: %d image chunks skipped (model %q does not support multimodal)\n", len(imageChunks), cfg.Config.Embedding.Model)
 		fmt.Println("  To embed images, set model to qwen3-vl-embedding in config")
