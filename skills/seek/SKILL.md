@@ -73,7 +73,7 @@ seek search "conceptual question" --vec -l 10
     context: the dialog layout is broken, content overflows...
 ```
 
-- Results include clickable line spans like `path/to/file.go:L10-L45` for instant IDE/agent jumping.
+- Results include exact line spans like `path/to/file.go:L10-L45` for instant IDE/agent jumping and referencing.
 - Pass `-C 1` or `-C 2` to expand surrounding chunk context before and after matching lines.
 - `collection-name` tells you which collection the result came from (run `seek status` to see all)
 - For conversation results, the title is the first user message

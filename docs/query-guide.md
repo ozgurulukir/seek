@@ -63,7 +63,7 @@ seek search "layout error" --chunk-type image
 
 ## 📍 Precision Source Addressing & Context Expansion (`-C`)
 
-### 1. Clickable Line Spans
+### 1. Precise 1-Based Line Spans
 Search outputs exact 1-based start and end line ranges (`path/to/file.go:L25-L68`), enabling immediate IDE and AI agent navigation.
 
 ### 2. Surrounding Context Expansion (`-C` / `--context`)

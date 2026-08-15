@@ -6,7 +6,7 @@
 - 🔍 **Hybrid Fusion Search:** SQLite FTS5 (BM25) + HNSW Vector Search + RRF (Reciprocal Rank Fusion)
 - 💻 **Source Code & Notes:** 35+ programming languages (`.gitignore`-aware), Markdown, PDFs, and rich documents
 - 🤖 **AI Agent Memory:** Claude Code, Codex, Opencode, and Copilot CLI sessions (including multimodal screenshots)
-- 🎯 **Precision Source Addressing:** Clickable 1-based line ranges (`file.go:L25-L68`) with surrounding context expansion (`-C 1`)
+- 🎯 **Precision Source Addressing:** Precise 1-based line ranges (`file.go:L25-L68`) with surrounding context expansion (`-C 1`)
 - ⚡ **100% Local / Offline Support:** Zero cloud keys required; optionally supercharged with local Ollama (`nomic-embed-text`) and FlashRank (`ms-marco-TinyBERT`)
 - 🧠 **Cross-Encoder Re-ranking:** Config-driven reranking via FlashRank, BGE-Reranker, Cohere, or Jina
 
