@@ -31,6 +31,7 @@ type AddCmd struct {
 	// (builtin or xberg); xberg is the typical choice since it supports 100+
 	// formats. See --backend and the [extractor] config section.
 	Documents bool `help:"Add a documents directory via the extraction backend (docx/xlsx/pptx/epub/html/...)"`
+	Docs      bool `help:"Shortcut alias for --documents"`
 
 	// Backend overrides the extraction backend for this command (builtin|xberg).
 	// Empty uses the config default (config.Extractor.Backend). Affects how PDF
@@ -74,7 +75,7 @@ func (c *AddCmd) Run(cfg *config.AppConfig) error {
 	if c.Code {
 		return c.addCode(cfg, db)
 	}
-	if c.Documents {
+	if c.Documents || c.Docs {
 		return c.addDocuments(cfg, db)
 	}
 
