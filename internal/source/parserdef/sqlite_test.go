@@ -1,9 +1,9 @@
 package parserdef
 
 import (
-	"fmt"
 	"bytes"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -513,6 +513,12 @@ func TestBuildBatchQuery(t *testing.T) {
 			name:    "at bind (fails rewrite)",
 			query:   "SELECT role FROM message WHERE session_id = @session_id",
 			wantErr: true,
+		},
+		{
+			name:  "with subquery",
+			query: "SELECT role, content FROM message WHERE session_id = :session_id AND id IN (SELECT msg_id FROM tags)",
+			want:  "SELECT session_id AS _session_id, role, content FROM message WHERE session_id IN (SELECT value FROM json_each(?)) AND id IN (SELECT msg_id FROM tags)",
+			count: 1,
 		},
 		{
 			name:  "with alias",

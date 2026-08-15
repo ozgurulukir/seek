@@ -280,9 +280,17 @@ func buildBatchQuery(query string) (string, int, error) {
 	}
 	col := match[1]
 
-	q := reSelect.ReplaceAllStringFunc(query, func(s string) string {
-		return s + " " + col + " AS _session_id,"
-	})
+	// Heuristic to only inject _session_id into the top-level SELECTs (handling UNION/UNION ALL),
+	// avoiding breaking subqueries like `... AND id IN (SELECT ...)`.
+	q := query
+
+	// Replace the very first SELECT
+	firstSelect := regexp.MustCompile(`(?i)^\s*SELECT\b`)
+	q = firstSelect.ReplaceAllString(q, "SELECT "+col+" AS _session_id,")
+
+	// Replace any SELECT immediately following a UNION or UNION ALL
+	unionSelect := regexp.MustCompile(`(?i)\b(UNION(?:\s+ALL)?\s+)SELECT\b`)
+	q = unionSelect.ReplaceAllString(q, "${1}SELECT "+col+" AS _session_id,")
 
 	count := 0
 	q = reSessionBind.ReplaceAllStringFunc(q, func(s string) string {
@@ -449,7 +457,7 @@ func fetchSQLiteMessagesBatch(db *sql.DB, ver *VersionSpec, sessionIDs []string)
 	roleIdx := colIdx[ver.Messages.Role]
 	contentIdx := colIdx[ver.Messages.Content]
 
-	result := make(map[string][]Message)
+	result := make(map[string][]Message, len(sessionIDs))
 
 	for rows.Next() {
 		vals := make([]sql.NullString, len(cols))

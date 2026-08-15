@@ -181,7 +181,7 @@ func syncSQLiteSessions(src *SourceSpec, ver *VersionSpec, files []string, since
 			}
 		}
 
-		if len(batchIDs) > 0 && !ver.Messages.Inline {
+		if len(batchIDs) > 0 {
 			msgMap, mErr := fetchSQLiteMessagesBatch(db, ver, batchIDs)
 			if mErr != nil {
 				// Fallback to individual fetches on batch query failure
