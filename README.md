@@ -41,6 +41,7 @@ cp -r skills/seek ~/.agents/skills/seek
 ```bash
 # No config, no API key — just start indexing
 seek add ~/notes --name mynotes            # markdown
+seek add ~/projects/myrepo --code          # source code (Go, Rust, Python, TS, etc.)
 seek add --claude                          # Claude Code conversations
 seek add --codex                           # Codex sessions
 seek add --opencode                        # opencode CLI sessions
@@ -88,19 +89,97 @@ seek embed                                 # backfills vectors for existing chun
 # Now `seek search "query"` uses hybrid (BM25 + vector) automatically
 ```
 
-### Choosing an embedding provider
+### Simplest 100% Local Setup (Ollama — Free, Private, Offline)
+
+If you want semantic search without cloud API keys or internet access:
+
+1. **Pull the model** (one-time):
+   ```bash
+   ollama pull nomic-embed-text
+   ```
+2. **Set your `~/.config/seek/config.yaml`**:
+   ```yaml
+   embedding:
+     base_url: http://localhost:11434/v1
+     api_key: ollama
+     model: nomic-embed-text
+     dimensions: 768
+   ```
+3. Run `seek embed` — vectors will be generated 100% locally on your machine.
+
+---
+
+### Choosing an Embedding Provider (Any OpenAI-Compatible Endpoint)
+
+`seek` works with **any OpenAI-compatible embedding endpoint** (`POST {base_url}/embeddings`) — both cloud APIs and local/self-hosted servers:
 
 ```bash
 seek auth login
-# DashScope (default, qwen3-embeddings, free tier available):
-#   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-# OpenAI:
-#   base_url: https://api.openai.com/v1
-# Local (Ollama, vLLM, etc.):
-#   base_url: http://localhost:11434/v1
 ```
 
-> **Note:** `dimensions` is fixed at index time. If you later change models or dimensions, run `seek rm <collection>` then `seek add` to rebuild, and `seek embed` again.
+Or configure directly in `~/.config/seek/config.yaml`:
+
+```yaml
+# --- Example 1: OpenAI (Cloud) ---
+embedding:
+  base_url: https://api.openai.com/v1
+  api_key: ${OPENAI_API_KEY}
+  model: text-embedding-3-small
+  dimensions: 1536              # text-embedding-3-small supports 1536 (default) or 1024
+
+# --- Example 2: Alibaba Cloud DashScope (Default Multimodal) ---
+# embedding:
+#   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+#   api_key: ${DASHSCOPE_API_KEY}
+#   model: text-embedding-v3
+#   dimensions: 1024
+
+# --- Example 3: Local Ollama (100% Offline & Private, Free) ---
+# embedding:
+#   base_url: http://localhost:11434/v1
+#   api_key: ollama             # any non-empty string for local servers
+#   model: nomic-embed-text     # run: ollama pull nomic-embed-text
+#   dimensions: 768             # nomic-embed-text outputs 768 dimensions
+
+# --- Example 4: Local vLLM / TEI / LM Studio / LocalAI ---
+# embedding:
+#   base_url: http://localhost:8000/v1
+#   api_key: unused
+#   model: BAAI/bge-m3
+#   dimensions: 1024            # bge-m3 outputs 1024 dimensions
+```
+
+#### Embedding Models & Providers Comparison
+
+| Provider / Model | Dimensions | Modality | Environment | Speed / Latency (CPU) | Code Search Support | Best For |
+|---|---|---|---|---|---|---|
+| **`nomic-embed-text`** (Ollama) | **768** | Text | Local (Ollama) | ~8–15 ms | **Good** (8K context window) | Simplest 1-click local & offline setup |
+| **`BAAI/bge-m3`** (Local/TEI) | **1024** | Text / Multi | Local / Self-hosted | ~20–40 ms | **Exceptional** (100+ PLs & NLs) | SOTA local code, dense+sparse hybrid |
+| **`text-embedding-3-small`** (OpenAI) | **1536** / 1024 | Text | Cloud API | ~60–100 ms | **High** | High accuracy general cloud embedding |
+| **`qwen3-vl-embedding`** (DashScope) | **1024** | Multimodal (Text + Images) | Cloud API | ~100–180 ms | **High** | Visual search, PDFs & screenshot matching |
+| **`text-embedding-v3`** (DashScope) | **1024** | Text | Cloud API | ~50–90 ms | **High** | Balanced default text embeddings |
+| **`all-MiniLM-L6-v2`** (Local) | **384** | Text | Local CPU / Edge | ~2–5 ms | **Basic** | Ultra-lightweight & low-resource devices |
+
+### Optional: Supercharging with Re-ranking (Local FlashRank / Cloud)
+
+For deeper semantic precision (~15–25% boost over pure embeddings), you can optionally turn on Cross-Encoder re-ranking:
+
+```yaml
+# 100% Local & Fast: FlashRank / TEI with bge-reranker-small or MiniLM (CPU-friendly, ~5-15ms)
+rerank:
+  enabled: true
+  base_url: http://localhost:8000/v1   # local FlashRank / TEI server
+  api_key: local
+  model: bge-reranker-small            # or ms-marco-MiniLM-L-12-v2
+  top_n: 10
+```
+
+> See [Re-ranking Models Comparison](#re-ranking-models-comparison) for benchmarks across `bge-reranker-small`, `bge-reranker-v2-m3`, `Cohere`, and `Jina`.
+
+> [!IMPORTANT]
+> **Vector Dimensions Matching:**
+> The `dimensions` setting in `config.yaml` **must exactly match** the output dimension of your chosen model (e.g. `1536` for OpenAI small, `768` for Nomic, `1024` for BGE-M3 / DashScope, `384` for MiniLM).
+> `dimensions` is fixed per chunk at index time and defines the vector index layout. If you later switch to a model with a different dimension, run `seek rm <collection>`, `seek add`, and `seek embed` to rebuild the vector index.
 
 ## Setup
 
@@ -225,8 +304,13 @@ seek search "ECONNREFUSED port 3000" --lex
 # Vector semantic search (meaning-based)
 seek search "functional programming architecture" --vec
 
+# Precision Source Addressing & Context Expansion
+seek search "handleRequest" --repo seek              # outputs file.go:L25-L68
+seek search "handleRequest" -C 1                     # expands 1 chunk before & after for context
+
 # Filtered search
 seek search "error" --collection mynotes --doc-type markdown
+seek search "conn" --repo myproject --lang go        # code collection filtering
 seek search "meeting" --after 2024-01-01 --before 2024-12-31
 seek search "image" --chunk-type image
 seek search "doc" --path "docs/*.md"
@@ -295,7 +379,8 @@ This writes a `Stop` hook into `~/.claude/settings.json` so `seek sync` runs aut
 
 **Filters** — Narrow results by:
 - `--collection <name>`: collection name
-- `--doc-type <type>`: document type (markdown, claude, codex, images, pdf, parser)
+- `--doc-type <type>`: document type (markdown, claude, codex, images, pdf, documents, parser, code)
+- `--lang <language>`: programming language for code collections (e.g. `go`, `python`, `typescript`)
 - `--after <date>` / `--before <date>`: date range (RFC3339)
 - `--chunk-type <type>`: chunk type (text, image)
 - `--path <pattern>`: path pattern (GLOB syntax)
@@ -314,13 +399,51 @@ This writes a `Stop` hook into `~/.claude/settings.json` so `seek sync` runs aut
 
 **Tokenization** — Query-time analysis supports English and Turkish stemming (Snowball) with stop-word removal. Stemmed terms are expanded with `*` prefix for FTS5 matching, so "running" → "run*" matches both "run" and "running". Index-time tokenization uses FTS5's `unicode61` with `remove_diacritics 2`, which enables full Unicode case-folding — Turkish `İ/ı`, `ç/ğ/ş/ü/ö` and other Latin diacritics are normalized consistently at index and query time. Changing the tokenizer triggers a one-time automatic rebuild of the FTS index on the next `seek` invocation.
 
-**Ranking** — BM25 results are weighted by column: title matches count 10× body matches (`bm25(documents_fts, 10.0, 1.0)`), so documents whose *title* matches the query rank above body-only matches.
+**Ranking & Cross-Encoder Re-ranking** — BM25 results are weighted by column: title matches count 10× body matches (`bm25(documents_fts, 10.0, 1.0)`). When `rerank.enabled: true` is configured in `config.yaml`, the search engine automatically re-scores candidate hits using a cross-encoder model before returning the top results.
+
+- **Bi-Encoder (Embedding)** generates vectors independently for speed.
+- **Cross-Encoder (Re-ranker)** evaluates query + document pairs together with full attention layers, providing deep semantic relevance and a significant accuracy boost (~15–25% NDCG).
+- **Local & Offline (FlashRank / TEI / LocalAI):** Use lightweight models like `bge-reranker-small` or `ms-marco-MiniLM-L-12-v2` (~25–90 MB, CPU-friendly, 5–15 ms latency, zero external API calls).
+- **Cloud APIs:** Any endpoint supporting standard `POST /rerank` (DashScope, Cohere, Jina, SiliconFlow, or self-hosted TEI).
+
+```yaml
+# --- Example 1: Local Offline Re-ranking (FlashRank / TEI / LocalAI) ---
+# Ultra-fast, runs on CPU with zero API keys or cloud dependencies:
+rerank:
+  enabled: true
+  base_url: http://localhost:8000/v1
+  api_key: local                       # any string for local servers
+  model: bge-reranker-small            # or ms-marco-MiniLM-L-12-v2
+  top_n: 10
+
+# --- Example 2: Cloud / High-Precision Re-ranking (BGE-Large / Cohere / Jina / DashScope) ---
+# rerank:
+#   enabled: true
+#   base_url: https://api.openai.com/v1   # or https://api.cohere.com/v1 / DashScope
+#   api_key: ${RERANK_API_KEY}
+#   model: bge-reranker-large            # or rerank-v3.5 / jina-reranker-v2
+#   top_n: 10
+```
+
+#### Re-ranking Models Comparison
+
+| Model | Parameters | Size (Disk / RAM) | Environment | Latency (CPU) | Code Search Support | Best For |
+|---|---|---|---|---|---|---|
+| **`bge-reranker-v2-m3`** | ~560M | ~560 MB (ONNX) / ~1.1 GB | Local GPU / Fast CPU | ~35–80 ms | **Exceptional** (100+ PLs & NLs) | SOTA multi-language & source code search |
+| **`jina-reranker-v2-base`** | ~278M | ~300 MB / API | Local / Cloud API | ~30–70 ms | **High** (Code + 8K Context) | Large function bodies, repo search & API matching |
+| **`bge-reranker-small`** | ~24M–45M | ~25 MB (ONNX) / ~90 MB | Local CPU (FlashRank/TEI) | ~5–15 ms | **Good** (General code + text) | Ultra-fast local desktop search, zero lag, private |
+| **`bge-reranker-large`** | ~330M–560M | ~300 MB (Quant) / ~1.3 GB | Local GPU / Cloud | ~50–150 ms | **Very High** | High-precision multi-lingual & technical docs |
+| **`ms-marco-MiniLM-L-12-v2`** | ~33M | ~30 MB (ONNX) / ~120 MB | Local CPU (FlashRank) | ~8–20 ms | **Basic** (Text prioritized) | Lightweight local keyword & English text ranking |
+| **`cohere-rerank-v3.5`** | Cloud API | Remote API | Cloud Endpoint | ~100–250 ms | **High** (Code & Docs) | Zero local compute, large context windows |
+
+**Precision Source Addressing & Context Expansion** — Search results output exact 1-based source line ranges (`path/to/file.go:L25-L68`), enabling immediate IDE and AI navigation. Using `-C N` / `--context N` automatically expands surrounding chunk windows before and after match hits for complete code context.
 
 ## Collections
 
 | Type | Source | What's indexed |
 |---|---|---|
 | `markdown` | Any directory | `.md` files, FTS + chunks + embeddings |
+| `code` | Any directory / repo | 35+ languages (Go, Rust, Python, TS, etc.), `.gitignore`-aware, structural chunks + fastfields |
 | `claude` | `~/.claude/projects/` | All Claude Code conversations + screenshots |
 | `codex` | `~/.codex/` | All Codex sessions + screenshots |
 | `images` | Any directory | Image files (png/jpg/webp) with VL embedding |

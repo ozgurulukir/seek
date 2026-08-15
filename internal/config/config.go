@@ -42,6 +42,17 @@ type OCRConfig struct {
 	Model   string `yaml:"model,omitempty"`
 }
 
+// RerankConfig configures optional cross-encoder reranking.
+// If enabled is true in config, search queries automatically rerank top candidate
+// hits before returning results.
+type RerankConfig struct {
+	Enabled bool   `yaml:"enabled,omitempty"`
+	BaseURL string `yaml:"base_url,omitempty"`
+	APIKey  string `yaml:"api_key,omitempty"`
+	Model   string `yaml:"model,omitempty"`
+	TopN    int    `yaml:"top_n,omitempty"`
+}
+
 // SearchConfig configures the search engine behavior.
 type SearchConfig struct {
 	// QueryMode is the default query parsing mode: "raw" (FTS5 MATCH passthrough)
@@ -111,6 +122,7 @@ type ExtractorConfig struct {
 type Config struct {
 	Embedding    EmbeddingConfig   `yaml:"embedding"`
 	OCR          OCRConfig         `yaml:"ocr,omitempty"`
+	Rerank       RerankConfig      `yaml:"rerank,omitempty"`
 	Search       SearchConfig      `yaml:"search,omitempty"`
 	Filters      FilterConfig      `yaml:"filters,omitempty"`
 	Aggregations AggregationConfig `yaml:"aggregations,omitempty"`
@@ -194,6 +206,7 @@ func Load() (*AppConfig, error) {
 	// Resolve env vars in api_key (e.g. ${DASHSCOPE_API_KEY})
 	ac.Config.Embedding.APIKey = expandEnv(ac.Config.Embedding.APIKey)
 	ac.Config.OCR.APIKey = expandEnv(ac.Config.OCR.APIKey)
+	ac.Config.Rerank.APIKey = expandEnv(ac.Config.Rerank.APIKey)
 
 	// OCR falls back to the embedding provider when not explicitly set.
 	if ac.Config.OCR.BaseURL == "" {
@@ -204,6 +217,20 @@ func Load() (*AppConfig, error) {
 	}
 	if ac.Config.OCR.Model == "" {
 		ac.Config.OCR.Model = DefaultOCRModel
+	}
+
+	// Rerank falls back to the embedding provider's baseURL/APIKey if empty
+	if ac.Config.Rerank.BaseURL == "" {
+		ac.Config.Rerank.BaseURL = ac.Config.Embedding.BaseURL
+	}
+	if ac.Config.Rerank.APIKey == "" {
+		ac.Config.Rerank.APIKey = ac.Config.Embedding.APIKey
+	}
+	if ac.Config.Rerank.Model == "" {
+		ac.Config.Rerank.Model = DefaultRerankModel
+	}
+	if ac.Config.Rerank.TopN == 0 {
+		ac.Config.Rerank.TopN = DefaultRerankTopN
 	}
 
 	// Extractor defaults: fill any unset field. BaseURL may embed env vars

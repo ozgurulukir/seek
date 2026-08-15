@@ -22,6 +22,8 @@ type Chunk struct {
 	Content   string    // text content or context for image
 	Type      ChunkType // ChunkText or ChunkImage
 	ImagePath string    // path to image file on disk (for image chunks)
+	StartLine int       // 1-based start line in source document
+	EndLine   int       // 1-based end line in source document
 }
 
 // ChunkMarkdown splits markdown content into chunks by headers, then by size.
@@ -59,7 +61,7 @@ func ChunkMarkdown(content string, maxSize, overlap int) []Chunk {
 		}
 	}
 
-	return chunks
+	return AssignLineNumbers(content, chunks)
 }
 
 // ChunkConversation splits conversation text into chunks.
@@ -91,6 +93,52 @@ func ChunkConversation(content string, maxSize int) []Chunk {
 		}
 	}
 
+	return AssignLineNumbers(content, chunks)
+}
+
+// AssignLineNumbers computes 1-based start and end line numbers for each chunk within content.
+func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
+	if len(chunks) == 0 {
+		return chunks
+	}
+	normContent := strings.ReplaceAll(fullContent, "\r\n", "\n")
+	lines := strings.Split(normContent, "\n")
+	totalLines := len(lines)
+	if totalLines == 0 {
+		totalLines = 1
+	}
+
+	searchPos := 0
+	for i := range chunks {
+		cText := strings.TrimSpace(chunks[i].Content)
+		if cText == "" {
+			chunks[i].StartLine = 1
+			chunks[i].EndLine = 1
+			continue
+		}
+		firstLine := strings.TrimSpace(strings.SplitN(cText, "\n", 2)[0])
+		chunkLineCount := strings.Count(cText, "\n") + 1
+
+		startLine := searchPos + 1
+		for j := searchPos; j < len(lines); j++ {
+			trimmedLine := strings.TrimSpace(lines[j])
+			if trimmedLine == firstLine || (len(firstLine) > 5 && strings.Contains(trimmedLine, firstLine)) {
+				startLine = j + 1
+				searchPos = j
+				break
+			}
+		}
+
+		endLine := startLine + chunkLineCount - 1
+		if endLine > totalLines {
+			endLine = totalLines
+		}
+		if startLine < 1 {
+			startLine = 1
+		}
+		chunks[i].StartLine = startLine
+		chunks[i].EndLine = endLine
+	}
 	return chunks
 }
 

@@ -44,6 +44,11 @@ const (
 	// DefaultOCRModel is the default model for OCR extraction.
 	DefaultOCRModel = "qwen-vl-ocr"
 
+	// DefaultRerankModel is the default model for cross-encoder reranking.
+	DefaultRerankModel = "bge-reranker-large"
+	// DefaultRerankTopN is the default number of candidate hits to rerank.
+	DefaultRerankTopN = 10
+
 	// DefaultQueryMode is the default query parsing mode.
 	DefaultQueryMode = "parsed"
 	// DefaultSearchLimit is the default search result limit.

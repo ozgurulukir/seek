@@ -24,6 +24,7 @@ const (
 	CollectionTypePDF       CollectionType = "pdf"
 	CollectionTypeParser    CollectionType = "parser"
 	CollectionTypeDocuments CollectionType = "documents"
+	CollectionTypeCode      CollectionType = "code"
 )
 
 // FTSTokenize is the FTS5 unicode61 tokenizer configuration.
@@ -141,8 +142,8 @@ func (f *PathFilter) ToSQL() (string, []interface{}) {
 	if strings.Contains(f.Pattern, "..") {
 		return "", nil
 	}
-	cleaned := filepath.Clean(f.Pattern)
-	return "d.path GLOB ?", []interface{}{cleaned}
+	cleaned := filepath.ToSlash(filepath.Clean(f.Pattern))
+	return "replace(d.path, '\\', '/') GLOB ?", []interface{}{cleaned}
 }
 
 // FastFieldFilter filters documents by a fast-field value (e.g. workspace).
@@ -196,12 +197,15 @@ type Chunk struct {
 	Embedding  []float32
 	ChunkType  ChunkType
 	ImagePath  string // path to image file on disk (for image chunks)
+	StartLine  int
+	EndLine    int
 	CreatedAt  string
 }
 
 type SearchResult struct {
 	DocumentID int64
 	ChunkID    int64
+	Seq        int
 	Title      string
 	Path       string
 	Collection string
@@ -209,6 +213,8 @@ type SearchResult struct {
 	Score      float64
 	ChunkType  ChunkType
 	ImagePath  string // non-empty for image chunks
+	StartLine  int
+	EndLine    int
 }
 
 func Open(dbPath string) (*Store, error) {
@@ -342,6 +348,8 @@ func (s *Store) migrate() error {
 		`ALTER TABLE collections ADD COLUMN parser_name TEXT`,
 		`ALTER TABLE collections ADD COLUMN parser_version INTEGER DEFAULT 0`,
 		`ALTER TABLE collections ADD COLUMN backend TEXT`,
+		`ALTER TABLE chunks ADD COLUMN start_line INTEGER DEFAULT 0`,
+		`ALTER TABLE chunks ADD COLUMN end_line INTEGER DEFAULT 0`,
 	}
 	for _, stmt := range alterStmts {
 		s.execIgnoreDuplicate(stmt)
@@ -654,7 +662,8 @@ func (s *Store) GetDocument(collectionID int64, path string) (*Document, error) 
 
 func (s *Store) UpsertDocument(collectionID int64, path, title, contentHash string, mtime float64, lineCount int) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.Exec(
+	var id int64
+	err := s.db.QueryRow(
 		`INSERT INTO documents (collection_id, path, title, content_hash, mtime, line_count, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(collection_id, path) DO UPDATE SET
@@ -662,19 +671,12 @@ func (s *Store) UpsertDocument(collectionID int64, path, title, contentHash stri
 		   content_hash = excluded.content_hash,
 		   mtime = excluded.mtime,
 		   line_count = excluded.line_count,
-		   updated_at = excluded.updated_at`,
+		   updated_at = excluded.updated_at
+		 RETURNING id`,
 		collectionID, path, title, contentHash, mtime, lineCount, now, now,
-	)
+	).Scan(&id)
 	if err != nil {
 		return 0, err
-	}
-	id, _ := res.LastInsertId()
-	// If it was an update, we need to get the actual ID
-	if id == 0 {
-		err = s.db.QueryRow(`SELECT id FROM documents WHERE collection_id = ? AND path = ?`, collectionID, path).Scan(&id)
-		if err != nil {
-			return 0, err
-		}
 	}
 	return id, nil
 }
@@ -774,6 +776,12 @@ func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]Search
 		if err := rows.Scan(&r.DocumentID, &r.Title, &r.Path, &r.Collection, &r.Content, &r.Score); err != nil {
 			return nil, err
 		}
+		// Populate line numbers from first chunk if available
+		var sLine, eLine int
+		if err := s.db.QueryRow(`SELECT COALESCE(start_line, 0), COALESCE(end_line, 0) FROM chunks WHERE document_id = ? ORDER BY seq ASC LIMIT 1`, r.DocumentID).Scan(&sLine, &eLine); err == nil {
+			r.StartLine = sLine
+			r.EndLine = eLine
+		}
 		results = append(results, r)
 	}
 	return results, nil
@@ -787,6 +795,11 @@ func (s *Store) DeleteChunksForDocument(docID int64) error {
 }
 
 func (s *Store) InsertChunk(docID int64, seq int, content string, embedding []float32) error {
+	return s.InsertChunkWithLines(docID, seq, content, 0, 0, embedding)
+}
+
+// InsertChunkWithLines inserts a chunk with line range metadata.
+func (s *Store) InsertChunkWithLines(docID int64, seq int, content string, startLine, endLine int, embedding []float32) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	var contentZstd []byte
 	var err error
@@ -797,10 +810,65 @@ func (s *Store) InsertChunk(docID int64, seq int, content string, embedding []fl
 		}
 	}
 	_, err = s.db.Exec(
-		`INSERT INTO chunks (document_id, seq, content, content_zstd, embedding, chunk_type, image_path, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
-		docID, seq, content, contentZstd, encodeEmbedding(embedding), ChunkTypeText, now,
+		`INSERT INTO chunks (document_id, seq, content, content_zstd, embedding, chunk_type, image_path, start_line, end_line, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+		docID, seq, content, contentZstd, encodeEmbedding(embedding), ChunkTypeText, startLine, endLine, now,
 	)
 	return err
+}
+
+// GetSurroundingContext fetches adjacent chunks within radius for a document and returns the combined content with expanded line span.
+func (s *Store) GetSurroundingContext(docID int64, seq int, radius int) (string, int, int, error) {
+	if radius <= 0 {
+		radius = 0
+	}
+	minSeq := seq - radius
+	if minSeq < 0 {
+		minSeq = 0
+	}
+	maxSeq := seq + radius
+
+	rows, err := s.db.Query(
+		`SELECT seq, content, content_zstd, COALESCE(start_line, 0), COALESCE(end_line, 0)
+		 FROM chunks
+		 WHERE document_id = ? AND seq >= ? AND seq <= ?
+		 ORDER BY seq ASC`,
+		docID, minSeq, maxSeq,
+	)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	defer rows.Close()
+
+	var contents []string
+	startLine := 0
+	endLine := 0
+
+	for rows.Next() {
+		var (
+			sNum         int
+			content      string
+			contentZstd  []byte
+			sLine, eLine int
+		)
+		if err := rows.Scan(&sNum, &content, &contentZstd, &sLine, &eLine); err != nil {
+			continue
+		}
+		if len(contentZstd) > 0 {
+			if decomp, err := DecompressString(contentZstd); err == nil {
+				content = decomp
+			}
+		}
+		if content != "" {
+			contents = append(contents, content)
+		}
+		if startLine == 0 || (sLine > 0 && sLine < startLine) {
+			startLine = sLine
+		}
+		if eLine > endLine {
+			endLine = eLine
+		}
+	}
+	return strings.Join(contents, "\n\n"), startLine, endLine, nil
 }
 
 // InsertImageChunk inserts an image chunk with type=1 and an image path.
@@ -864,8 +932,9 @@ func (s *Store) SearchVector(queryEmb []float32, limit int, filters *FilterSet) 
 	}
 
 	// Fallback: linear scan over all embedded chunks with optional filters
-	sqlQuery := `SELECT ch.id, ch.document_id, ch.content, ch.content_zstd, ch.embedding,
+	sqlQuery := `SELECT ch.id, ch.document_id, ch.seq, ch.content, ch.content_zstd, ch.embedding,
 		        COALESCE(ch.chunk_type, ?), COALESCE(ch.image_path, ''),
+		        COALESCE(ch.start_line, 0), COALESCE(ch.end_line, 0),
 		        d.title, d.path, c.name
 		 FROM chunks ch
 		 JOIN documents d ON d.id = ch.document_id
@@ -898,16 +967,19 @@ func (s *Store) SearchVector(queryEmb []float32, limit int, filters *FilterSet) 
 		var (
 			chunkID     int64
 			docID       int64
+			seq         int
 			content     string
 			contentZstd []byte
 			embBlob     []byte
 			chunkType   ChunkType
 			imagePath   string
+			startLine   int
+			endLine     int
 			title       string
 			path        string
 			collection  string
 		)
-		if err := rows.Scan(&chunkID, &docID, &content, &contentZstd, &embBlob, &chunkType, &imagePath, &title, &path, &collection); err != nil {
+		if err := rows.Scan(&chunkID, &docID, &seq, &content, &contentZstd, &embBlob, &chunkType, &imagePath, &startLine, &endLine, &title, &path, &collection); err != nil {
 			return nil, err
 		}
 		if len(contentZstd) > 0 {
@@ -922,12 +994,15 @@ func (s *Store) SearchVector(queryEmb []float32, limit int, filters *FilterSet) 
 			SearchResult: SearchResult{
 				ChunkID:    chunkID,
 				DocumentID: docID,
+				Seq:        seq,
 				Title:      title,
 				Path:       path,
 				Collection: collection,
 				Content:    content,
 				ChunkType:  chunkType,
 				ImagePath:  imagePath,
+				StartLine:  startLine,
+				EndLine:    endLine,
 			},
 			score: sim,
 		})
@@ -980,7 +1055,8 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) [
 	}
 
 	query := fmt.Sprintf(
-		`SELECT ch.id, ch.document_id, ch.content, ch.content_zstd, COALESCE(ch.chunk_type, ?), COALESCE(ch.image_path, ''),
+		`SELECT ch.id, ch.document_id, ch.seq, ch.content, ch.content_zstd, COALESCE(ch.chunk_type, ?), COALESCE(ch.image_path, ''),
+		        COALESCE(ch.start_line, 0), COALESCE(ch.end_line, 0),
 		        d.title, d.path, c.name
 		 FROM chunks ch
 		 JOIN documents d ON d.id = ch.document_id
@@ -1009,15 +1085,18 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) [
 		var (
 			chunkID     int64
 			docID       int64
+			seq         int
 			content     string
 			contentZstd []byte
 			chunkType   ChunkType
 			imagePath   string
+			startLine   int
+			endLine     int
 			title       string
 			path        string
 			collection  string
 		)
-		if err := rows.Scan(&chunkID, &docID, &content, &contentZstd, &chunkType, &imagePath, &title, &path, &collection); err != nil {
+		if err := rows.Scan(&chunkID, &docID, &seq, &content, &contentZstd, &chunkType, &imagePath, &startLine, &endLine, &title, &path, &collection); err != nil {
 			continue
 		}
 		if len(contentZstd) > 0 {
@@ -1028,12 +1107,15 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) [
 		}
 		if r, ok := resultMap[chunkID]; ok {
 			r.DocumentID = docID
+			r.Seq = seq
 			r.Title = title
 			r.Path = path
 			r.Collection = collection
 			r.Content = content
 			r.ChunkType = chunkType
 			r.ImagePath = imagePath
+			r.StartLine = startLine
+			r.EndLine = endLine
 			resultMap[chunkID] = r
 		}
 	}

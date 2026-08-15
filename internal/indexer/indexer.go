@@ -135,6 +135,8 @@ func (idx *Indexer) SyncCollection(col *store.Collection) error {
 		return idx.syncPdf(col)
 	case "documents":
 		return idx.syncDocuments(col)
+	case "code":
+		return idx.syncCode(col)
 	case "parser":
 		return idx.syncParserDef(col)
 	default:
@@ -227,7 +229,7 @@ func (idx *Indexer) syncConversation(
 
 			chunks := chunk.ChunkConversation(text, 0)
 			for _, c := range chunks {
-				if err := idx.db.InsertChunk(docID, c.Seq, c.Content, nil); err != nil {
+				if err := idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil); err != nil {
 					idx.log.Printf("  WARN: embed %s: %v\n", f.Path, err)
 				}
 			}
@@ -353,7 +355,7 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 		idx.db.DeleteChunksForDocument(docID)
 		chunks := chunk.ChunkMarkdown(f.Content, 0, 0)
 		for _, c := range chunks {
-			idx.db.InsertChunk(docID, c.Seq, c.Content, nil)
+			idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil)
 		}
 		indexed++
 	}
@@ -605,7 +607,7 @@ func (idx *Indexer) syncDocuments(col *store.Collection) error {
 
 		idx.db.DeleteChunksForDocument(docID)
 		for _, c := range chunk.ChunkMarkdown(res.Content, 0, 0) {
-			idx.db.InsertChunk(docID, c.Seq, c.Content, nil)
+			idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil)
 		}
 		indexed++
 	}
@@ -614,6 +616,81 @@ func (idx *Indexer) syncDocuments(col *store.Collection) error {
 	if unsupported > 0 {
 		idx.log.Printf(", %d unsupported", unsupported)
 	}
+	if failed > 0 {
+		idx.log.Printf(", %d failed", failed)
+	}
+	idx.log.Printf("\n")
+	return nil
+}
+
+// syncCode indexes a source code collection. It scans for supported programming
+// languages, ignores binaries/vendors/lockfiles/.gitignore entries, extracts
+// relative path titles, chunks code structurally, and writes fastfield metadata.
+func (idx *Indexer) syncCode(col *store.Collection) error {
+	files, err := source.ScanCode(col.Path, col.Pattern)
+	if err != nil {
+		return err
+	}
+
+	diskPaths := make(map[string]bool, len(files))
+	for _, f := range files {
+		diskPaths[f.Path] = true
+	}
+
+	if existingPaths, err := idx.db.ListDocumentPaths(col.ID); err == nil {
+		removed := 0
+		for path, docID := range existingPaths {
+			if !diskPaths[path] {
+				idx.db.DeleteDocument(docID)
+				idx.db.FastFields().DeleteForDocument(docID)
+				removed++
+			}
+		}
+		if removed > 0 {
+			idx.log.Printf("  Removed %d stale documents\n", removed)
+		}
+	}
+
+	var indexed, skipped, failed int
+	for _, f := range files {
+		existing, err := idx.db.GetDocument(col.ID, f.Path)
+		if err == nil && existing.ContentHash == f.ContentHash {
+			if existing.Mtime != f.Mtime {
+				idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
+			}
+			skipped++
+			continue
+		}
+
+		docID, err := idx.db.UpsertDocument(col.ID, f.Path, f.Title, f.ContentHash, f.Mtime, f.LineCount)
+		if err != nil {
+			idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
+			failed++
+			continue
+		}
+
+		if err := idx.db.UpsertFTS(docID, f.Title, f.Content); err != nil {
+			idx.log.Printf("  WARN: fts %s: %v\n", f.Path, err)
+		}
+
+		idx.db.DeleteChunksForDocument(docID)
+		chunks := chunk.ChunkCode(f.Content, f.Language, 0, 0)
+		for _, c := range chunks {
+			if err := idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil); err != nil {
+				idx.log.Printf("  WARN: chunk %s: %v\n", f.Path, err)
+			}
+		}
+
+		// Fast field metadata
+		_ = idx.db.FastFields().Set(docID, "lang", f.Language)
+		_ = idx.db.FastFields().Set(docID, "ext", f.Extension)
+		_ = idx.db.FastFields().Set(docID, "filename", filepath.Base(f.Path))
+		_ = idx.db.FastFields().Set(docID, "rel_path", f.RelativePath)
+
+		indexed++
+	}
+
+	idx.log.Printf("Code: %d indexed, %d unchanged", indexed, skipped)
 	if failed > 0 {
 		idx.log.Printf(", %d failed", failed)
 	}

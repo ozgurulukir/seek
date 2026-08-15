@@ -2,6 +2,7 @@
 
 | Type | Source | What's indexed |
 |---|---|---|
+| `code` | Any directory / repo | 35+ languages (Go, Rust, Python, TS, etc.) — `.gitignore`-aware, structural chunks + fastfields |
 | `markdown` | Any directory | `.md` files — FTS + chunks + embeddings |
 | `claude` | `~/.claude/projects/` | Claude Code conversations + screenshots |
 | `codex` | `~/.codex/` | Codex sessions + screenshots |
@@ -9,6 +10,14 @@
 | `pdf` | Any directory | PDF pages rasterized to PNG, VL embedding per page + OCR text (if enabled) |
 | `documents` | Any directory | Rich documents (docx/xlsx/pptx/epub/html/...) via extraction backend (builtin/xberg) |
 | `parser` | External SQLite/JSONL | Schema-driven: opencode, copilot-cli, zed, claude (text-only), codex (text-only) |
+
+## Source code collections (`code`)
+
+Indexes source code repositories with automatic language detection, `.gitignore` filtering, vendor / node_modules / lockfile skipping, and binary detection.
+
+```bash
+seek add ~/projects/my-repo --code --name myrepo
+```
 
 ## Schema-driven parsers
 

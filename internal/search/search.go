@@ -35,11 +35,12 @@ type Options struct {
 	Analyzer *Analyzer
 }
 
-// Engine performs BM25, vector, and hybrid search with optional filters and aggregations.
+// Engine performs BM25, vector, and hybrid search with optional filters, aggregations, and reranking.
 type Engine struct {
 	store       *store.Store
 	embedClient *embed.Client
 	vlClient    *embed.VLClient
+	reranker    embed.Reranker
 }
 
 func NewEngine(s *store.Store, ec *embed.Client) *Engine {
@@ -49,6 +50,12 @@ func NewEngine(s *store.Store, ec *embed.Client) *Engine {
 // NewEngineWithVL creates a search engine with a VL client for multimodal query embedding.
 func NewEngineWithVL(s *store.Store, ec *embed.Client, vlc *embed.VLClient) *Engine {
 	return &Engine{store: s, embedClient: ec, vlClient: vlc}
+}
+
+// WithReranker sets an optional cross-encoder reranker.
+func (e *Engine) WithReranker(r embed.Reranker) *Engine {
+	e.reranker = r
+	return e
 }
 
 // SearchBM25 performs BM25 full-text search with optional filters.
@@ -76,11 +83,15 @@ func (e *Engine) SearchBM25(ctx context.Context, query string, limit int, opts O
 		// On parse error, fall back to raw query
 	}
 
-	results, err := e.store.SearchFTS(ftsQuery, limit, opts.Filters)
+	results, err := e.store.SearchFTS(ftsQuery, limit*2, opts.Filters)
 	if err != nil {
 		return nil, err
 	}
-	return e.sortResults(results, opts)
+	sorted, err := e.sortResults(results, opts)
+	if err != nil {
+		return nil, err
+	}
+	return e.rerankResults(ctx, query, sorted, limit), nil
 }
 
 // SearchVector performs vector semantic search with optional filters.
@@ -106,25 +117,34 @@ func (e *Engine) SearchVector(ctx context.Context, query string, limit int, opts
 		return nil, fmt.Errorf("vector search requires embedding client")
 	}
 
-	results, err := e.store.SearchVector(qEmb, limit, opts.Filters)
+	results, err := e.store.SearchVector(qEmb, limit*2, opts.Filters)
 	if err != nil {
 		return nil, err
 	}
-	return e.sortResults(results, opts)
+	sorted, err := e.sortResults(results, opts)
+	if err != nil {
+		return nil, err
+	}
+	return e.rerankResults(ctx, query, sorted, limit), nil
 }
 
-// SearchHybrid performs hybrid search using RRF fusion with optional filters.
+// SearchHybrid performs hybrid search using RRF fusion with optional filters and reranking.
 func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
 
-	bm25Results, err := e.SearchBM25(ctx, query, limit*2, opts)
+	candidateLimit := limit * 2
+	if e.reranker != nil {
+		candidateLimit = limit * 3
+	}
+
+	bm25Results, err := e.SearchBM25(ctx, query, candidateLimit, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	vecResults, err := e.SearchVector(ctx, query, limit*2, opts)
+	vecResults, err := e.SearchVector(ctx, query, candidateLimit, opts)
 	if err != nil {
 		// Fall back to BM25 only if vector search fails
 		if len(bm25Results) > limit {
@@ -133,7 +153,41 @@ func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts
 		return bm25Results, nil
 	}
 
-	return rrfFusion(bm25Results, vecResults, limit), nil
+	fused := rrfFusion(bm25Results, vecResults, candidateLimit)
+	return e.rerankResults(ctx, query, fused, limit), nil
+}
+
+// rerankResults re-scores candidate search results using the cross-encoder reranker if configured.
+func (e *Engine) rerankResults(ctx context.Context, query string, results []store.SearchResult, limit int) []store.SearchResult {
+	if e.reranker == nil || len(results) <= 1 {
+		if len(results) > limit {
+			return results[:limit]
+		}
+		return results
+	}
+
+	docTexts := make([]string, len(results))
+	for i, r := range results {
+		docTexts[i] = r.Title + "\n" + r.Content
+	}
+
+	rerankScores, err := e.reranker.Rerank(ctx, query, docTexts, limit)
+	if err != nil || len(rerankScores) == 0 {
+		if len(results) > limit {
+			return results[:limit]
+		}
+		return results
+	}
+
+	reranked := make([]store.SearchResult, 0, len(rerankScores))
+	for _, rs := range rerankScores {
+		if rs.Index >= 0 && rs.Index < len(results) {
+			res := results[rs.Index]
+			res.Score = rs.RelevanceScore
+			reranked = append(reranked, res)
+		}
+	}
+	return reranked
 }
 
 // SearchWithOptions performs search based on the options.

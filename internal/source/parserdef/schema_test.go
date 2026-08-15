@@ -177,6 +177,7 @@ func TestLoadUserOverride(t *testing.T) {
 	// Set up a temp HOME so parserOverrideDir points there.
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
 
 	// Write a user override for "opencode" with a different description.
 	overrideDir := filepath.Join(tmpHome, ".config", "seek", "parsers")

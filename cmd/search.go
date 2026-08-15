@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
 )
@@ -18,12 +19,15 @@ type SearchCmd struct {
 
 	// New filter flags
 	Collection string `help:"Filter by collection name"`
-	DocType    string `help:"Filter by document type (markdown, claude, codex, images, pdf, parser)"`
+	Repo       string `help:"Filter by repository or collection name (alias for --collection)"`
+	DocType    string `help:"Filter by document type (markdown, claude, codex, images, pdf, documents, parser, code)"`
+	Lang       string `help:"Filter code documents by programming language (e.g. go, python, typescript)"`
 	After      string `help:"Filter documents after this date (RFC3339)"`
 	Before     string `help:"Filter documents before this date (RFC3339)"`
 	ChunkType  string `help:"Filter by chunk type (text, image)"`
 	Path       string `help:"Filter by path pattern (GLOB)"`
 	Workspace  string `help:"Filter parser collections by workspace directory (fast field)"`
+	Context    int    `short:"C" default:"0" help:"Number of surrounding chunks before and after to expand context"`
 
 	// Aggregation flags
 	Aggs []string `help:"Aggregations to run (e.g., type:terms, created_at:histogram:month)"`
@@ -83,15 +87,28 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 		engine = search.NewEngine(db, embedClient)
 	}
 
+	// Optional Cross-Encoder reranking (automatically enabled if configured in config.yaml)
+	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.APIKey != "" {
+		reranker := embed.NewRerankClient(cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.APIKey, cfg.Config.Rerank.Model)
+		engine.WithReranker(reranker)
+	}
+
 	// Build filters
 	var filters *store.FilterSet
-	if c.Collection != "" || c.DocType != "" || c.After != "" || c.Before != "" || c.ChunkType != "" || c.Path != "" || c.Workspace != "" {
+	colName := c.Collection
+	if colName == "" {
+		colName = c.Repo
+	}
+	if colName != "" || c.DocType != "" || c.Lang != "" || c.After != "" || c.Before != "" || c.ChunkType != "" || c.Path != "" || c.Workspace != "" {
 		filters = store.NewFilterSet()
-		if c.Collection != "" {
-			filters.Add(&store.CollectionFilter{Name: c.Collection})
+		if colName != "" {
+			filters.Add(&store.CollectionFilter{Name: colName})
 		}
 		if c.DocType != "" {
 			filters.Add(&store.DocTypeFilter{Type: c.DocType})
+		}
+		if c.Lang != "" {
+			filters.Add(&store.FastFieldFilter{Field: "lang", Value: strings.ToLower(c.Lang)})
 		}
 		if c.After != "" || c.Before != "" {
 			filters.Add(&store.DateRangeFilter{After: c.After, Before: c.Before})
@@ -166,9 +183,36 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 		return nil
 	}
 
+	// Expand surrounding chunk context if -C / --context is requested
+	if c.Context > 0 {
+		for idx := range results {
+			if results[idx].DocumentID > 0 {
+				expanded, sLine, eLine, err := db.GetSurroundingContext(results[idx].DocumentID, results[idx].Seq, c.Context)
+				if err == nil && expanded != "" {
+					results[idx].Content = expanded
+					if sLine > 0 {
+						results[idx].StartLine = sLine
+					}
+					if eLine > 0 {
+						results[idx].EndLine = eLine
+					}
+				}
+			}
+		}
+	}
+
 	for i, r := range results {
+		pathLoc := formatRelPath(r.Path)
+		if r.StartLine > 0 {
+			if r.EndLine > r.StartLine {
+				pathLoc = fmt.Sprintf("%s:L%d-L%d", pathLoc, r.StartLine, r.EndLine)
+			} else {
+				pathLoc = fmt.Sprintf("%s:L%d", pathLoc, r.StartLine)
+			}
+		}
+
 		fmt.Printf("\n%s %s\n", fmt.Sprintf("[%d]", i+1), r.Title)
-		fmt.Printf("    %s  (%s)  score=%.4f\n", formatRelPath(r.Path), r.Collection, r.Score)
+		fmt.Printf("    %s  (%s)  score=%.4f\n", pathLoc, r.Collection, r.Score)
 		if r.ChunkType == store.ChunkTypeImage && r.ImagePath != "" {
 			fmt.Printf("    %s\n", formatRelPath(r.ImagePath))
 			if r.Content != "" {
@@ -176,7 +220,11 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 				fmt.Printf("    context: %s\n", snippet)
 			}
 		} else if r.Content != "" {
-			snippet := formatSnippet(r.Content, config.DefaultTextSnippetLen)
+			maxSnippetLen := config.DefaultTextSnippetLen
+			if c.Context > 0 {
+				maxSnippetLen = config.DefaultTextSnippetLen * (c.Context*2 + 1)
+			}
+			snippet := formatSnippet(r.Content, maxSnippetLen)
 			fmt.Printf("    %s\n", snippet)
 		}
 	}

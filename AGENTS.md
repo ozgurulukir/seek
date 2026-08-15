@@ -40,13 +40,13 @@ root (main.go) ──> cmd ──> internal/{chunk,config,embed,extractor,indexe
 Keep the layering: `cmd/` orchestrates; `internal/` has no imports from `cmd/` or `root`. Do not introduce cross-boundary imports.
 
 - `internal/store` — SQLite persistence: collections, documents, chunks, embeddings, FTS5 index, vector search. **All SQL lives here** (incl. `fastfield.go`, `vector_index.go`, `compression.go`). Vector search uses an HNSW index (`VectorIndex` interface, `coder/hnsw`) with a linear-scan fallback; cosine uses SIMD via `viterin/vek`. FTS5 tokenizer is `unicode61 remove_diacritics 2` (Turkish-aware); BM25 weights title 10× content. Migrate-time logic auto-rebuilds the FTS table when the tokenizer config changes.
-- `internal/indexer` — orchestrates per-format sync: scans sources, upserts documents/chunks/FTS, writes fast-field metadata, runs orphan cleanup. This is the layer that knows about collection types (markdown/claude/codex/images/pdf/parser/documents); `store` and `source` stay format-agnostic.
+- `internal/indexer` — orchestrates per-format sync: scans sources, upserts documents/chunks/FTS, writes fast-field metadata, runs orphan cleanup. This is the layer that knows about collection types (markdown/code/claude/codex/images/pdf/parser/documents); `store` and `source` stay format-agnostic.
 - `internal/extractor` — file extraction domain (`builtin` for native markdown/PDF/images and `xberg` for 100+ rich document formats via remote service).
-- `internal/embed` — providers: `Client` (any OpenAI-compatible text embeddings), `VLClient` (multimodal image+text), and `OCRClient` (OpenAI-compatible vision/OCR for scanned PDF pages). The VL endpoint is configurable via `embedding.vl_base_url`, defaulting to DashScope's qwen3-vl-embedding.
-- `internal/search` — BM25 + vector + RRF hybrid fusion, plus a structured query parser (`query.go`), aggregations (`aggregation.go`), autocomplete (`autocomplete.go`), and a stemming analyzer (`tokenizer.go`). The RRF fusion and sort are covered by tests.
-- `internal/source` — per-format parsers (claude/codex/markdown/images) plus `pdf.go`, which rasterizes PDF pages to PNG via `go-fitz` (bundled static MuPDF, cgo) and extracts text (embedded via `doc.Text`, or OCR via the `TextExtractor` interface for scanned pages). `source/parserdef/` holds the schema-driven parser engine (YAML schemas → SQLite/JSONL drivers) for opencode/copilot-cli/zed and schema-mode claude/codex.
-- `internal/chunk` — text chunking (header/size splitting for markdown, line-batching for conversations).
-- `internal/config` — `~/.config/seek/config.yaml`, provider selection, `IsMultimodal()` logic, and typed defaults (`defaults.go`).
+- `internal/embed` — providers: `Client` (any OpenAI-compatible text embeddings), `VLClient` (multimodal image+text), `OCRClient` (vision/OCR), and `RerankClient` (OpenAI/Cohere/Jina/DashScope cross-encoder reranking). The VL endpoint is configurable via `embedding.vl_base_url`, defaulting to DashScope's qwen3-vl-embedding.
+- `internal/search` — BM25 + vector + RRF hybrid fusion + optional Cross-Encoder reranking, plus structured query parser (`query.go`), aggregations (`aggregation.go`), autocomplete (`autocomplete.go`), and stemming analyzer (`tokenizer.go`).
+- `internal/source` — per-format parsers (code/claude/codex/markdown/images) plus `pdf.go`, which rasterizes PDF pages to PNG via `go-fitz` (bundled static MuPDF, cgo) and extracts text (embedded via `doc.Text`, or OCR via the `TextExtractor` interface for scanned pages). `source/parserdef/` holds the schema-driven parser engine (YAML schemas → SQLite/JSONL drivers) for opencode/copilot-cli/zed and schema-mode claude/codex.
+- `internal/chunk` — text chunking with 1-based start/end line span tracking (`StartLine`, `EndLine` for markdown, code, and conversations).
+- `internal/config` — `~/.config/seek/config.yaml`, provider selection, `IsMultimodal()` logic, reranker configuration (`RerankConfig`), and typed defaults (`defaults.go`).
 - `third_party/renameio` — platform-gated drop-in replacement for `github.com/google/renameio` (`tempfile_windows.go` with Win32 `MoveFileExW` / `tempfile_posix.go` with `fsync`+`os.Rename`) providing atomic file writes across Linux, macOS, and Windows.
 
 ## Embedding provider configuration
@@ -114,6 +114,7 @@ ocr:
 
 ```
 seek add <path> --name <n>   # add markdown/notes collection
+seek add <path> --code       # add source code collection (Go, Rust, Python, TS/JS, etc.)
 seek add --claude | --codex | --images <path> | --pdf <path>
 seek add --opencode | --copilot | --zed | --parser <name>   # schema-driven parser collections
 seek sync                    # incremental sync

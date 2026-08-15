@@ -23,6 +23,7 @@ type AddCmd struct {
 	Codex  bool   `help:"Add Codex conversations (~/.codex/)"`
 	Images bool   `help:"Add an image directory (png/jpg/webp)"`
 	Pdf    bool   `help:"Add a PDF directory (rasterized for VL embedding)"`
+	Code   bool   `help:"Add a source code repository directory (Go, Rust, Python, TS/JS, etc.)"`
 	Parser string `help:"Add a schema-driven parser collection (e.g. opencode, copilot-cli, zed)"`
 
 	// Documents is a universal rich-document collection (docx/xlsx/pptx/epub/
@@ -69,6 +70,9 @@ func (c *AddCmd) Run(cfg *config.AppConfig) error {
 	}
 	if c.Pdf {
 		return c.addPdfs(cfg, db)
+	}
+	if c.Code {
+		return c.addCode(cfg, db)
 	}
 	if c.Documents {
 		return c.addDocuments(cfg, db)
@@ -316,6 +320,42 @@ func (c *AddCmd) addDocuments(cfg *config.AppConfig, db *store.Store) error {
 	}
 
 	fmt.Printf("Created collection %q (documents, backend=%s) → %s\n", col.Name, effectiveBackend, col.Path)
+	return c.newIndexer(cfg, db).SyncCollection(col)
+}
+
+func (c *AddCmd) addCode(cfg *config.AppConfig, db *store.Store) error {
+	if c.Path == "" {
+		return fmt.Errorf("path is required for code collection")
+	}
+	absPath, err := filepath.Abs(c.Path)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return fmt.Errorf("path does not exist: %s", absPath)
+	}
+
+	name := c.Name
+	if name == "" {
+		name = filepath.Base(absPath)
+	}
+
+	pattern := c.Pattern
+	if pattern == "" {
+		pattern = "**/*"
+	}
+
+	if existing, err := db.GetCollectionByName(name); err == nil {
+		fmt.Printf("Collection %q already exists (id=%d, path=%s)\n", existing.Name, existing.ID, existing.Path)
+		return nil
+	}
+
+	col, err := db.CreateCollection(name, store.CollectionTypeCode, absPath, pattern)
+	if err != nil {
+		return fmt.Errorf("create collection: %w", err)
+	}
+
+	fmt.Printf("Created collection %q (code) → %s\n", col.Name, col.Path)
 	return c.newIndexer(cfg, db).SyncCollection(col)
 }
 

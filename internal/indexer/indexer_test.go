@@ -156,6 +156,7 @@ func TestIndexer_ParserCollectionSync(t *testing.T) {
 	overrideDir := filepath.Join(tmpDir, ".config", "seek", "parsers")
 	os.MkdirAll(overrideDir, 0755)
 	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
 	schemaContent := fmt.Sprintf(`
 format: 1
 name: test-fixture
@@ -182,7 +183,7 @@ sources:
             ORDER BY m.time_created
           role: role
           content: content
-`, extPath)
+`, filepath.ToSlash(extPath))
 	os.WriteFile(filepath.Join(overrideDir, "test-fixture.yaml"), []byte(schemaContent), 0644)
 
 	cfg := &config.AppConfig{DBPath: dbPath}
