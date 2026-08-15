@@ -89,23 +89,81 @@ seek embed                                 # backfills vectors for existing chun
 # Now `seek search "query"` uses hybrid (BM25 + vector) automatically
 ```
 
-### Simplest 100% Local Setup (Ollama — Free, Private, Offline)
+### Simplest 100% Local Setup (Ollama + FlashRank — Free, Private, Offline)
 
-If you want semantic search without cloud API keys or internet access:
+Run full hybrid search + Cross-Encoder re-ranking with **zero cloud dependencies, zero API costs, and 100% local privacy**:
 
-1. **Pull the model** (one-time):
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│               100% Local & Offline Hybrid Search Flow                  │
+└────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                 [Query]  (e.g., "how does vector search work")
+                                    │
+                    ┌───────────────┴───────────────┐
+                    ▼                               ▼
+          ┌───────────────────┐           ┌───────────────────┐
+          │  SQLite FTS5 BM25 │           │   Local Ollama    │
+          │  (Keyword Match)  │           │(nomic-embed-text) │
+          └─────────┬─────────┘           └─────────┬─────────┘
+                    │                               │
+                    │      ┌────────────────────────┘
+                    │      ▼
+                    │  ┌─────────────────────────┐
+                    │  │   HNSW Vector Index     │
+                    │  │   (Cosine Similarity)   │
+                    │  └───────────┬─────────────┘
+                    │              │
+                    ▼              ▼
+          ┌────────────────────────────────────────┐
+          │     RRF (Reciprocal Rank Fusion)       │
+          │         Top Candidate Pool             │
+          └──────────────────┬─────────────────────┘
+                             │
+                             ▼
+          ┌────────────────────────────────────────┐
+          │       Local FlashRank Re-Ranker        │
+          │       (ms-marco-TinyBERT-L-2-v2)       │
+          │   Full Token Cross-Attention Scoring   │
+          └──────────────────┬─────────────────────┘
+                             │
+                             ▼
+          ┌────────────────────────────────────────┐
+          │    Precision Result with Line Spans    │
+          │    path/to/file.go:L25-L68 (-C ctx)    │
+          └────────────────────────────────────────┘
+```
+
+#### Step-by-Step Local Walkthrough:
+
+1. **Pull the local embedding model** (one-time):
    ```bash
    ollama pull nomic-embed-text
    ```
-2. **Set your `~/.config/seek/config.yaml`**:
+2. **Start the local FlashRank re-ranking server** (Python/ONNX):
+   ```bash
+   uv run tools/flashrank_server/server.py
+   ```
+3. **Configure `~/.config/seek/config.yaml`**:
    ```yaml
    embedding:
      base_url: http://localhost:11434/v1
      api_key: ollama
      model: nomic-embed-text
      dimensions: 768
+
+   rerank:
+     enabled: true
+     base_url: http://127.0.0.1:8000
+     api_key: local
+     model: ms-marco-TinyBERT-L-2-v2
+     top_n: 10
    ```
-3. Run `seek embed` — vectors will be generated 100% locally on your machine.
+4. **Embed & Search**:
+   ```bash
+   seek embed -f -r                              # generate vectors via Ollama
+   seek search "how does vector search work" -C 1  # hybrid search + FlashRank re-rank
+   ```
 
 ---
 
