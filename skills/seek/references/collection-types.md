@@ -7,21 +7,23 @@
 | `codex` | `~/.codex/` | Codex sessions + screenshots |
 | `images` | Any directory | Image files (png/jpg/webp) with VL embedding |
 | `pdf` | Any directory | PDF pages rasterized to PNG, VL embedding per page + OCR text (if enabled) |
+| `documents` | Any directory | Rich documents (docx/xlsx/pptx/epub/html/...) via extraction backend (builtin/xberg) |
 | `parser` | External SQLite/JSONL | Schema-driven: opencode, copilot-cli, zed, claude (text-only), codex (text-only) |
 
 ## Schema-driven parsers
 
 Some conversation platforms are indexed via declarative YAML schemas (no Go code per platform). These are `parser` collections — they support the `--workspace` filter for cross-platform project filtering.
 
-### Adding parser collections
+### Adding collections
 
 ```bash
-seek add --opencode        # opencode CLI sessions
-seek add --copilot         # GitHub Copilot CLI sessions
-seek add --zed             # Zed Agent panel threads
-seek add --claude-schema   # Claude conversations (text-only, no image extraction)
-seek add --codex-schema    # Codex conversations (text-only, no image extraction)
-seek add --parser <name>   # any parser schema by name
+seek add ~/docs --docs         # rich documents (docx, xlsx, pptx, epub, html, etc.)
+seek add --opencode            # opencode CLI sessions
+seek add --copilot             # GitHub Copilot CLI sessions
+seek add --zed                 # Zed Agent panel threads
+seek add --claude-schema       # Claude conversations (text-only, no image extraction)
+seek add --codex-schema        # Codex conversations (text-only, no image extraction)
+seek add --parser <name>       # any parser schema by name
 ```
 
 ### Listing available schemas

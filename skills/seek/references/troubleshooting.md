@@ -40,7 +40,11 @@ seek parsers list            # list parser schemas and detection status
 Ensure `seek` is in PATH:
 
 ```bash
+# Linux / macOS:
 which seek
+
+# Windows (PowerShell):
+Get-Command seek
 ```
 
-If not found, copy the binary to a PATH directory like `~/.local/bin/`.
+If not found, copy or move the binary to a directory in your PATH (e.g. `~/.local/bin/` on POSIX or `~/scoop/shims` on Windows).

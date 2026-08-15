@@ -6,7 +6,7 @@ Guidance for AI coding agents working in this repository.
 
 `seek` is a personal hybrid search engine (BM25 full-text + vector semantic search) for markdown notes, Claude Code conversations, and Codex conversations. It stores data in SQLite (via `mattn/go-sqlite3` with FTS5) and generates embeddings through a configurable provider (default DashScope).
 
-Go 1.24 module `github.com/ozgurulukir/seek`. ~9,300 LOC across a root package plus `cmd/` and `internal/`.
+Go 1.24 module `github.com/ozgurulukir/seek`. ~18,000 LOC across a root package plus `cmd/`, `internal/`, and `third_party/`.
 
 ## Build / test / verify (always run these)
 
@@ -34,13 +34,14 @@ gofmt -l cmd internal main.go third_party   # must print nothing (fix with gofmt
 ## Architecture (layered, no cycles)
 
 ```
-root (main.go) ──> cmd ──> internal/{chunk,config,embed,indexer,search,source,store}
+root (main.go) ──> cmd ──> internal/{chunk,config,embed,extractor,indexer,search,source,store}
 ```
 
 Keep the layering: `cmd/` orchestrates; `internal/` has no imports from `cmd/` or `root`. Do not introduce cross-boundary imports.
 
 - `internal/store` — SQLite persistence: collections, documents, chunks, embeddings, FTS5 index, vector search. **All SQL lives here** (incl. `fastfield.go`, `vector_index.go`, `compression.go`). Vector search uses an HNSW index (`VectorIndex` interface, `coder/hnsw`) with a linear-scan fallback; cosine uses SIMD via `viterin/vek`. FTS5 tokenizer is `unicode61 remove_diacritics 2` (Turkish-aware); BM25 weights title 10× content. Migrate-time logic auto-rebuilds the FTS table when the tokenizer config changes.
-- `internal/indexer` — orchestrates per-format sync: scans sources, upserts documents/chunks/FTS, writes fast-field metadata, runs orphan cleanup. This is the layer that knows about collection types (markdown/claude/codex/images/pdf/parser); `store` and `source` stay format-agnostic.
+- `internal/indexer` — orchestrates per-format sync: scans sources, upserts documents/chunks/FTS, writes fast-field metadata, runs orphan cleanup. This is the layer that knows about collection types (markdown/claude/codex/images/pdf/parser/documents); `store` and `source` stay format-agnostic.
+- `internal/extractor` — file extraction domain (`builtin` for native markdown/PDF/images and `xberg` for 100+ rich document formats via remote service).
 - `internal/embed` — providers: `Client` (any OpenAI-compatible text embeddings), `VLClient` (multimodal image+text), and `OCRClient` (OpenAI-compatible vision/OCR for scanned PDF pages). The VL endpoint is configurable via `embedding.vl_base_url`, defaulting to DashScope's qwen3-vl-embedding.
 - `internal/search` — BM25 + vector + RRF hybrid fusion, plus a structured query parser (`query.go`), aggregations (`aggregation.go`), autocomplete (`autocomplete.go`), and a stemming analyzer (`tokenizer.go`). The RRF fusion and sort are covered by tests.
 - `internal/source` — per-format parsers (claude/codex/markdown/images) plus `pdf.go`, which rasterizes PDF pages to PNG via `go-fitz` (bundled static MuPDF, cgo) and extracts text (embedded via `doc.Text`, or OCR via the `TextExtractor` interface for scanned pages). `source/parserdef/` holds the schema-driven parser engine (YAML schemas → SQLite/JSONL drivers) for opencode/copilot-cli/zed and schema-mode claude/codex.
@@ -85,7 +86,7 @@ ocr:
 
 ## Testing conventions
 
-- Test files exist for `internal/{chunk,config,embed,indexer,search,source,store}` and `internal/source/parserdef`. There are **no tests** for `internal/embed/client.go` or `internal/embed/batch.go` yet.
+- Test files exist across all internal packages (`internal/{chunk,config,embed,extractor,indexer,search,source,store}` and `internal/source/parserdef`), including comprehensive tests for embedding clients and batching.
 - `internal/store` tests open a **real temp SQLite DB** via `t.TempDir()` and require the `fts5` tag.
 - For new store tests, follow `internal/store/store_test.go` (uses `newTestStore(t)` helper + `t.Cleanup`).
 - Benchmarks live in `internal/store/store_test.go` — run with `go test -tags fts5 -bench . ./internal/store/`.
