@@ -34,6 +34,9 @@ seek search "func Open" --repo myproject -l 10
 # Search by programming language
 seek search "handleRequest" --lang typescript -l 10
 
+# Search with surrounding context window expansion
+seek search "handleRequest" --repo myproject -C 1 -l 5
+
 # BM25 keyword search only (fast, offline, no API call)
 seek search "exact keyword" --lex -l 10
 
