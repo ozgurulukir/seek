@@ -8,14 +8,21 @@ AI agents lose context between sessions. `seek` indexes everything — your note
 
 ## Install
 
+**Linux / macOS** (requires Go 1.24+, CGO):
 ```bash
-# requires: go 1.24+, CGO
 make build
 ln -sf $(pwd)/seek /usr/local/bin/seek
 ```
 
-As a [skill](https://skills.sh) (Claude Code, Codex, Cursor, etc.):
+**Windows** (PowerShell, requires Go 1.24+ and a C compiler like `zig` or MinGW `gcc`):
+```powershell
+$env:CC="zig cc"        # or gcc
+$env:CGO_ENABLED="1"
+go build -tags fts5 -o seek.exe .
+# Optional: move seek.exe to a directory in your PATH (e.g. ~/scoop/shims or ~/bin)
+```
 
+As a [skill](https://skills.sh) (Claude Code, Codex, Cursor, etc.):
 ```bash
 # Copy the skill from this repo to your skills directory
 mkdir -p ~/.agents/skills
@@ -245,7 +252,10 @@ seek sync && seek embed
 
 ## Automation
 
-**Background service** — periodic sync + embed via launchd (macOS):
+**Background service** — periodic sync + embed with native OS scheduling:
+- **Windows**: Windows Task Scheduler (`schtasks.exe`)
+- **Linux**: `systemd` user timer (`systemctl --user`)
+- **macOS**: `launchd` plist (`~/Library/LaunchAgents/`)
 
 ```bash
 seek service start              # every 1 hour (default)

@@ -12,7 +12,11 @@ Go 1.24 module `github.com/ozgurulukir/seek`. ~9,300 LOC across a root package p
 
 ```bash
 # Build the real binary (FTS5 tag is REQUIRED):
+# Linux / macOS:
 CGO_ENABLED=1 go build -tags fts5 -o /dev/null .     # or: make build
+
+# Windows (PowerShell with Zig or MinGW GCC):
+$env:CC="zig cc"; $env:CGO_ENABLED="1"; go build -tags fts5 -o seek.exe .
 
 # Test — requires the fts5 tag (mattn/go-sqlite3 with FTS5). `make test` already
 # includes it; the store tests open a real SQLite DB that needs FTS5.
@@ -20,7 +24,7 @@ go test -tags fts5 ./...        # or: make test
 
 # Sanity:
 go vet ./...        # clean
-gofmt -l cmd internal main.go   # must print nothing (fix with gofmt -w)
+gofmt -l cmd internal main.go third_party   # must print nothing (fix with gofmt -w)
 ```
 
 - `mattn/go-sqlite3` is **cgo** — `CGO_ENABLED=1` is required to build.
@@ -42,6 +46,7 @@ Keep the layering: `cmd/` orchestrates; `internal/` has no imports from `cmd/` o
 - `internal/source` — per-format parsers (claude/codex/markdown/images) plus `pdf.go`, which rasterizes PDF pages to PNG via `go-fitz` (bundled static MuPDF, cgo) and extracts text (embedded via `doc.Text`, or OCR via the `TextExtractor` interface for scanned pages). `source/parserdef/` holds the schema-driven parser engine (YAML schemas → SQLite/JSONL drivers) for opencode/copilot-cli/zed and schema-mode claude/codex.
 - `internal/chunk` — text chunking (header/size splitting for markdown, line-batching for conversations).
 - `internal/config` — `~/.config/seek/config.yaml`, provider selection, `IsMultimodal()` logic, and typed defaults (`defaults.go`).
+- `third_party/renameio` — platform-gated drop-in replacement for `github.com/google/renameio` (`tempfile_windows.go` with Win32 `MoveFileExW` / `tempfile_posix.go` with `fsync`+`os.Rename`) providing atomic file writes across Linux, macOS, and Windows.
 
 ## Embedding provider configuration
 
@@ -102,6 +107,7 @@ ocr:
 - **FTS5 bm25 weighting** — `store.FTSTitleWeight` (10.0) boosts the title column over content. If you add columns to `documents_fts`, update the weight list in `SearchFTS` (SELECT and ORDER BY) — column weights are positional.
 - **`expandEnv` uses `os.ExpandEnv`** — it substitutes `$VAR` and `${VAR}` anywhere in the value (e.g. `"Bearer ${TOKEN}"`), not just whole-value matches. Set undefined vars are left empty.
 - The indexer logs `WARN:` lines and counts `failed` files per sync; previously these errors were silently dropped. New sync code paths should follow this pattern (count failures, surface them in the summary line).
+- **Cross-platform background service (`cmd/service.go`)** — automatically routes to Windows Task Scheduler (`schtasks.exe`) on Windows, `systemd` user timer (`systemctl --user`) on Linux, and `launchd` plist on macOS. Both `sync` and `embed` commands are run by default.
 
 ## Commands surface (for reference)
 
