@@ -76,7 +76,7 @@ func extractMarkdownTitle(content, path string) string {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "# ") {
-			return strings.TrimPrefix(trimmed, "# ")
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, "# "))
 		}
 	}
 	// Fallback: use filename without extension
