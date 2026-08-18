@@ -92,7 +92,30 @@ type HistogramAggregation struct {
 }
 
 func (a *HistogramAggregation) SQL() (string, []interface{}) {
-	field := "d.created_at"
+	field := a.Field
+	if field == "" {
+		field = "created_at"
+	}
+	// Map common field names to actual columns
+	switch strings.ToLower(field) {
+	case "type", "doc_type":
+		field = "c.type"
+	case "collection":
+		field = "c.name"
+	case "created_at", "date":
+		field = "d.created_at"
+	case "line_count":
+		field = "d.line_count"
+	case "path":
+		field = "d.path"
+	default:
+		// Assume it's a collection field
+		if !strings.Contains(field, ".") {
+			field = "c." + field
+		}
+	}
+	escapedField := escapeColumnName(field)
+
 	var format string
 	switch strings.ToLower(a.Interval) {
 	case "day":
@@ -106,7 +129,7 @@ func (a *HistogramAggregation) SQL() (string, []interface{}) {
 	default:
 		format = "%Y-%m"
 	}
-	return fmt.Sprintf("SELECT strftime('%s', %s) as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY key ORDER BY key", format, field), nil
+	return fmt.Sprintf("SELECT strftime(?, %s) as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY key ORDER BY key", escapedField), []interface{}{format}
 }
 
 func (a *HistogramAggregation) Scan(rows *sql.Rows) ([]Bucket, error) {
