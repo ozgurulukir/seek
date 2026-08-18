@@ -251,6 +251,8 @@ func detectSQLiteSource(def *ParserDef) (*SourceSpec, *VersionSpec, []string, er
 var (
 	reSessionBind = regexp.MustCompile(`(?i)([\w.]+)\s*=\s*:session_id`)
 	reSelect      = regexp.MustCompile(`(?i)\bSELECT\b`)
+	reFirstSelect = regexp.MustCompile(`(?i)^\s*SELECT\b`)
+	reUnionSelect = regexp.MustCompile(`(?i)\b(UNION(?:\s+ALL)?\s+)SELECT\b`)
 )
 
 // buildBatchQuery rewrites a query designed for a single session
@@ -267,12 +269,10 @@ func buildBatchQuery(query string) (string, int, error) {
 	q := query
 
 	// Replace the very first SELECT
-	firstSelect := regexp.MustCompile(`(?i)^\s*SELECT\b`)
-	q = firstSelect.ReplaceAllString(q, "SELECT "+col+" AS _session_id,")
+	q = reFirstSelect.ReplaceAllString(q, "SELECT "+col+" AS _session_id,")
 
 	// Replace any SELECT immediately following a UNION or UNION ALL
-	unionSelect := regexp.MustCompile(`(?i)\b(UNION(?:\s+ALL)?\s+)SELECT\b`)
-	q = unionSelect.ReplaceAllString(q, "${1}SELECT "+col+" AS _session_id,")
+	q = reUnionSelect.ReplaceAllString(q, "${1}SELECT "+col+" AS _session_id,")
 
 	count := 0
 	q = reSessionBind.ReplaceAllStringFunc(q, func(s string) string {
