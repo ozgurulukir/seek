@@ -234,22 +234,33 @@ func TestCountAggregation_Scan(t *testing.T) {
 func TestHistogramAggregation_SQL(t *testing.T) {
 	tests := []struct {
 		name           string
+		field          string
 		interval       string
 		expectedFormat string
+		expectedField  string
 	}{
-		{name: "day interval", interval: "day", expectedFormat: "%Y-%m-%d"},
-		{name: "week interval", interval: "week", expectedFormat: "%Y-%W"},
-		{name: "month interval", interval: "month", expectedFormat: "%Y-%m"},
-		{name: "year interval", interval: "year", expectedFormat: "%Y"},
-		{name: "default interval (empty)", interval: "", expectedFormat: "%Y-%m"},
-		{name: "unknown interval", interval: "unknown", expectedFormat: "%Y-%m"},
-		{name: "case insensitive interval", interval: "DAY", expectedFormat: "%Y-%m-%d"},
+		{name: "day interval", field: "created_at", interval: "day", expectedFormat: "%Y-%m-%d", expectedField: "\"d\".\"created_at\""},
+		{name: "week interval", field: "created_at", interval: "week", expectedFormat: "%Y-%W", expectedField: "\"d\".\"created_at\""},
+		{name: "month interval", field: "created_at", interval: "month", expectedFormat: "%Y-%m", expectedField: "\"d\".\"created_at\""},
+		{name: "year interval", field: "created_at", interval: "year", expectedFormat: "%Y", expectedField: "\"d\".\"created_at\""},
+		{name: "default interval (empty)", field: "created_at", interval: "", expectedFormat: "%Y-%m", expectedField: "\"d\".\"created_at\""},
+		{name: "unknown interval", field: "created_at", interval: "unknown", expectedFormat: "%Y-%m", expectedField: "\"d\".\"created_at\""},
+		{name: "case insensitive interval", field: "created_at", interval: "DAY", expectedFormat: "%Y-%m-%d", expectedField: "\"d\".\"created_at\""},
+		{name: "type field", field: "type", interval: "month", expectedFormat: "%Y-%m", expectedField: "\"c\".\"type\""},
+		{name: "doc_type field", field: "doc_type", interval: "month", expectedFormat: "%Y-%m", expectedField: "\"c\".\"type\""},
+		{name: "collection field", field: "collection", interval: "month", expectedFormat: "%Y-%m", expectedField: "\"c\".\"name\""},
+		{name: "date field", field: "date", interval: "month", expectedFormat: "%Y-%m", expectedField: "\"d\".\"created_at\""},
+		{name: "line_count field", field: "line_count", interval: "month", expectedFormat: "%Y-%m", expectedField: "\"d\".\"line_count\""},
+		{name: "path field", field: "path", interval: "month", expectedFormat: "%Y-%m", expectedField: "\"d\".\"path\""},
+		{name: "empty field defaults to created_at", field: "", interval: "month", expectedFormat: "%Y-%m", expectedField: "\"d\".\"created_at\""},
+		{name: "unknown field assumed collection", field: "unknown_field", interval: "month", expectedFormat: "%Y-%m", expectedField: "\"c\".\"unknown_field\""},
+		{name: "already scoped field", field: "c.custom", interval: "month", expectedFormat: "%Y-%m", expectedField: "\"c\".\"custom\""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			agg := &HistogramAggregation{
-				Field:    "created_at",
+				Field:    tt.field,
 				Interval: tt.interval,
 			}
 			query, args := agg.SQL()
@@ -258,7 +269,7 @@ func TestHistogramAggregation_SQL(t *testing.T) {
 				t.Errorf("HistogramAggregation.SQL() expected 1 arg with value %v, got %v", tt.expectedFormat, args)
 			}
 
-			expectedFragment := "strftime(?, \"d\".\"created_at\")"
+			expectedFragment := "strftime(?, " + tt.expectedField + ")"
 			if !strings.Contains(query, expectedFragment) {
 				t.Errorf("HistogramAggregation.SQL() query = %v, expected it to contain %v", query, expectedFragment)
 			}
