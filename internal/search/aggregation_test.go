@@ -254,11 +254,11 @@ func TestHistogramAggregation_SQL(t *testing.T) {
 			}
 			query, args := agg.SQL()
 
-			if len(args) != 0 {
-				t.Errorf("HistogramAggregation.SQL() expected 0 args, got %d", len(args))
+			if len(args) != 1 || args[0] != tt.expectedFormat {
+				t.Errorf("HistogramAggregation.SQL() expected 1 arg with value %v, got %v", tt.expectedFormat, args)
 			}
 
-			expectedFragment := "strftime('" + tt.expectedFormat + "', d.created_at)"
+			expectedFragment := "strftime(?, \"d\".\"created_at\")"
 			if !strings.Contains(query, expectedFragment) {
 				t.Errorf("HistogramAggregation.SQL() query = %v, expected it to contain %v", query, expectedFragment)
 			}
