@@ -221,3 +221,29 @@ func TestFastFieldJSONValue(t *testing.T) {
 		t.Errorf("expected key='value', got %v", m["key"])
 	}
 }
+
+func BenchmarkFastFieldBatchGet(b *testing.B) {
+	s, err := Open(b.TempDir() + "/test.db")
+	if err != nil {
+		b.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	ff := NewFastFieldStore(s.DB())
+
+	docIDs := make([]int64, 100)
+	for i := 0; i < 100; i++ {
+		docIDs[i] = int64(i)
+		if err := ff.Set(int64(i), "score", float64(i)); err != nil {
+			b.Fatalf("Set failed: %v", err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := ff.BatchGet(docIDs, "score")
+		if err != nil {
+			b.Fatalf("BatchGet failed: %v", err)
+		}
+	}
+}

@@ -108,7 +108,7 @@ func (f *FastFieldStore) BatchGet(docIDs []int64, fieldName string) (map[int64]i
 	}
 	defer rows.Close()
 
-	result := make(map[int64]interface{})
+	result := make(map[int64]interface{}, len(docIDs))
 	for rows.Next() {
 		var docID int64
 		var encoded string
@@ -120,6 +120,9 @@ func (f *FastFieldStore) BatchGet(docIDs []int64, fieldName string) (map[int64]i
 			return nil, err
 		}
 		result[docID] = val
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	return result, nil
