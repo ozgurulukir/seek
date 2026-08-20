@@ -607,3 +607,95 @@ func TestFetchSQLiteMessagesBatch(t *testing.T) {
 		t.Error("expected error for bad query rewrite")
 	}
 }
+
+func TestFetchAndAssignBatch(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("CREATE TABLE message (session_id TEXT, role TEXT, content TEXT)"); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	ids := []string{"s0", "s1", "s2"}
+	for i, sid := range ids {
+		if _, err := db.Exec("INSERT INTO message (session_id, role, content) VALUES (?, 'user', ?)", sid, fmt.Sprintf("msg%d", i)); err != nil {
+			t.Fatalf("insert %s: %v", sid, err)
+		}
+	}
+
+	newSessions := func() ([]Session, []int) {
+		sessions := make([]Session, len(ids))
+		indices := make([]int, len(ids))
+		for i, sid := range ids {
+			sessions[i] = Session{ID: sid}
+			indices[i] = i
+		}
+		return sessions, indices
+	}
+	wantAssigned := func(t *testing.T, sessions []Session, stage string) {
+		t.Helper()
+		for i, sid := range ids {
+			msgs := sessions[i].Messages
+			if len(msgs) != 1 || msgs[0].Content != fmt.Sprintf("msg%d", i) {
+				t.Errorf("%s: session %s got messages %v, want one with content msg%d", stage, sid, msgs, i)
+			}
+		}
+	}
+
+	ver := &VersionSpec{
+		Messages: MessagesSpec{
+			Query:   "SELECT role, content FROM message WHERE session_id = :session_id",
+			Role:    "role",
+			Content: "content",
+		},
+	}
+
+	// Batch query succeeds and assigns messages in order.
+	sessions, indices := newSessions()
+	if errs := fetchAndAssignBatch(db, ver, ids, indices, sessions); len(errs) != 0 {
+		t.Fatalf("batch path: expected no errors, got %v", errs)
+	}
+	wantAssigned(t, sessions, "batch path")
+
+	// Batch rewrite fails (reversed bind) but individual fetches still work:
+	// the fallback must assign messages without reporting errors.
+	badBatchVer := &VersionSpec{
+		Messages: MessagesSpec{
+			Query:   "SELECT role, content FROM message WHERE :session_id = session_id", // Reversed bind
+			Role:    "role",
+			Content: "content",
+		},
+	}
+	sessions, indices = newSessions()
+	if errs := fetchAndAssignBatch(db, badBatchVer, ids, indices, sessions); len(errs) != 0 {
+		t.Fatalf("fallback path: expected no errors, got %v", errs)
+	}
+	wantAssigned(t, sessions, "fallback path")
+
+	// Both paths fail (missing table): every session gets a reported error.
+	brokenVer := &VersionSpec{
+		Messages: MessagesSpec{
+			Query:   "SELECT role, content FROM no_such_table WHERE session_id = :session_id",
+			Role:    "role",
+			Content: "content",
+		},
+	}
+	sessions, indices = newSessions()
+	errs := fetchAndAssignBatch(db, brokenVer, ids, indices, sessions)
+	if len(errs) != len(ids) {
+		t.Fatalf("broken path: expected %d errors, got %v", len(ids), errs)
+	}
+	for i, se := range errs {
+		if se.SessionID != ids[i] {
+			t.Errorf("broken path: error %d for session %s, want %s", i, se.SessionID, ids[i])
+		}
+		if se.Err == nil {
+			t.Errorf("broken path: error %d has nil Err", i)
+		}
+		if sessions[i].Messages != nil {
+			t.Errorf("broken path: session %s expected nil messages, got %v", ids[i], sessions[i].Messages)
+		}
+	}
+}

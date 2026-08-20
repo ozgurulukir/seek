@@ -470,3 +470,27 @@ func fetchSQLiteMessagesBatch(db *sql.DB, ver *VersionSpec, sessionIDs []string)
 	}
 	return result, rows.Err()
 }
+
+// fetchAndAssignBatch fetches messages for a batch of session IDs and assigns
+// them to sessions at the recorded indices. If the batch query fails (e.g. a
+// custom schema the batch rewrite cannot handle), it falls back to individual
+// fetches so the whole batch is not lost.
+func fetchAndAssignBatch(db *sql.DB, ver *VersionSpec, batchIDs []string, batchIndices []int, sessions []Session) []SessionError {
+	msgMap, err := fetchSQLiteMessagesBatch(db, ver, batchIDs)
+	if err != nil {
+		var errs []SessionError
+		for i, id := range batchIDs {
+			msgs, fErr := fetchSQLiteMessages(db, ver, id)
+			if fErr != nil {
+				errs = append(errs, SessionError{SessionID: id, Err: fmt.Errorf("messages fallback: %w", fErr)})
+			} else {
+				sessions[batchIndices[i]].Messages = msgs
+			}
+		}
+		return errs
+	}
+	for i, id := range batchIDs {
+		sessions[batchIndices[i]].Messages = msgMap[id]
+	}
+	return nil
+}
