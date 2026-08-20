@@ -284,10 +284,12 @@ func (idx *Indexer) syncClaude(col *store.Collection) error {
 			return map[string]interface{}{"msgs": msgs}, convID, imgs, err
 		},
 		func(m map[string]interface{}) string {
-			return source.ClaudeConversationToText(m["msgs"].([]source.ClaudeMessage))
+			msgs, _ := m["msgs"].([]source.ClaudeMessage)
+			return source.ClaudeConversationToText(msgs)
 		},
 		func(m map[string]interface{}) string {
-			for _, msg := range m["msgs"].([]source.ClaudeMessage) {
+			msgs, _ := m["msgs"].([]source.ClaudeMessage)
+			for _, msg := range msgs {
 				if msg.Role == source.RoleUser {
 					return source.Truncate(msg.Content, source.TitleMaxLen)
 				}
@@ -305,10 +307,12 @@ func (idx *Indexer) syncCodex(col *store.Collection) error {
 			return map[string]interface{}{"msgs": msgs}, sessionID, imgs, err
 		},
 		func(m map[string]interface{}) string {
-			return source.ConversationToText(m["msgs"].([]source.CodexMessage))
+			msgs, _ := m["msgs"].([]source.CodexMessage)
+			return source.ConversationToText(msgs)
 		},
 		func(m map[string]interface{}) string {
-			for _, msg := range m["msgs"].([]source.CodexMessage) {
+			msgs, _ := m["msgs"].([]source.CodexMessage)
+			for _, msg := range msgs {
 				if msg.Role == source.RoleUser {
 					return source.Truncate(msg.Content, source.TitleMaxLen)
 				}

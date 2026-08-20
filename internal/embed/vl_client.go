@@ -242,7 +242,7 @@ func (c *VLClient) doRequest(items []EmbedItem) ([][]float32, error) {
 	// Re-order by index
 	result := make([][]float32, len(items))
 	for _, e := range vlResp.Output.Embeddings {
-		if e.Index < len(result) {
+		if e.Index >= 0 && e.Index < len(result) {
 			result[e.Index] = e.Embedding
 		}
 	}

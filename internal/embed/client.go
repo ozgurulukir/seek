@@ -96,7 +96,7 @@ func (c *Client) Embed(texts []string) ([][]float32, error) {
 	// Re-order by index
 	result := make([][]float32, len(texts))
 	for _, d := range embResp.Data {
-		if d.Index < len(result) {
+		if d.Index >= 0 && d.Index < len(result) {
 			result[d.Index] = d.Embedding
 		}
 	}

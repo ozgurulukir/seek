@@ -68,6 +68,11 @@ func ScanDocuments(dir string) ([]DocumentFile, error) {
 			return nil
 		}
 
+		// Skip files larger than 500MB to avoid memory pressure.
+		if info.Size() > 500*1024*1024 {
+			return nil
+		}
+
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil // skip unreadable files; matches ScanImages behavior

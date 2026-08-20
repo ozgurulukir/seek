@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -291,6 +292,9 @@ func (s *Store) SyncVectorIndex() error {
 			return err
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("sync vector index rows: %w", err)
+	}
 	return nil
 }
 
@@ -505,14 +509,17 @@ func (s *Store) rebuildFTSFromDocuments() error {
 }
 
 // execIgnoreDuplicate executes an ALTER TABLE statement and ignores "duplicate column" errors.
+// Other errors are logged to stderr so migration failures are not silently lost.
 func (s *Store) execIgnoreDuplicate(stmt string) {
 	_, err := s.db.Exec(stmt)
 	if err != nil {
+		errMsg := err.Error()
 		// SQLite returns "duplicate column name" when column already exists
-		if strings.Contains(err.Error(), "duplicate column") {
+		if strings.Contains(errMsg, "duplicate column") {
 			return
 		}
-		// Ignore other ALTER TABLE errors on existing columns
+		// Log unexpected ALTER TABLE errors so they are not silently lost.
+		fmt.Fprintf(os.Stderr, "WARN: migration statement failed: %v\n  SQL: %s\n", err, stmt)
 	}
 }
 
@@ -634,27 +641,38 @@ func (s *Store) ListCollections() ([]Collection, error) {
 		c.Backend = backend.String
 		cols = append(cols, c)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list collections rows: %w", err)
+	}
 	return cols, nil
 }
 
+// DeleteCollection removes a collection and all its documents, chunks, FTS
+// entries, and fast fields. Each DELETE is individually atomic; foreign key
+// cascades (ON DELETE CASCADE) handle orphan cleanup if the process is
+// interrupted between statements.
 func (s *Store) DeleteCollection(id int64) error {
-	// Delete fast_fields for documents in this collection
-	_, _ = s.db.Exec(`DELETE FROM fast_fields WHERE doc_id IN (SELECT id FROM documents WHERE collection_id = ?)`, id)
+	// Delete fast_fields for documents in this collection.
+	// The table is lazily created; ignore "no such table" errors.
+	if _, err := s.db.Exec(`DELETE FROM fast_fields WHERE doc_id IN (SELECT id FROM documents WHERE collection_id = ?)`, id); err != nil {
+		if !strings.Contains(err.Error(), "no such table") {
+			return fmt.Errorf("delete fast_fields: %w", err)
+		}
+	}
 	// Delete FTS entries for documents in this collection
-	_, err := s.db.Exec(`DELETE FROM documents_fts WHERE rowid IN (SELECT id FROM documents WHERE collection_id = ?)`, id)
-	if err != nil {
-		return err
+	if _, err := s.db.Exec(`DELETE FROM documents_fts WHERE rowid IN (SELECT id FROM documents WHERE collection_id = ?)`, id); err != nil {
+		return fmt.Errorf("delete fts: %w", err)
 	}
-	_, err = s.db.Exec(`DELETE FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE collection_id = ?)`, id)
-	if err != nil {
-		return err
+	if _, err := s.db.Exec(`DELETE FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE collection_id = ?)`, id); err != nil {
+		return fmt.Errorf("delete chunks: %w", err)
 	}
-	_, err = s.db.Exec(`DELETE FROM documents WHERE collection_id = ?`, id)
-	if err != nil {
-		return err
+	if _, err := s.db.Exec(`DELETE FROM documents WHERE collection_id = ?`, id); err != nil {
+		return fmt.Errorf("delete documents: %w", err)
 	}
-	_, err = s.db.Exec(`DELETE FROM collections WHERE id = ?`, id)
-	return err
+	if _, err := s.db.Exec(`DELETE FROM collections WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("delete collection: %w", err)
+	}
+	return nil
 }
 
 // --- Documents ---
@@ -709,20 +727,32 @@ func (s *Store) ListDocumentPaths(collectionID int64) (map[string]int64, error) 
 		}
 		m[path] = id
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list document paths rows: %w", err)
+	}
 	return m, nil
 }
 
 // DeleteDocument removes a document and its chunks/FTS/fast_field entries.
+// Each DELETE is individually atomic; foreign key cascades handle orphan
+// cleanup if interrupted between statements.
 func (s *Store) DeleteDocument(docID int64) error {
-	_, _ = s.db.Exec(`DELETE FROM fast_fields WHERE doc_id = ?`, docID)
+	// fast_fields table is lazily created; ignore "no such table" errors.
+	if _, err := s.db.Exec(`DELETE FROM fast_fields WHERE doc_id = ?`, docID); err != nil {
+		if !strings.Contains(err.Error(), "no such table") {
+			return fmt.Errorf("delete fast_fields: %w", err)
+		}
+	}
 	if _, err := s.db.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
 		return fmt.Errorf("delete fts entry: %w", err)
 	}
 	if _, err := s.db.Exec(`DELETE FROM chunks WHERE document_id = ?`, docID); err != nil {
 		return fmt.Errorf("delete chunks: %w", err)
 	}
-	_, err := s.db.Exec(`DELETE FROM documents WHERE id = ?`, docID)
-	return err
+	if _, err := s.db.Exec(`DELETE FROM documents WHERE id = ?`, docID); err != nil {
+		return fmt.Errorf("delete document: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) UpdateDocumentMtime(docID int64, mtime float64) error {
@@ -733,12 +763,17 @@ func (s *Store) UpdateDocumentMtime(docID int64, mtime float64) error {
 // --- FTS ---
 
 func (s *Store) UpsertFTS(docID int64, title, content string) error {
-	// Delete existing then insert (FTS5 doesn't support upsert)
+	// Delete existing then insert (FTS5 doesn't support upsert).
+	// Note: if the INSERT fails after DELETE succeeds, the FTS entry is lost
+	// until the next sync rebuilds it. This is acceptable because sync is
+	// idempotent and will recreate the entry.
 	if _, err := s.db.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
 		return fmt.Errorf("delete fts entry: %w", err)
 	}
-	_, err := s.db.Exec(`INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, title, content)
-	return err
+	if _, err := s.db.Exec(`INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, title, content); err != nil {
+		return fmt.Errorf("insert fts entry: %w", err)
+	}
+	return nil
 }
 
 // AppendFTS appends content to an existing FTS entry, preserving earlier text and title.
@@ -796,6 +831,9 @@ func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]Search
 			r.EndLine = eLine
 		}
 		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("search fts rows: %w", err)
 	}
 	return results, nil
 }
@@ -880,6 +918,9 @@ func (s *Store) GetSurroundingContext(docID int64, seq int, radius int) (string,
 		if eLine > endLine {
 			endLine = eLine
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", 0, 0, fmt.Errorf("get surrounding context rows: %w", err)
 	}
 	return strings.Join(contents, "\n\n"), startLine, endLine, nil
 }
@@ -1020,6 +1061,9 @@ func (s *Store) SearchVector(queryEmb []float32, limit int, filters *FilterSet) 
 			score: sim,
 		})
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("search vector rows: %w", err)
+	}
 
 	// Sort by similarity descending
 	sort.Slice(all, func(i, j int) bool {
@@ -1132,6 +1176,9 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) [
 			resultMap[chunkID] = r
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil
+	}
 
 	// Preserve HNSW ordering while excluding chunks that failed filters or were deleted
 	out := make([]SearchResult, 0, len(results))
@@ -1174,6 +1221,9 @@ func (s *Store) GetChunksWithoutEmbedding(force bool) ([]Chunk, error) {
 			}
 		}
 		chunks = append(chunks, ch)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get chunks without embedding rows: %w", err)
 	}
 	return chunks, nil
 }

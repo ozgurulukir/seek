@@ -245,7 +245,7 @@ func readLine() string {
 			case ch == 3: // Ctrl-C
 				term.Restore(fd, oldState)
 				os.Stdout.Write([]byte("^C\r\n"))
-				os.Exit(130)
+				return ""
 			case ch == 27: // Bare ESC
 				continue
 			case ch == 127 || ch == 8: // Backspace / DEL
@@ -271,7 +271,7 @@ func readLine() string {
 			} else if r == 3 {
 				term.Restore(fd, oldState)
 				os.Stdout.Write([]byte("^C\r\n"))
-				os.Exit(130)
+				return ""
 			} else if r >= 32 || r == '\t' {
 				line = append(line, r)
 				var runeBytes [utf8.UTFMax]byte
