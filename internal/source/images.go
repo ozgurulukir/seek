@@ -37,6 +37,11 @@ func ScanImages(dir string) ([]ImageFile, error) {
 			return nil
 		}
 
+		// Skip files larger than 100MB to avoid memory pressure.
+		if info.Size() > 100*1024*1024 {
+			return nil
+		}
+
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil

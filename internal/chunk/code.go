@@ -114,6 +114,17 @@ func splitCodeBlocks(content string) []string {
 
 // splitCodeLines splits a large code block line-by-line with line overlap.
 func splitCodeLines(block string, maxSize, overlap int) []string {
+	// Guard against degenerate parameters that would cause infinite loops.
+	if maxSize <= 0 {
+		maxSize = DefaultMaxChunkSize
+	}
+	if overlap < 0 {
+		overlap = 0
+	}
+	if overlap >= maxSize {
+		overlap = maxSize / 2
+	}
+
 	lines := strings.Split(block, "\n")
 	var chunks []string
 	var current strings.Builder
@@ -129,7 +140,11 @@ func splitCodeLines(block string, maxSize, overlap int) []string {
 				current.Reset()
 				currentLines = nil
 			}
-			for i := 0; i < len(line); i += maxSize - overlap {
+			step := maxSize - overlap
+			if step <= 0 {
+				step = maxSize
+			}
+			for i := 0; i < len(line); i += step {
 				end := i + maxSize
 				if end > len(line) {
 					end = len(line)

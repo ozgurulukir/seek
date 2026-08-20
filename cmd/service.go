@@ -18,7 +18,9 @@ const (
 	windowsTask  = "SeekSync"
 )
 
-var plistTemplate = template.Must(template.New("plist").Parse(`<?xml version="1.0" encoding="UTF-8"?>
+var plistTemplate = template.Must(template.New("plist").Funcs(template.FuncMap{
+	"shellQuote": shellQuote,
+}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -28,7 +30,7 @@ var plistTemplate = template.Must(template.New("plist").Parse(`<?xml version="1.
 	<array>
 		<string>/bin/sh</string>
 		<string>-c</string>
-		<string>{{.Binary}} sync && {{.Binary}} embed</string>
+		<string>{{shellQuote .Binary}} sync && {{shellQuote .Binary}} embed</string>
 	</array>
 	<key>StartInterval</key>
 	<integer>{{.Interval}}</integer>
@@ -42,14 +44,21 @@ var plistTemplate = template.Must(template.New("plist").Parse(`<?xml version="1.
 </plist>
 `))
 
+// shellQuote wraps a string in single quotes for safe shell embedding,
+// escaping any embedded single quotes. This prevents shell injection when
+// binary paths contain spaces or special characters.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
 var systemdServiceTemplate = template.Must(template.New("systemdService").Parse(`[Unit]
 Description=Seek periodic sync and embed
 After=network.target
 
 [Service]
 Type=oneshot
-ExecStart={{.Binary}} sync
-ExecStart={{.Binary}} embed
+ExecStart="{{.Binary}}" sync
+ExecStart="{{.Binary}}" embed
 StandardOutput=append:{{.LogPath}}
 StandardError=append:{{.LogPath}}
 `))

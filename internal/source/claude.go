@@ -325,14 +325,21 @@ func extractTextContent(raw json.RawMessage) string {
 }
 
 func Truncate(s string, maxLen int) string {
-	// Take first line or first maxLen chars
-	if idx := strings.IndexByte(s, '\n'); idx >= 0 && idx < maxLen {
-		s = s[:idx]
+	// Work in runes to avoid splitting multi-byte UTF-8 characters.
+	runes := []rune(s)
+	// Take first line if newline is within maxLen runes.
+	for i, r := range runes {
+		if r == '\n' {
+			if i < maxLen {
+				return string(runes[:i])
+			}
+			break
+		}
 	}
-	if len(s) > maxLen {
-		s = s[:maxLen] + "..."
+	if len(runes) > maxLen {
+		return string(runes[:maxLen]) + "..."
 	}
-	return s
+	return string(runes)
 }
 
 // CountLines counts the number of lines in a file.

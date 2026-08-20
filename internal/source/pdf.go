@@ -29,6 +29,10 @@ func ScanPdfs(dir string) ([]PdfFile, error) {
 		if strings.ToLower(filepath.Ext(path)) != ".pdf" {
 			return nil
 		}
+		// Skip files larger than 500MB to avoid memory pressure.
+		if info.Size() > 500*1024*1024 {
+			return nil
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil

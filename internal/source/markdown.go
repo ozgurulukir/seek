@@ -47,6 +47,11 @@ func ScanMarkdown(dir, pattern string) ([]FileInfo, error) {
 			}
 		}
 
+		// Skip files larger than 50MB to avoid memory pressure.
+		if info.Size() > 50*1024*1024 {
+			return nil
+		}
+
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil

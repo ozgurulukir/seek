@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -99,7 +100,10 @@ func (c *Client) UploadBatchFile(jsonlData []byte) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read upload response: %w", err)
+	}
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("upload failed %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -134,7 +138,10 @@ func (c *Client) CreateBatch(fileID string) (*BatchJob, error) {
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read create batch response: %w", err)
+	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("create batch failed %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -149,11 +156,14 @@ func (c *Client) CreateBatch(fileID string) (*BatchJob, error) {
 	return &BatchJob{ID: result.ID, Status: result.Status}, nil
 }
 
+const maxBatchPollAttempts = 17280 // ~24 hours at 5s intervals
+
 // PollBatch polls until the batch job completes. Returns the final job state.
+// It caps at maxBatchPollAttempts to prevent infinite loops on unexpected statuses.
 func (c *Client) PollBatch(batchID string, onStatus func(status string, elapsed time.Duration)) (*BatchJob, error) {
 	start := time.Now()
 
-	for {
+	for attempt := 0; attempt < maxBatchPollAttempts; attempt++ {
 		req, err := http.NewRequest("GET", c.baseURL+"/batches/"+batchID, nil)
 		if err != nil {
 			return nil, err
@@ -165,8 +175,11 @@ func (c *Client) PollBatch(batchID string, onStatus func(status string, elapsed 
 			return nil, fmt.Errorf("poll batch: %w", err)
 		}
 
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read poll response: %w", err)
+		}
 
 		var result struct {
 			ID           string `json:"id"`
@@ -198,6 +211,7 @@ func (c *Client) PollBatch(batchID string, onStatus func(status string, elapsed 
 
 		time.Sleep(config.DefaultBatchPollInterval)
 	}
+	return nil, fmt.Errorf("batch polling exceeded maximum attempts (%d)", maxBatchPollAttempts)
 }
 
 // DownloadBatchResults downloads and parses the batch output file.
@@ -215,7 +229,10 @@ func (c *Client) DownloadBatchResults(fileID string) (map[string][]float32, erro
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read download response: %w", err)
+	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("download failed %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -223,23 +240,28 @@ func (c *Client) DownloadBatchResults(fileID string) (map[string][]float32, erro
 	results := make(map[string][]float32)
 	lines := strings.Split(strings.TrimSpace(string(respBody)), "\n")
 
+	var parseErrors, apiErrors int
 	for _, line := range lines {
 		if line == "" {
 			continue
 		}
 		var resp batchResponseLine
 		if err := json.Unmarshal([]byte(line), &resp); err != nil {
+			parseErrors++
 			continue
 		}
 		if resp.Error != nil {
+			apiErrors++
 			continue
 		}
 		if resp.Response.StatusCode != 200 {
+			apiErrors++
 			continue
 		}
 
 		var embResp embeddingResponse
 		if err := json.Unmarshal(resp.Response.Body, &embResp); err != nil {
+			parseErrors++
 			continue
 		}
 		if len(embResp.Data) > 0 {
@@ -247,6 +269,14 @@ func (c *Client) DownloadBatchResults(fileID string) (map[string][]float32, erro
 		}
 	}
 
+	// Return partial results even when some items failed. Batch APIs commonly
+	// have per-item failures; failing the entire download would discard valid
+	// embeddings. The caller detects incomplete results by comparing
+	// len(results) to the expected count.
+	if parseErrors > 0 || apiErrors > 0 {
+		fmt.Fprintf(os.Stderr, "WARN: batch download: %d parse errors, %d API errors out of %d lines\n",
+			parseErrors, apiErrors, len(lines))
+	}
 	return results, nil
 }
 

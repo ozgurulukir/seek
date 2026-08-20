@@ -3,10 +3,12 @@ package store
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 
 	"github.com/coder/hnsw"
+	"github.com/google/renameio"
 	"github.com/ozgurulukir/seek/internal/config"
 )
 
@@ -117,12 +119,23 @@ func (h *hnswIndex) Save(path string) error {
 	if !h.dirty {
 		return nil
 	}
-	f, err := os.Create(path)
+	// Write to a temp file first, then atomically replace to avoid
+	// corrupting the index if the process crashes mid-write.
+	dir := filepath.Dir(path)
+	tmp, err := renameio.TempFile(dir, path)
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp index file: %w", err)
 	}
-	defer f.Close()
-	return h.graph.Export(f)
+	defer tmp.Cleanup()
+
+	if err := h.graph.Export(tmp); err != nil {
+		return fmt.Errorf("export hnsw index: %w", err)
+	}
+	if err := tmp.CloseAtomicallyReplace(); err != nil {
+		return fmt.Errorf("atomically replace hnsw index: %w", err)
+	}
+	h.dirty = false
+	return nil
 }
 
 func (h *hnswIndex) Load(path string) error {

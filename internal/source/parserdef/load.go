@@ -26,6 +26,11 @@ func parserOverrideDir() string {
 // directory (~/.config/seek/parsers/<name>.yaml), then falls back to the
 // embedded defaults. A user file completely overrides the embedded one (no merge).
 func Load(name string) (*ParserDef, error) {
+	// Sanitize: reject names with path separators or ".." to prevent path traversal.
+	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+		return nil, fmt.Errorf("invalid parser name %q: must not contain path separators or '..'", name)
+	}
+
 	// 1. User override (if present, it wins).
 	overridePath := filepath.Join(parserOverrideDir(), name+".yaml")
 	if data, err := os.ReadFile(overridePath); err == nil {
