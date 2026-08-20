@@ -19,6 +19,31 @@ Indexes source code repositories with automatic language detection, `.gitignore`
 seek add ~/projects/my-repo --code --name myrepo
 ```
 
+## Rich documents collections (`documents`)
+
+Indexes rich document formats via a configurable extraction backend.
+
+**Backends:**
+- `xberg` — 100+ formats (docx, xlsx, pptx, epub, html, eml, csv, etc.)
+- `builtin` — only markdown, pdf, and images (no rich document extraction)
+
+**Flags:**
+- `--documents` — primary flag
+- `--docs` — shortcut alias
+- `--backend` — override the config default for this collection only
+
+```bash
+# Add rich documents (--documents is primary, --docs is alias)
+seek add ~/docs --documents --name papers
+seek add ~/docs --docs --name papers           # shortcut alias
+
+# Override extraction backend
+seek add ~/docs --documents --backend xberg     # use xberg service
+seek add ~/docs --documents --backend builtin   # use builtin (limited)
+```
+
+**Note:** The builtin backend only supports markdown, PDF, and images. For docx/xlsx/pptx/epub/etc., use `--backend xberg` or set `extractor.backend: xberg` in your config.
+
 ## Schema-driven parsers
 
 Some conversation platforms are indexed via declarative YAML schemas (no Go code per platform). These are `parser` collections — they support the `--workspace` filter for cross-platform project filtering.

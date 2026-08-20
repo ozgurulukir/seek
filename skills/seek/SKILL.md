@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires seek binary installed and in PATH. Hybrid/vector search requires an embedding API key configured in ~/.config/seek/config.yaml.
 metadata:
   author: ozgurulukir
-  version: "1.1"
+  version: "sync-with-codebase"
 allowed-tools: Bash(seek:*) Read
 ---
 
@@ -25,7 +25,7 @@ Binary location: `seek`
 ## Quick Start
 
 ```bash
-# Global search across the entire index (all repositories, notes, and sessions)
+# Global search across the entire index (all collections, repositories, notes, and sessions)
 seek search "your query" -l 10
 
 # Search inside a specific repository or collection
@@ -53,7 +53,7 @@ seek search "conceptual question" --vec -l 10
 5. **Use filters** to narrow results:
    - `--repo <name>` / `--collection <name>`: target a specific repository or collection
    - `--lang <language>`: target a programming language (e.g. `go`, `python`, `typescript`, `rust`)
-   - `--doc-type <type>`: `code`, `markdown`, `claude`, `codex`, `pdf`, `documents`, `parser`
+   - `--doc-type <type>`: `code`, `markdown`, `claude`, `codex`, `images`, `pdf`, `documents`, `parser`
    - `--after/--before`, `--chunk-type`, `--path`, `--workspace`
 6. **Increase `-l 20`** if the first 10 results aren't enough.
 7. **Use `--aggs`** to get facet counts and statistics alongside search results.
@@ -80,9 +80,48 @@ seek search "conceptual question" --vec -l 10
 - The path is the actual file — use `Read` tool to get full content if needed
 - Image results show the file path (`.png`/`.jpg`) — use `Read` tool to view it
 
-## Maintenance Commands
+## Commands Reference
 
-Only run these when user explicitly asks to update the index:
+### Add Collections
+
+```bash
+# Add a new markdown collection
+seek add /path/to/dir --name myname
+
+# Add a source code repository collection
+seek add /path/to/repo --code --name myrepo
+
+# Add images (png/jpg/webp) with VL embedding
+seek add /path/to/images --images --name myimages
+
+# Add PDF pages (rasterized for VL embedding + optional OCR)
+seek add /path/to/pdfs --pdf --name mypdfs
+
+# Add rich documents (docx/xlsx/pptx/epub/html/...)
+# Use --documents (--docs is a shortcut alias)
+seek add /path/to/docs --documents --name mydocs
+seek add /path/to/docs --docs --name mydocs          # shortcut alias
+
+# Override extraction backend (builtin|xberg) for this add
+seek add /path/to/docs --documents --backend xberg
+
+# Add agent conversation collections
+seek add --claude        # Claude Code conversations (native, with images)
+seek add --codex         # Codex conversations (native, with images)
+seek add --opencode      # opencode CLI sessions (schema-driven)
+seek add --copilot       # GitHub Copilot CLI sessions (schema-driven)
+seek add --zed           # Zed Agent panel threads (schema-driven)
+seek add --claude-schema # Claude (text-only, schema-driven, no image extraction)
+seek add --codex-schema  # Codex (text-only, schema-driven, no image extraction)
+seek add --parser <name> # any parser schema by name
+
+# List available parser schemas + detection status
+seek parsers list
+```
+
+### Maintenance Commands
+
+Only run sync/embed when user explicitly asks to update the index:
 
 ```bash
 # Sync new/changed files (incremental, fast)
@@ -91,38 +130,137 @@ seek sync
 # Generate embeddings for new chunks
 seek embed
 
-# Force re-embed all chunks (e.g. after model change)
+# Force re-embed all chunks (e.g. after model or dimensions change)
 seek embed -f
 
 # Check index status
 seek status
 
-# Add a new markdown collection
-seek add /path/to/dir --name myname
+# Remove a collection (deletes all indexed documents and chunks)
+seek rm mycollection
 
-# Add a source code repository collection
-seek add /path/to/repo --code --name myrepo
+# Show or validate schema
+seek schema --show
+seek schema --validate
+```
 
-# Add rich documents collection (docx/xlsx/pdf/...)
-seek add /path/to/docs --docs
+### Background Service
 
-# Add agent conversation collections
-seek add --claude        # Claude Code conversations
-seek add --codex         # Codex conversations
-seek add --opencode      # opencode CLI sessions
-seek add --copilot       # GitHub Copilot CLI sessions
-seek add --parser <name> # any parser schema by name
+```bash
+# Start periodic sync+embed service (default: every 3600s = 1 hour)
+seek service start
 
-# List available parser schemas + detection status
-seek parsers list
+# Start with custom interval (e.g. every 15 minutes)
+seek service start -i 900
+
+# Stop and remove service
+seek service stop
+
+# Check service status
+seek service status
+```
+
+See also: [Service Reference](references/service.md)
+
+### Claude Code Hooks
+
+```bash
+# Install seek hooks into Claude Code (auto-sync on Stop)
+seek hooks install
+
+# Uninstall hooks
+seek hooks uninstall
+```
+
+See also: [Hooks Reference](references/hooks.md)
+
+### Authentication & Config
+
+```bash
+# Configure embedding provider API key interactively
+seek auth login
+
+# Show current auth/status
+seek auth status
+
+# Show current config
+seek config
+
+# Open config in default editor ($EDITOR, defaults to vim)
+seek config --edit
+```
+
+## Search Options
+
+```bash
+# Sort results
+seek search "query" --sort-by created_at --sort-order desc
+seek search "query" --sort-by line_count --sort-order asc
+
+# Query mode control (default: parsed with fallback to raw)
+seek search "query" --query-mode raw      # bypass structured query parser
+seek search "query" --query-mode parsed   # explicit parse mode
+
+# Combine multiple options
+seek search "query" \
+  --repo myproject \
+  --lang go \
+  -C 1 \
+  --sort-by created_at \
+  --sort-order desc \
+  -l 20
 ```
 
 ## Detailed References
 
 - [Query Syntax](references/query-syntax.md) — boolean, phrase, prefix, fuzzy, field-scoped, proximity
-- [Filters](references/filters.md) — repo/collection, lang, doc-type, date range, chunk-type, path, workspace
-- [Collection Types](references/collection-types.md) — code, markdown, claude, codex, images, pdf, parser
+- [Filters](references/filters.md) — repo/collection, lang, doc-type, date range, chunk-type, path, workspace, sort, query-mode
+- [Collection Types](references/collection-types.md) — code, markdown, claude, codex, images, pdf, documents, parser
+- [Service](references/service.md) — background periodic sync+embed service
+- [Hooks](references/hooks.md) — Claude Code auto-indexing hooks
 - [Troubleshooting](references/troubleshooting.md) — no results, API errors, index issues
+
+## Configuration Notes
+
+**Embedding:**
+- `base_url` — OpenAI-compatible endpoint
+- `model` — embedding model name (e.g. `text-embedding-3-small`, `qwen3-vl-embedding`)
+- `dimensions` — output vector dimension (fixed at index time)
+- `multimodal` — force VL (vision-language) image+text embedding
+- `vl_base_url` — custom VL endpoint (defaults to DashScope if unset)
+
+**OCR (extracting text from scanned PDF pages):**
+```yaml
+ocr:
+  enabled: true
+  # base_url/api_key/model default to embedding provider
+  # model: qwen-vl-ocr
+```
+
+**Reranking (Cross-Encoder reranking for better result ordering):**
+```yaml
+rerank:
+  enabled: true
+  base_url: https://...
+  api_key: ${API_KEY}
+  model: gte-rerank-v2
+  top_n: 50
+```
+
+**Extractor backend (for rich documents):**
+```yaml
+extractor:
+  backend: xberg    # or: builtin (markdown/pdf/images only)
+  xberg_base_url: https://...
+```
+
+**Vector Index (HNSW):**
+```yaml
+vector_index:
+  backend: hnsw     # or: linear (exhaustive scan)
+  hnsw:
+    persist_path: ~/.cache/seek/hnsw.index
+```
 
 ## Important Notes
 
@@ -135,3 +273,4 @@ seek parsers list
 - Vector search uses HNSW index (persisted at `~/.cache/seek/hnsw.index`) for fast approximate nearest neighbor search; falls back to linear scan if the index is missing or corrupt
 - Chunk content is compressed with Zstd by default to reduce storage; uncompressed content remains readable
 - Query parsing is enabled by default; invalid syntax falls back to raw FTS5 MATCH automatically
+- Changing `model` or `dimensions` requires re-indexing: `seek rm <collection>` then `seek add`

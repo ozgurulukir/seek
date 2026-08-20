@@ -56,7 +56,7 @@ seek search "query" --workspace /path/to/project
 ```
 
 ## Context Window Expansion
- 
+
 Expand surrounding chunk context before and after matching hits:
 
 ```bash
@@ -64,11 +64,61 @@ seek search "query" -C 1        # 1 chunk before and after
 seek search "query" --context 2  # 2 chunks before and after
 ```
 
-## Combining Filters
+## Sorting Results
 
-Multiple filters can be combined:
+By default, results are sorted by hybrid score (BM25 + RRF + reranker if enabled). You can override this:
 
 ```bash
-seek search "query" --repo myproject --lang go -C 1 --after 2024-01-01
+# Sort by document creation time (newest first)
+seek search "query" --sort-by created_at
+
+# Sort by creation time ascending (oldest first)
+seek search "query" --sort-by created_at --sort-order asc
+
+# Sort by line count (larger documents first)
+seek search "query" --sort-by line_count
+
+# Sort by line count ascending
+seek search "query" --sort-by line_count --sort-order asc
+```
+
+**Sort fields:**
+- `created_at` — document creation timestamp
+- `line_count` — document line count
+
+**Sort order:**
+- `desc` — descending (default, highest/newest first)
+- `asc` — ascending (lowest/oldest first)
+
+## Query Mode
+
+The query parser is enabled by default, supporting boolean, phrase, fuzzy, and field-scoped syntax. Invalid syntax automatically falls back to raw FTS5 MATCH.
+
+```bash
+# Force raw mode (bypass structured query parser entirely)
+seek search "complex AND syntax OR that might break" --query-mode raw
+
+# Explicitly request parsed mode (default)
+seek search "term1 AND term2" --query-mode parsed
+```
+
+**When to use raw mode:**
+- Your query contains special characters that confuse the parser
+- You want to search for literal `AND`, `OR`, `NOT` words
+- You want direct FTS5 MATCH syntax without any preprocessing
+
+## Combining Filters
+
+Multiple filters and options can be combined:
+
+```bash
+seek search "query" \
+  --repo myproject \
+  --lang go \
+  -C 1 \
+  --after 2024-01-01 \
+  --sort-by created_at \
+  --sort-order desc \
+  -l 20
 ```
 
