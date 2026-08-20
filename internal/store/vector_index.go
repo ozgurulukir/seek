@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/coder/hnsw"
+	"github.com/google/renameio"
 	"github.com/ozgurulukir/seek/internal/config"
 )
 
@@ -118,31 +119,20 @@ func (h *hnswIndex) Save(path string) error {
 	if !h.dirty {
 		return nil
 	}
-	// Write to a temp file first, then atomically rename to avoid
+	// Write to a temp file first, then atomically replace to avoid
 	// corrupting the index if the process crashes mid-write.
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".hnsw-index-*.tmp")
+	tmp, err := renameio.TempFile(dir, path)
 	if err != nil {
 		return fmt.Errorf("create temp index file: %w", err)
 	}
-	tmpName := tmp.Name()
+	defer tmp.Cleanup()
+
 	if err := h.graph.Export(tmp); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
 		return fmt.Errorf("export hnsw index: %w", err)
 	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("sync hnsw index: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp index file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename hnsw index: %w", err)
+	if err := tmp.CloseAtomicallyReplace(); err != nil {
+		return fmt.Errorf("atomically replace hnsw index: %w", err)
 	}
 	h.dirty = false
 	return nil

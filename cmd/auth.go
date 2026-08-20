@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -66,6 +67,8 @@ func isLocalEndpoint(url string) bool {
 	return strings.Contains(lower, "localhost") || strings.Contains(lower, "127.0.0.1") || strings.Contains(lower, "::1")
 }
 
+var errCanceled = errors.New("canceled")
+
 func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 	fmt.Println("\nSelect embedding provider:")
 	for i, p := range providers {
@@ -73,7 +76,10 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 	}
 	fmt.Print("\nChoice [1]: ")
 
-	choiceStr := readLine()
+	choiceStr, err := readLine()
+	if err != nil {
+		return nil
+	}
 	choice := 0
 	if choiceStr != "" {
 		fmt.Sscanf(choiceStr, "%d", &choice)
@@ -90,7 +96,11 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 
 	if p.BaseURL == "" {
 		fmt.Print("Base URL (e.g. http://localhost:11434/v1 or https://api.example.com/v1): ")
-		baseURL = strings.TrimSpace(readLine())
+		rawURL, err := readLine()
+		if err != nil {
+			return nil
+		}
+		baseURL = strings.TrimSpace(rawURL)
 		if baseURL == "" {
 			return fmt.Errorf("base URL cannot be empty")
 		}
@@ -103,13 +113,19 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 		}
 
 		fmt.Print("Model name (e.g. text-embedding-3-small, bge-m3): ")
-		model = readLine()
+		model, err = readLine()
+		if err != nil {
+			return nil
+		}
 		if model == "" {
 			return fmt.Errorf("model name cannot be empty")
 		}
 
 		fmt.Print("Dimensions [1024]: ")
-		dimStr := readLine()
+		dimStr, err := readLine()
+		if err != nil {
+			return nil
+		}
 		if dimStr != "" {
 			fmt.Sscanf(dimStr, "%d", &dimensions)
 		}
@@ -121,7 +137,11 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 	var apiKey string
 	if isLocalEndpoint(baseURL) {
 		fmt.Print("\nAPI Key (leave blank for local 'ollama'): ")
-		apiKey = strings.TrimSpace(readLine())
+		keyStr, err := readLine()
+		if err != nil {
+			return nil
+		}
+		apiKey = strings.TrimSpace(keyStr)
 		if apiKey == "" {
 			apiKey = "ollama"
 		}
@@ -130,7 +150,7 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 		keyBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
 		fmt.Println()
 		if err != nil {
-			return fmt.Errorf("read key: %w", err)
+			return nil
 		}
 		apiKey = strings.TrimSpace(string(keyBytes))
 		if apiKey == "" {
@@ -140,13 +160,21 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 
 	multimodal := config.EmbeddingConfig{Model: model}.IsMultimodal()
 	fmt.Print("\nUse vision-language (image) embedding endpoint? [y/N]: ")
-	if yes := strings.ToLower(strings.TrimSpace(readLine())); yes == "y" || yes == "yes" {
+	mmStr, err := readLine()
+	if err != nil {
+		return nil
+	}
+	if yes := strings.ToLower(strings.TrimSpace(mmStr)); yes == "y" || yes == "yes" {
 		multimodal = true
 	}
 	var vlBaseURL string
 	if multimodal {
 		fmt.Print("VL endpoint (blank for DashScope default): ")
-		vlBaseURL = strings.TrimSpace(readLine())
+		vlStr, err := readLine()
+		if err != nil {
+			return nil
+		}
+		vlBaseURL = strings.TrimSpace(vlStr)
 	}
 
 	// Preserve existing configuration sections (rerank, extractor, vector_index, etc.)
@@ -210,19 +238,26 @@ func (c *AuthStatusCmd) Run(cfg *config.AppConfig) error {
 }
 
 // readLine reads a line in raw mode, handling ESC, backspace, paste, and Ctrl-C cleanly.
-func readLine() string {
+// Returns errCanceled if the user presses Ctrl-C to abort.
+func readLine() (string, error) {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		reader := bufio.NewReader(os.Stdin)
-		line, _ := reader.ReadString('\n')
-		return strings.TrimSpace(line)
+		line, err := reader.ReadString('\n')
+		if err != nil && len(line) == 0 {
+			return "", err
+		}
+		return strings.TrimSpace(line), nil
 	}
 
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
 		reader := bufio.NewReader(os.Stdin)
-		line, _ := reader.ReadString('\n')
-		return strings.TrimSpace(line)
+		line, err := reader.ReadString('\n')
+		if err != nil && len(line) == 0 {
+			return "", err
+		}
+		return strings.TrimSpace(line), nil
 	}
 	defer term.Restore(fd, oldState)
 
@@ -241,11 +276,10 @@ func readLine() string {
 			switch {
 			case ch == '\r' || ch == '\n':
 				os.Stdout.Write([]byte("\r\n"))
-				return string(line)
+				return string(line), nil
 			case ch == 3: // Ctrl-C
-				term.Restore(fd, oldState)
 				os.Stdout.Write([]byte("^C\r\n"))
-				return ""
+				return "", errCanceled
 			case ch == 27: // Bare ESC
 				continue
 			case ch == 127 || ch == 8: // Backspace / DEL
@@ -267,11 +301,10 @@ func readLine() string {
 		for _, r := range str {
 			if r == '\r' || r == '\n' {
 				os.Stdout.Write([]byte("\r\n"))
-				return string(line)
+				return string(line), nil
 			} else if r == 3 {
-				term.Restore(fd, oldState)
 				os.Stdout.Write([]byte("^C\r\n"))
-				return ""
+				return "", errCanceled
 			} else if r >= 32 || r == '\t' {
 				line = append(line, r)
 				var runeBytes [utf8.UTFMax]byte
@@ -280,5 +313,5 @@ func readLine() string {
 			}
 		}
 	}
-	return string(line)
+	return string(line), nil
 }
