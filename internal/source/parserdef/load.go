@@ -88,11 +88,21 @@ func listFrom(overrideDir string) ([]LoadedDef, error) {
 
 	var (
 		result []LoadedDef
-		seen   = make(map[string]bool)
+		seen   = make(map[string]bool, len(entries))
 		mu     sync.Mutex
-		wg     sync.WaitGroup
 	)
 
+	processEmbedded(overrideDir, entries, &result, seen, &mu)
+	processUserOverrides(overrideDir, &result, seen, &mu)
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
+}
+
+func processEmbedded(overrideDir string, entries []os.DirEntry, result *[]LoadedDef, seen map[string]bool, mu *sync.Mutex) {
+	var wg sync.WaitGroup
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
@@ -103,102 +113,96 @@ func listFrom(overrideDir string) ([]LoadedDef, error) {
 		go func(entry os.DirEntry, schemaName string) {
 			defer wg.Done()
 
-			// If a user override exists, it completely wins (consistent with Load).
-			overridePath := filepath.Join(overrideDir, schemaName+".yaml")
-			if overrideData, oErr := os.ReadFile(overridePath); oErr == nil {
-				def, err := parseSchema(overrideData, overridePath)
-				loaded := LoadedDef{
-					Name:     schemaName,
-					Embedded: true, // an embedded version exists
-					Override: true, // but the user override is what's actually loaded
-					Def:      def,
-				}
-				if err != nil {
-					loaded.Def = nil // parse error → nil def
-				}
-
-				mu.Lock()
-				result = append(result, loaded)
-				seen[schemaName] = true
-				mu.Unlock()
-				return
-			}
-
-			// No override — use the embedded version.
-			data, err := embeddedSchemas.ReadFile("parsers/" + entry.Name())
-			if err != nil {
-				return
-			}
-			def, err := parseSchema(data, "embed:parsers/"+entry.Name())
-			if err != nil {
-				mu.Lock()
-				result = append(result, LoadedDef{Name: schemaName, Embedded: true, Def: nil})
-				mu.Unlock()
+			loaded, ok := loadEmbeddedOrOverride(overrideDir, entry, schemaName)
+			if !ok {
 				return
 			}
 
 			mu.Lock()
-			result = append(result, LoadedDef{
-				Name:     schemaName,
-				Embedded: true,
-				Override: false,
-				Def:      def,
-			})
+			*result = append(*result, loaded)
 			seen[schemaName] = true
 			mu.Unlock()
 		}(e, name)
 	}
-
-	// Wait for embedded schemas to finish before checking user-only schemas,
-	// so that seen map is fully populated.
 	wg.Wait()
+}
 
-	// Collect user-only schemas (not shadowing embedded).
-
-	if overrideEntries, err := os.ReadDir(overrideDir); err == nil {
-		for _, e := range overrideEntries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
-				continue
-			}
-			name := strings.TrimSuffix(e.Name(), ".yaml")
-
-			// We can check 'seen' without locking here since wg.Wait() was called
-			if seen[name] {
-				continue // already handled as embedded+override
-			}
-
-			wg.Add(1)
-			go func(entry os.DirEntry, schemaName string) {
-				defer wg.Done()
-
-				data, err := os.ReadFile(filepath.Join(overrideDir, entry.Name()))
-				if err != nil {
-					return
-				}
-				def, err := parseSchema(data, filepath.Join(overrideDir, entry.Name()))
-				if err != nil {
-					mu.Lock()
-					result = append(result, LoadedDef{Name: schemaName, Def: nil})
-					mu.Unlock()
-					return
-				}
-
-				mu.Lock()
-				result = append(result, LoadedDef{
-					Name:     schemaName,
-					Embedded: false,
-					Override: true,
-					Def:      def,
-				})
-				mu.Unlock()
-			}(e, name)
+func loadEmbeddedOrOverride(overrideDir string, entry os.DirEntry, schemaName string) (LoadedDef, bool) {
+	// If a user override exists, it completely wins (consistent with Load).
+	overridePath := filepath.Join(overrideDir, schemaName+".yaml")
+	if overrideData, oErr := os.ReadFile(overridePath); oErr == nil {
+		def, err := parseSchema(overrideData, overridePath)
+		loaded := LoadedDef{
+			Name:     schemaName,
+			Embedded: true, // an embedded version exists
+			Override: true, // but the user override is what's actually loaded
+			Def:      def,
 		}
+		if err != nil {
+			loaded.Def = nil // parse error → nil def
+		}
+		return loaded, true
 	}
 
-	wg.Wait()
+	// No override — use the embedded version.
+	data, err := embeddedSchemas.ReadFile("parsers/" + entry.Name())
+	if err != nil {
+		return LoadedDef{}, false
+	}
+	def, err := parseSchema(data, "embed:parsers/"+entry.Name())
+	if err != nil {
+		return LoadedDef{Name: schemaName, Embedded: true, Def: nil}, true
+	}
 
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name < result[j].Name
-	})
-	return result, nil
+	return LoadedDef{
+		Name:     schemaName,
+		Embedded: true,
+		Override: false,
+		Def:      def,
+	}, true
+}
+
+func processUserOverrides(overrideDir string, result *[]LoadedDef, seen map[string]bool, mu *sync.Mutex) {
+	overrideEntries, err := os.ReadDir(overrideDir)
+	if err != nil {
+		return
+	}
+
+	var wg sync.WaitGroup
+	for _, e := range overrideEntries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".yaml")
+
+		// We can check 'seen' without locking here since processEmbedded finished.
+		if seen[name] {
+			continue // already handled as embedded+override
+		}
+
+		wg.Add(1)
+		go func(entry os.DirEntry, schemaName string) {
+			defer wg.Done()
+
+			data, err := os.ReadFile(filepath.Join(overrideDir, entry.Name()))
+			if err != nil {
+				return
+			}
+			def, err := parseSchema(data, filepath.Join(overrideDir, entry.Name()))
+			loaded := LoadedDef{
+				Name:     schemaName,
+				Embedded: false,
+				Override: true,
+				Def:      def,
+			}
+			if err != nil {
+				loaded.Def = nil
+			}
+
+			mu.Lock()
+			*result = append(*result, loaded)
+			mu.Unlock()
+		}(e, name)
+	}
+	wg.Wait()
 }
