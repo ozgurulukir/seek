@@ -261,3 +261,35 @@ func TestValidateSelectOnly(t *testing.T) {
 		})
 	}
 }
+
+// TestListWithBrokenOverride verifies that a broken user override file sets Override: false and Def: nil.
+func TestListWithBrokenOverride(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
+	overrideDir := filepath.Join(tmpHome, ".config", "seek", "parsers")
+	if err := os.MkdirAll(overrideDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	invalidYaml := []byte(`invalid_yaml: [`)
+	if err := os.WriteFile(filepath.Join(overrideDir, "opencode.yaml"), invalidYaml, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	for _, d := range defs {
+		if d.Name == "opencode" {
+			if d.Override {
+				t.Errorf("opencode should have Override=false when override is broken")
+			}
+			if d.Def != nil {
+				t.Errorf("opencode should have Def=nil when override is broken")
+			}
+		}
+	}
+}
