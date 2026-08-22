@@ -97,83 +97,94 @@ func syncSQLiteSessions(src *SourceSpec, ver *VersionSpec, files []string, since
 	var errs []SessionError
 
 	for _, dbPath := range files {
-		db, err := openExternalDB(dbPath)
-		if err != nil {
-			errs = append(errs, SessionError{SessionID: dbPath, Err: fmt.Errorf("open db: %w", err)})
-			continue
-		}
-
-		rawRows, err := scanSQLiteSessions(db, ver)
-		if err != nil {
-			db.Close()
-			errs = append(errs, SessionError{SessionID: dbPath, Err: fmt.Errorf("scan sessions: %w", err)})
-			continue
-		}
-
-		var batchIDs []string
-		var batchIndices []int
-
-		for _, raw := range rawRows {
-			// Normalize cursor.
-			var cursor time.Time
-			if ver.Sessions.Cursor != "" {
-				ct, cerr := normalizeCursor(raw.cursor, ver.Sessions.CursorFormat)
-				if cerr != nil {
-					errs = append(errs, SessionError{SessionID: raw.id, Err: fmt.Errorf("cursor: %w", cerr)})
-					continue
-				}
-				cursor = ct
-			}
-
-			// Determine if this session has changed (needs re-indexing).
-			// In incremental mode, unchanged sessions get Messages=nil so the
-			// caller skips them but can still track them for orphan detection.
-			sess := Session{
-				ID:       raw.id,
-				Title:    raw.title,
-				SrcPath:  dbPath,
-				Cursor:   cursor,
-				Metadata: raw.metadata,
-			}
-
-			// Incremental filter: skip message fetch for unchanged sessions.
-			// A zero cursor (unparseable / missing) is treated as "always re-index".
-			if !since.IsZero() && cursor.IsZero() == false && !cursor.After(since) {
-				sessions = append(sessions, sess) // Messages stays nil → unchanged
-				continue
-			}
-
-			// Fetch messages (Mode A: query, or Mode B: inline).
-			if ver.Messages.Inline {
-				msgs, mErr := parseInlineMessages(raw.data, &ver.Messages)
-				if mErr != nil {
-					errs = append(errs, SessionError{SessionID: raw.id, Err: fmt.Errorf("inline messages: %w", mErr)})
-					continue
-				}
-				sess.Messages = msgs
-				sessions = append(sessions, sess)
-			} else {
-				idx := len(sessions)
-				sessions = append(sessions, sess)
-				batchIDs = append(batchIDs, raw.id)
-				batchIndices = append(batchIndices, idx)
-
-				if len(batchIDs) >= 500 {
-					errs = append(errs, fetchAndAssignBatch(db, ver, batchIDs, batchIndices, sessions)...)
-					batchIDs = batchIDs[:0]
-					batchIndices = batchIndices[:0]
-				}
-			}
-		}
-
-		if len(batchIDs) > 0 {
-			errs = append(errs, fetchAndAssignBatch(db, ver, batchIDs, batchIndices, sessions)...)
-		}
-
-		db.Close()
+		dbSessions, dbErrs := syncSQLiteDB(dbPath, ver, since)
+		sessions = append(sessions, dbSessions...)
+		errs = append(errs, dbErrs...)
 	}
 
 	return sessions, errs, nil
+}
+
+// syncSQLiteDB syncs sessions from a single SQLite database file.
+func syncSQLiteDB(dbPath string, ver *VersionSpec, since time.Time) ([]Session, []SessionError) {
+	db, err := openExternalDB(dbPath)
+	if err != nil {
+		return nil, []SessionError{{SessionID: dbPath, Err: fmt.Errorf("open db: %w", err)}}
+	}
+	defer db.Close()
+
+	rawRows, err := scanSQLiteSessions(db, ver)
+	if err != nil {
+		return nil, []SessionError{{SessionID: dbPath, Err: fmt.Errorf("scan sessions: %w", err)}}
+	}
+
+	var sessions []Session
+	var errs []SessionError
+	var batchIDs []string
+	var batchIndices []int
+
+	for _, raw := range rawRows {
+		sess, err := processSQLiteSessionRow(raw, dbPath, ver)
+		if err != nil {
+			errs = append(errs, SessionError{SessionID: raw.id, Err: err})
+			continue
+		}
+
+		// Incremental filter: skip message fetch for unchanged sessions.
+		// A zero cursor (unparseable / missing) is treated as "always re-index".
+		if !since.IsZero() && !sess.Cursor.IsZero() && !sess.Cursor.After(since) {
+			sessions = append(sessions, sess) // Messages stays nil → unchanged
+			continue
+		}
+
+		// Fetch messages (Mode A: query, or Mode B: inline).
+		if ver.Messages.Inline {
+			msgs, mErr := parseInlineMessages(raw.data, &ver.Messages)
+			if mErr != nil {
+				errs = append(errs, SessionError{SessionID: raw.id, Err: fmt.Errorf("inline messages: %w", mErr)})
+				continue
+			}
+			sess.Messages = msgs
+			sessions = append(sessions, sess)
+		} else {
+			idx := len(sessions)
+			sessions = append(sessions, sess)
+			batchIDs = append(batchIDs, raw.id)
+			batchIndices = append(batchIndices, idx)
+
+			if len(batchIDs) >= 500 {
+				errs = append(errs, fetchAndAssignBatch(db, ver, batchIDs, batchIndices, sessions)...)
+				batchIDs = batchIDs[:0]
+				batchIndices = batchIndices[:0]
+			}
+		}
+	}
+
+	if len(batchIDs) > 0 {
+		errs = append(errs, fetchAndAssignBatch(db, ver, batchIDs, batchIndices, sessions)...)
+	}
+
+	return sessions, errs
+}
+
+// processSQLiteSessionRow constructs a Session and normalizes its cursor from a raw SQLite row.
+func processSQLiteSessionRow(raw sqliteSessionRow, dbPath string, ver *VersionSpec) (Session, error) {
+	var cursor time.Time
+	if ver.Sessions.Cursor != "" {
+		ct, cerr := normalizeCursor(raw.cursor, ver.Sessions.CursorFormat)
+		if cerr != nil {
+			return Session{}, fmt.Errorf("cursor: %w", cerr)
+		}
+		cursor = ct
+	}
+
+	return Session{
+		ID:       raw.id,
+		Title:    raw.title,
+		SrcPath:  dbPath,
+		Cursor:   cursor,
+		Metadata: raw.metadata,
+	}, nil
 }
 
 // parseInlineMessages decodes and extracts messages from an inline blob (Mode B, Zed).
