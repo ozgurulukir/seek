@@ -135,28 +135,30 @@ func createFixtureExternalDB(t *testing.T, path string) {
 		"p1", "m1", "sess-a", ts, `{"type":"text","text":"hello world"}`)
 }
 
-// TestIndexer_ParserCollectionSync exercises the full syncParserDef path:
-// add → full sync → incremental sync (must skip unchanged sessions, not re-index).
-// This is the regression test for the sub-second cursor truncation bug.
-func TestIndexer_ParserCollectionSync(t *testing.T) {
+type parserSyncTestEnv struct {
+	db  *store.Store
+	idx *indexer.Indexer
+	col *store.Collection
+}
+
+func setupParserSyncTest(t *testing.T) *parserSyncTestEnv {
+	t.Helper()
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "seek.db")
 	db, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 
-	// Create a fixture external DB.
 	extPath := filepath.Join(tmpDir, "external.db")
 	createFixtureExternalDB(t, extPath)
 
-	// Write a user override schema pointing at the fixture.
-	// We use HOME override so parserdef.Load finds it.
 	overrideDir := filepath.Join(tmpDir, ".config", "seek", "parsers")
 	os.MkdirAll(overrideDir, 0755)
 	t.Setenv("HOME", tmpDir)
 	t.Setenv("USERPROFILE", tmpDir)
+
 	schemaContent := fmt.Sprintf(`
 format: 1
 name: test-fixture
@@ -184,61 +186,84 @@ sources:
           role: role
           content: content
 `, filepath.ToSlash(extPath))
-	os.WriteFile(filepath.Join(overrideDir, "test-fixture.yaml"), []byte(schemaContent), 0644)
+	if err := os.WriteFile(filepath.Join(overrideDir, "test-fixture.yaml"), []byte(schemaContent), 0644); err != nil {
+		t.Fatalf("WriteFile parser schema: %v", err)
+	}
 
 	cfg := &config.AppConfig{DBPath: dbPath}
 	idx := indexer.New(cfg, db).WithLogger(nopLogger{})
 
-	// Create a parser collection.
 	col, err := db.CreateParserCollection("test-fixture-convs", extPath, "*", "test-fixture")
 	if err != nil {
 		t.Fatalf("CreateParserCollection: %v", err)
 	}
 
-	// 1. Full sync.
-	if err := idx.SyncCollection(col); err != nil {
-		t.Fatalf("first sync: %v", err)
+	return &parserSyncTestEnv{
+		db:  db,
+		idx: idx,
+		col: col,
 	}
-	docs, _ := db.ListDocumentPaths(col.ID)
-	if len(docs) != 1 {
-		t.Fatalf("expected 1 doc after full sync, got %d", len(docs))
-	}
+}
 
-	// Verify the document has a chunk.
-	chunks, _ := db.GetChunksWithoutEmbedding(true)
-	if len(chunks) != 1 {
-		t.Fatalf("expected 1 chunk, got %d", len(chunks))
-	}
-	firstChunkContent := chunks[0].Content
+// TestIndexer_ParserCollectionSync exercises the full syncParserDef path:
+// add → full sync → incremental sync (must skip unchanged sessions, not re-index).
+// This is the regression test for the sub-second cursor truncation bug.
+func TestIndexer_ParserCollectionSync(t *testing.T) {
+	env := setupParserSyncTest(t)
 
-	// 2. Incremental sync — session cursor hasn't changed, so it must be skipped.
-	// The bug would re-index it (because .Unix() truncates the .613 ms fraction,
-	// making `since` < cursor). The fix uses .UnixMilli() so the round-trip is exact.
-	// We verify by checking the chunk content is NOT re-created.
-	// To detect re-indexing, we delete the existing chunk and sync again.
-	// If incremental works correctly, the session is unchanged (Messages nil),
-	// so no new chunk is created. If the bug is present, the session is re-indexed
-	// and a new chunk appears.
-	for _, docID := range docs {
-		db.DeleteChunksForDocument(docID)
-	}
-	chunksAfterDelete, _ := db.GetChunksWithoutEmbedding(true)
-	if len(chunksAfterDelete) != 0 {
-		t.Fatalf("expected 0 chunks after delete, got %d", len(chunksAfterDelete))
-	}
+	var docs map[string]int64
+	var firstChunkContent string
 
-	if err := idx.SyncCollection(col); err != nil {
-		t.Fatalf("incremental sync: %v", err)
-	}
+	t.Run("FullSync", func(t *testing.T) {
+		if err := env.idx.SyncCollection(env.col); err != nil {
+			t.Fatalf("first sync: %v", err)
+		}
+		var err error
+		docs, err = env.db.ListDocumentPaths(env.col.ID)
+		if err != nil {
+			t.Fatalf("ListDocumentPaths: %v", err)
+		}
+		if len(docs) != 1 {
+			t.Fatalf("expected 1 doc after full sync, got %d", len(docs))
+		}
 
-	// If incremental sync correctly skips the unchanged session, NO new chunks
-	// should appear (the session was returned with Messages=nil, so the indexer
-	// skipped it). If the cursor truncation bug is present, the session would be
-	// re-indexed and chunks would reappear.
-	chunksFinal, _ := db.GetChunksWithoutEmbedding(true)
-	if len(chunksFinal) != 0 {
-		t.Errorf("incremental sync re-indexed unchanged session: %d chunks appeared "+
-			"(cursor sub-second precision lost in round-trip). Chunk content: %q",
-			len(chunksFinal), firstChunkContent)
-	}
+		chunks, _ := env.db.GetChunksWithoutEmbedding(true)
+		if len(chunks) != 1 {
+			t.Fatalf("expected 1 chunk, got %d", len(chunks))
+		}
+		firstChunkContent = chunks[0].Content
+	})
+
+	t.Run("IncrementalSync", func(t *testing.T) {
+		// Session cursor hasn't changed, so it must be skipped.
+		// The bug would re-index it (because .Unix() truncates the .613 ms fraction,
+		// making `since` < cursor). The fix uses .UnixMilli() so the round-trip is exact.
+		// We verify by checking the chunk content is NOT re-created.
+		// To detect re-indexing, we delete the existing chunk and sync again.
+		// If incremental works correctly, the session is unchanged (Messages nil),
+		// so no new chunk is created. If the bug is present, the session is re-indexed
+		// and a new chunk appears.
+		for _, docID := range docs {
+			env.db.DeleteChunksForDocument(docID)
+		}
+		chunksAfterDelete, _ := env.db.GetChunksWithoutEmbedding(true)
+		if len(chunksAfterDelete) != 0 {
+			t.Fatalf("expected 0 chunks after delete, got %d", len(chunksAfterDelete))
+		}
+
+		if err := env.idx.SyncCollection(env.col); err != nil {
+			t.Fatalf("incremental sync: %v", err)
+		}
+
+		// If incremental sync correctly skips the unchanged session, NO new chunks
+		// should appear (the session was returned with Messages=nil, so the indexer
+		// skipped it). If the cursor truncation bug is present, the session would be
+		// re-indexed and chunks would reappear.
+		chunksFinal, _ := env.db.GetChunksWithoutEmbedding(true)
+		if len(chunksFinal) != 0 {
+			t.Errorf("incremental sync re-indexed unchanged session: %d chunks appeared "+
+				"(cursor sub-second precision lost in round-trip). Chunk content: %q",
+				len(chunksFinal), firstChunkContent)
+		}
+	})
 }
