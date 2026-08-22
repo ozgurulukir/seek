@@ -653,62 +653,21 @@ func (idx *Indexer) syncCode(col *store.Collection) error {
 		return err
 	}
 
-	diskPaths := make(map[string]bool, len(files))
-	for _, f := range files {
-		diskPaths[f.Path] = true
-	}
-
-	if existingPaths, err := idx.db.ListDocumentPaths(col.ID); err == nil {
-		removed := 0
-		for path, docID := range existingPaths {
-			if !diskPaths[path] {
-				idx.db.DeleteDocument(docID)
-				idx.db.FastFields().DeleteForDocument(docID)
-				removed++
-			}
-		}
-		if removed > 0 {
-			idx.log.Printf("  Removed %d stale documents\n", removed)
-		}
-	}
+	idx.cleanupStaleCodeDocuments(col.ID, files)
 
 	var indexed, skipped, failed int
 	for _, f := range files {
-		existing, err := idx.db.GetDocument(col.ID, f.Path)
-		if err == nil && existing.ContentHash == f.ContentHash {
-			if existing.Mtime != f.Mtime {
-				idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
-			}
-			skipped++
-			continue
-		}
-
-		docID, err := idx.db.UpsertDocument(col.ID, f.Path, f.Title, f.ContentHash, f.Mtime, f.LineCount)
+		isSkipped, err := idx.indexCodeFile(col.ID, f)
 		if err != nil {
-			idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
+			idx.log.Printf("  WARN: %v\n", err)
 			failed++
 			continue
 		}
-
-		if err := idx.db.UpsertFTS(docID, f.Title, f.Content); err != nil {
-			idx.log.Printf("  WARN: fts %s: %v\n", f.Path, err)
+		if isSkipped {
+			skipped++
+		} else {
+			indexed++
 		}
-
-		idx.db.DeleteChunksForDocument(docID)
-		chunks := chunk.ChunkCode(f.Content, f.Language, 0, 0)
-		for _, c := range chunks {
-			if err := idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil); err != nil {
-				idx.log.Printf("  WARN: chunk %s: %v\n", f.Path, err)
-			}
-		}
-
-		// Fast field metadata
-		_ = idx.db.FastFields().Set(docID, "lang", f.Language)
-		_ = idx.db.FastFields().Set(docID, "ext", f.Extension)
-		_ = idx.db.FastFields().Set(docID, "filename", filepath.Base(f.Path))
-		_ = idx.db.FastFields().Set(docID, "rel_path", f.RelativePath)
-
-		indexed++
 	}
 
 	idx.log.Printf("Code: %d indexed, %d unchanged", indexed, skipped)
@@ -717,6 +676,65 @@ func (idx *Indexer) syncCode(col *store.Collection) error {
 	}
 	idx.log.Printf("\n")
 	return nil
+}
+
+func (idx *Indexer) cleanupStaleCodeDocuments(colID int64, files []source.CodeFileInfo) {
+	diskPaths := make(map[string]bool, len(files))
+	for _, f := range files {
+		diskPaths[f.Path] = true
+	}
+
+	existingPaths, err := idx.db.ListDocumentPaths(colID)
+	if err != nil {
+		return
+	}
+
+	removed := 0
+	for path, docID := range existingPaths {
+		if !diskPaths[path] {
+			idx.db.DeleteDocument(docID)
+			idx.db.FastFields().DeleteForDocument(docID)
+			removed++
+		}
+	}
+	if removed > 0 {
+		idx.log.Printf("  Removed %d stale documents\n", removed)
+	}
+}
+
+func (idx *Indexer) indexCodeFile(colID int64, f source.CodeFileInfo) (bool, error) {
+	existing, err := idx.db.GetDocument(colID, f.Path)
+	if err == nil && existing.ContentHash == f.ContentHash {
+		if existing.Mtime != f.Mtime {
+			idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
+		}
+		return true, nil
+	}
+
+	docID, err := idx.db.UpsertDocument(colID, f.Path, f.Title, f.ContentHash, f.Mtime, f.LineCount)
+	if err != nil {
+		return false, fmt.Errorf("upsert %s: %w", f.Path, err)
+	}
+
+	if err := idx.db.UpsertFTS(docID, f.Title, f.Content); err != nil {
+		idx.log.Printf("  WARN: fts %s: %v\n", f.Path, err)
+	}
+
+	idx.db.DeleteChunksForDocument(docID)
+	chunks := chunk.ChunkCode(f.Content, f.Language, 0, 0)
+	for _, c := range chunks {
+		if err := idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil); err != nil {
+			idx.log.Printf("  WARN: chunk %s: %v\n", f.Path, err)
+		}
+	}
+
+	// Fast field metadata
+	_ = idx.db.FastFields().Set(docID, "lang", f.Language)
+	_ = idx.db.FastFields().Set(docID, "ext", f.Extension)
+	_ = idx.db.FastFields().Set(docID, "filename", filepath.Base(f.Path))
+	_ = idx.db.FastFields().Set(docID, "rel_path", f.RelativePath)
+
+	return false, nil
 }
 
 // syncParserDef indexes a schema-driven parser collection (§6.6).
