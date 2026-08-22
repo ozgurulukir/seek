@@ -149,54 +149,106 @@ func cacheDir() string {
 	return filepath.Join(home, ".cache", "seek")
 }
 
+func defaultAppConfig(cacheD string) *AppConfig {
+	return &AppConfig{
+		CacheDir: cacheD,
+		DBPath:   filepath.Join(cacheD, "index.db"),
+		Config: Config{
+			Embedding: EmbeddingConfig{
+				BaseURL:    DefaultEmbeddingBaseURL,
+				Model:      DefaultEmbeddingModel,
+				Dimensions: DefaultEmbeddingDimensions,
+			},
+			Search: SearchConfig{
+				QueryMode:    DefaultQueryMode,
+				DefaultLimit: DefaultSearchLimit,
+				RRFK:         DefaultRRFK,
+			},
+			Filters: FilterConfig{
+				Enabled: true,
+			},
+			Aggregations: AggregationConfig{
+				Enabled: true,
+			},
+			VectorIndex: VectorIndexConfig{
+				Backend: DefaultVectorIndexBackend,
+				HNSW: HNSWConfig{
+					M:              DefaultHNSWM,
+					EFConstruction: DefaultHNSEFConstruction,
+					EFSearch:       DefaultHNSEFSearch,
+					PersistPath:    filepath.Join(cacheD, "hnsw.index"),
+					Dimension:      DefaultHNSWDimension,
+				},
+			},
+			Compression: CompressionConfig{
+				Algorithm: DefaultCompressionAlgorithm,
+				Level:     DefaultCompressionLevel,
+			},
+			Extractor: ExtractorConfig{
+				Backend:      DefaultExtractorBackend,
+				OutputFormat: DefaultExtractorOutputFormat,
+				XbergBaseURL: DefaultXbergBaseURL,
+				Timeout:      DefaultXbergTimeout,
+			},
+		},
+	}
+}
+
+func applyFallbacks(cfg *Config) {
+	// Resolve env vars in api_key (e.g. ${DASHSCOPE_API_KEY})
+	cfg.Embedding.APIKey = expandEnv(cfg.Embedding.APIKey)
+	cfg.OCR.APIKey = expandEnv(cfg.OCR.APIKey)
+	cfg.Rerank.APIKey = expandEnv(cfg.Rerank.APIKey)
+
+	// OCR falls back to the embedding provider when not explicitly set.
+	if cfg.OCR.BaseURL == "" {
+		cfg.OCR.BaseURL = cfg.Embedding.BaseURL
+	}
+	if cfg.OCR.APIKey == "" {
+		cfg.OCR.APIKey = cfg.Embedding.APIKey
+	}
+	if cfg.OCR.Model == "" {
+		cfg.OCR.Model = DefaultOCRModel
+	}
+
+	// Rerank falls back to the embedding provider's baseURL/APIKey if empty
+	if cfg.Rerank.BaseURL == "" {
+		cfg.Rerank.BaseURL = cfg.Embedding.BaseURL
+	}
+	if cfg.Rerank.APIKey == "" {
+		cfg.Rerank.APIKey = cfg.Embedding.APIKey
+	}
+	if cfg.Rerank.Model == "" {
+		cfg.Rerank.Model = DefaultRerankModel
+	}
+	if cfg.Rerank.TopN == 0 {
+		cfg.Rerank.TopN = DefaultRerankTopN
+	}
+
+	// Extractor defaults: fill any unset field. BaseURL may embed env vars
+	// (e.g. ${XBERG_HOST}), so expand it like the API keys above.
+	cfg.Extractor.XbergBaseURL = expandEnv(cfg.Extractor.XbergBaseURL)
+	if cfg.Extractor.Backend == "" {
+		cfg.Extractor.Backend = DefaultExtractorBackend
+	}
+	if cfg.Extractor.OutputFormat == "" {
+		cfg.Extractor.OutputFormat = DefaultExtractorOutputFormat
+	}
+	if cfg.Extractor.XbergBaseURL == "" {
+		cfg.Extractor.XbergBaseURL = DefaultXbergBaseURL
+	}
+	if cfg.Extractor.Timeout == 0 {
+		cfg.Extractor.Timeout = DefaultXbergTimeout
+	}
+}
+
 func Load() (*AppConfig, error) {
 	cfgDir := configDir()
 	cacheD := cacheDir()
 	os.MkdirAll(cfgDir, DefaultDirPerms)
 	os.MkdirAll(cacheD, DefaultDirPerms)
 
-	ac := &AppConfig{
-		CacheDir: cacheD,
-		DBPath:   filepath.Join(cacheD, "index.db"),
-	}
-
-	// Defaults
-	ac.Config.Embedding = EmbeddingConfig{
-		BaseURL:    DefaultEmbeddingBaseURL,
-		Model:      DefaultEmbeddingModel,
-		Dimensions: DefaultEmbeddingDimensions,
-	}
-	ac.Config.Search = SearchConfig{
-		QueryMode:    DefaultQueryMode,
-		DefaultLimit: DefaultSearchLimit,
-		RRFK:         DefaultRRFK,
-	}
-	ac.Config.Filters = FilterConfig{
-		Enabled: true,
-	}
-	ac.Config.Aggregations = AggregationConfig{
-		Enabled: true,
-	}
-	ac.Config.VectorIndex = VectorIndexConfig{
-		Backend: DefaultVectorIndexBackend,
-		HNSW: HNSWConfig{
-			M:              DefaultHNSWM,
-			EFConstruction: DefaultHNSEFConstruction,
-			EFSearch:       DefaultHNSEFSearch,
-			PersistPath:    filepath.Join(cacheD, "hnsw.index"),
-			Dimension:      DefaultHNSWDimension,
-		},
-	}
-	ac.Config.Compression = CompressionConfig{
-		Algorithm: DefaultCompressionAlgorithm,
-		Level:     DefaultCompressionLevel,
-	}
-	ac.Config.Extractor = ExtractorConfig{
-		Backend:      DefaultExtractorBackend,
-		OutputFormat: DefaultExtractorOutputFormat,
-		XbergBaseURL: DefaultXbergBaseURL,
-		Timeout:      DefaultXbergTimeout,
-	}
+	ac := defaultAppConfig(cacheD)
 
 	cfgPath := filepath.Join(cfgDir, "config.yaml")
 	if data, err := os.ReadFile(cfgPath); err == nil {
@@ -205,51 +257,7 @@ func Load() (*AppConfig, error) {
 		}
 	}
 
-	// Resolve env vars in api_key (e.g. ${DASHSCOPE_API_KEY})
-	ac.Config.Embedding.APIKey = expandEnv(ac.Config.Embedding.APIKey)
-	ac.Config.OCR.APIKey = expandEnv(ac.Config.OCR.APIKey)
-	ac.Config.Rerank.APIKey = expandEnv(ac.Config.Rerank.APIKey)
-
-	// OCR falls back to the embedding provider when not explicitly set.
-	if ac.Config.OCR.BaseURL == "" {
-		ac.Config.OCR.BaseURL = ac.Config.Embedding.BaseURL
-	}
-	if ac.Config.OCR.APIKey == "" {
-		ac.Config.OCR.APIKey = ac.Config.Embedding.APIKey
-	}
-	if ac.Config.OCR.Model == "" {
-		ac.Config.OCR.Model = DefaultOCRModel
-	}
-
-	// Rerank falls back to the embedding provider's baseURL/APIKey if empty
-	if ac.Config.Rerank.BaseURL == "" {
-		ac.Config.Rerank.BaseURL = ac.Config.Embedding.BaseURL
-	}
-	if ac.Config.Rerank.APIKey == "" {
-		ac.Config.Rerank.APIKey = ac.Config.Embedding.APIKey
-	}
-	if ac.Config.Rerank.Model == "" {
-		ac.Config.Rerank.Model = DefaultRerankModel
-	}
-	if ac.Config.Rerank.TopN == 0 {
-		ac.Config.Rerank.TopN = DefaultRerankTopN
-	}
-
-	// Extractor defaults: fill any unset field. BaseURL may embed env vars
-	// (e.g. ${XBERG_HOST}), so expand it like the API keys above.
-	ac.Config.Extractor.XbergBaseURL = expandEnv(ac.Config.Extractor.XbergBaseURL)
-	if ac.Config.Extractor.Backend == "" {
-		ac.Config.Extractor.Backend = DefaultExtractorBackend
-	}
-	if ac.Config.Extractor.OutputFormat == "" {
-		ac.Config.Extractor.OutputFormat = DefaultExtractorOutputFormat
-	}
-	if ac.Config.Extractor.XbergBaseURL == "" {
-		ac.Config.Extractor.XbergBaseURL = DefaultXbergBaseURL
-	}
-	if ac.Config.Extractor.Timeout == 0 {
-		ac.Config.Extractor.Timeout = DefaultXbergTimeout
-	}
+	applyFallbacks(&ac.Config)
 
 	return ac, nil
 }
