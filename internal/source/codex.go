@@ -142,6 +142,106 @@ func ParseCodexFile(path string, fromLine int) ([]CodexMessage, string, error) {
 	return messages, sessionID, scanner.Err()
 }
 
+type codexContentBlock struct {
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	ImageURL string `json:"image_url"`
+}
+
+func parseCodexSessionMeta(payload json.RawMessage) string {
+	var meta struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(payload, &meta)
+	return meta.ID
+}
+
+func extractCodexImages(sessionID string, contentBlocks []codexContentBlock, textParts []string, prevMessages []CodexMessage, imgIdx *int) []ConversationImage {
+	var images []ConversationImage
+	sid := sessionID
+	if len(sid) > 8 {
+		sid = sid[:8]
+	}
+
+	for _, c := range contentBlocks {
+		if c.Type != "input_image" || c.ImageURL == "" {
+			continue
+		}
+
+		// Parse data URI: "data:image/png;base64,iVBORw0K..."
+		mediaType, decoded, ok := parseDataURI(c.ImageURL)
+		if !ok {
+			continue
+		}
+
+		ext := ExtractExtension(mediaType)
+		savePath := filepath.Join(ImageCacheDir(), fmt.Sprintf("codex-%s-%d.%s", sid, *imgIdx, ext))
+
+		if err := SaveImage(decoded, mediaType, savePath); err != nil {
+			continue
+		}
+
+		// Context: nearest text from this message
+		context := ""
+		if len(textParts) > 0 {
+			context = Truncate(strings.Join(textParts, " "), ImageContextMaxLen)
+		} else if len(prevMessages) > 0 {
+			context = Truncate(prevMessages[len(prevMessages)-1].Content, ImageContextMaxLen)
+		}
+
+		images = append(images, ConversationImage{
+			Data:      decoded,
+			MediaType: mediaType,
+			Context:   context,
+			Index:     *imgIdx,
+			SavedPath: savePath,
+		})
+		(*imgIdx)++
+	}
+	return images
+}
+
+func processCodexResponseItem(payload json.RawMessage, sessionID string, messages []CodexMessage, imgIdx *int) (*CodexMessage, []ConversationImage, bool) {
+	var item struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(payload, &item); err != nil {
+		return nil, nil, false
+	}
+
+	var contentBlocks []codexContentBlock
+	if err := json.Unmarshal(item.Content, &contentBlocks); err != nil {
+		return nil, nil, false
+	}
+
+	if item.Role != RoleUser && item.Role != RoleAssistant {
+		return nil, nil, false
+	}
+
+	var textParts []string
+	for _, c := range contentBlocks {
+		if (c.Type == "input_text" || c.Type == "output_text") && c.Text != "" {
+			textParts = append(textParts, c.Text)
+		}
+	}
+
+	var msg *CodexMessage
+	if len(textParts) > 0 {
+		msg = &CodexMessage{
+			Role:    item.Role,
+			Content: strings.Join(textParts, "\n"),
+		}
+	}
+
+	var imgs []ConversationImage
+	if item.Role == RoleUser {
+		imgs = extractCodexImages(sessionID, contentBlocks, textParts, messages, imgIdx)
+	}
+
+	return msg, imgs, true
+}
+
 // ParseCodexFileWithImages parses a Codex JSONL file and extracts both messages and images.
 func ParseCodexFileWithImages(path string, fromLine int) ([]CodexMessage, string, []ConversationImage, error) {
 	f, err := os.Open(path)
@@ -179,90 +279,18 @@ func ParseCodexFileWithImages(path string, fromLine int) ([]CodexMessage, string
 
 		switch raw.Type {
 		case "session_meta":
-			var meta struct {
-				ID string `json:"id"`
-			}
-			json.Unmarshal(raw.Payload, &meta)
-			sessionID = meta.ID
+			sessionID = parseCodexSessionMeta(raw.Payload)
 
 		case "response_item":
-			var item struct {
-				Role    string          `json:"role"`
-				Content json.RawMessage `json:"content"`
-			}
-			if err := json.Unmarshal(raw.Payload, &item); err != nil {
+			msg, extractedImgs, ok := processCodexResponseItem(raw.Payload, sessionID, messages, &imgIdx)
+			if !ok {
 				continue
 			}
-
-			// Extract text messages
-			var contentBlocks []struct {
-				Type     string `json:"type"`
-				Text     string `json:"text"`
-				ImageURL string `json:"image_url"`
+			if msg != nil {
+				messages = append(messages, *msg)
 			}
-			if err := json.Unmarshal(item.Content, &contentBlocks); err != nil {
-				continue
-			}
-
-			if item.Role != RoleUser && item.Role != RoleAssistant {
-				continue
-			}
-
-			var textParts []string
-			for _, c := range contentBlocks {
-				if (c.Type == "input_text" || c.Type == "output_text") && c.Text != "" {
-					textParts = append(textParts, c.Text)
-				}
-			}
-			if len(textParts) > 0 {
-				messages = append(messages, CodexMessage{
-					Role:    item.Role,
-					Content: strings.Join(textParts, "\n"),
-				})
-			}
-
-			// Extract images from user messages
-			if item.Role == RoleUser {
-				sid := sessionID
-				if len(sid) > 8 {
-					sid = sid[:8]
-				}
-
-				for _, c := range contentBlocks {
-					if c.Type != "input_image" || c.ImageURL == "" {
-						continue
-					}
-
-					// Parse data URI: "data:image/png;base64,iVBORw0K..."
-					mediaType, decoded, ok := parseDataURI(c.ImageURL)
-					if !ok {
-						continue
-					}
-
-					ext := ExtractExtension(mediaType)
-					savePath := filepath.Join(ImageCacheDir(), fmt.Sprintf("codex-%s-%d.%s", sid, imgIdx, ext))
-
-					if err := SaveImage(decoded, mediaType, savePath); err != nil {
-						continue
-					}
-
-					// Context: nearest text from this message
-					context := ""
-					if len(textParts) > 0 {
-						context = Truncate(strings.Join(textParts, " "), ImageContextMaxLen)
-					} else if len(messages) > 0 {
-						context = Truncate(messages[len(messages)-1].Content, ImageContextMaxLen)
-					}
-
-					images = append(images, ConversationImage{
-						Data:      decoded,
-						MediaType: mediaType,
-						Context:   context,
-						Index:     imgIdx,
-						SavedPath: savePath,
-					})
-					imgIdx++
-				}
+			if len(extractedImgs) > 0 {
+				images = append(images, extractedImgs...)
 			}
 		}
 	}
