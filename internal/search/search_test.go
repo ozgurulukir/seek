@@ -556,7 +556,8 @@ func TestSearchHybridVLClient(t *testing.T) {
 
 // --- TestEngine_SearchVector (from PR #33) ---
 
-func TestEngine_SearchVector(t *testing.T) {
+func newMockVectorServer(t *testing.T) *httptest.Server {
+	t.Helper()
 	mux := http.NewServeMux()
 
 	// Mock handler for embed.Client.
@@ -588,98 +589,128 @@ func TestEngine_SearchVector(t *testing.T) {
 	})
 
 	ts := httptest.NewServer(mux)
-	defer ts.Close()
+	t.Cleanup(ts.Close)
+	return ts
+}
 
-	s, err := store.Open(":memory:")
-	if err != nil {
-		t.Fatalf("failed to open store: %v", err)
+func testSearchVectorNoEmbedClients(t *testing.T, s *store.Store) {
+	t.Helper()
+	engine := NewEngine(s, nil)
+	_, err := engine.SearchVector(context.Background(), "query", 10, Options{})
+	if err == nil {
+		t.Fatal("expected error when no embed client is provided")
 	}
-	defer s.Close()
+	if err.Error() != "vector search requires embedding client" {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func testSearchVectorWithEmbedClient(t *testing.T, s *store.Store, baseURL string) {
+	t.Helper()
+	client := embed.NewClient(baseURL, "key", "model", 3)
+	engine := NewEngine(s, client)
+
+	results, err := engine.SearchVector(context.Background(), "query", 0, Options{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Store is empty; results may be nil or an empty slice — both are acceptable here.
+	_ = results
+}
+
+func testSearchVectorWithVLClientPrecedence(t *testing.T, s *store.Store, baseURL string) {
+	t.Helper()
+	// Create a broken embed client that points to a non-existent URL.
+	// If vlClient takes precedence, this broken client won't be called.
+	badClient := embed.NewClient("http://127.0.0.1:0", "key", "model", 3)
+	vlClient := embed.NewVLClient("key", "model", 3, baseURL+"/vl-embeddings")
+
+	engine := NewEngineWithVL(s, badClient, vlClient)
+
+	results, err := engine.SearchVector(context.Background(), "query", 5, Options{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// If it reaches here, it means vlClient was successfully called.
+	_ = results
+}
+
+func testSearchVectorLimitDefaults(t *testing.T, s *store.Store, baseURL string) {
+	t.Helper()
+	client := embed.NewClient(baseURL, "key", "model", 3)
+	engine := NewEngine(s, client)
+
+	// If limit is <= 0, it becomes DefaultLimit inside SearchVector.
+	_, err := engine.SearchVector(context.Background(), "query", -5, Options{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func testSearchVectorEmbedClientError(t *testing.T, s *store.Store) {
+	t.Helper()
+	brokenMux := http.NewServeMux()
+	brokenMux.HandleFunc("/embeddings", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	brokenTs := httptest.NewServer(brokenMux)
+	defer brokenTs.Close()
+
+	client := embed.NewClient(brokenTs.URL, "key", "model", 3)
+	engine := NewEngine(s, client)
+
+	_, err := engine.SearchVector(context.Background(), "query", 0, Options{})
+	if err == nil {
+		t.Fatal("expected error from bad embed client")
+	}
+}
+
+func testSearchVectorVLClientError(t *testing.T, s *store.Store) {
+	t.Helper()
+	brokenMux := http.NewServeMux()
+	brokenMux.HandleFunc("/vl-embeddings", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	brokenTs := httptest.NewServer(brokenMux)
+	defer brokenTs.Close()
+
+	badClient := embed.NewClient("http://127.0.0.1:0", "key", "model", 3)
+	vlClient := embed.NewVLClient("key", "model", 3, brokenTs.URL+"/vl-embeddings")
+	engine := NewEngineWithVL(s, badClient, vlClient)
+
+	_, err := engine.SearchVector(context.Background(), "query", 0, Options{})
+	if err == nil {
+		t.Fatal("expected error from bad vl client")
+	}
+}
+
+func TestEngine_SearchVector(t *testing.T) {
+	ts := newMockVectorServer(t)
+	s := newTestStore(t)
 
 	t.Run("no embed clients", func(t *testing.T) {
-		engine := NewEngine(s, nil)
-		_, err := engine.SearchVector(context.Background(), "query", 10, Options{})
-		if err == nil {
-			t.Fatal("expected error when no embed client is provided")
-		}
-		if err.Error() != "vector search requires embedding client" {
-			t.Errorf("unexpected error: %v", err)
-		}
+		testSearchVectorNoEmbedClients(t, s)
 	})
 
 	t.Run("with embedClient", func(t *testing.T) {
-		client := embed.NewClient(ts.URL, "key", "model", 3)
-		engine := NewEngine(s, client)
-
-		results, err := engine.SearchVector(context.Background(), "query", 0, Options{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		// Store is empty; results may be nil or an empty slice — both are acceptable here.
-		_ = results
+		testSearchVectorWithEmbedClient(t, s, ts.URL)
 	})
 
 	t.Run("with vlClient precedence", func(t *testing.T) {
-		// Create a broken embed client that points to a non-existent URL.
-		// If vlClient takes precedence, this broken client won't be called.
-		badClient := embed.NewClient("http://127.0.0.1:0", "key", "model", 3)
-		vlClient := embed.NewVLClient("key", "model", 3, ts.URL+"/vl-embeddings")
-
-		engine := NewEngineWithVL(s, badClient, vlClient)
-
-		results, err := engine.SearchVector(context.Background(), "query", 5, Options{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		// If it reaches here, it means vlClient was successfully called.
-		_ = results
+		testSearchVectorWithVLClientPrecedence(t, s, ts.URL)
 	})
 
 	t.Run("limit defaults to DefaultLimit", func(t *testing.T) {
-		client := embed.NewClient(ts.URL, "key", "model", 3)
-		engine := NewEngine(s, client)
-
-		// If limit is <= 0, it becomes DefaultLimit inside SearchVector.
-		_, err := engine.SearchVector(context.Background(), "query", -5, Options{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		testSearchVectorLimitDefaults(t, s, ts.URL)
 	})
 
 	t.Run("embedClient returns error", func(t *testing.T) {
-		brokenMux := http.NewServeMux()
-		brokenMux.HandleFunc("/embeddings", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-		})
-		brokenTs := httptest.NewServer(brokenMux)
-		defer brokenTs.Close()
-
-		client := embed.NewClient(brokenTs.URL, "key", "model", 3)
-		engine := NewEngine(s, client)
-
-		_, err := engine.SearchVector(context.Background(), "query", 0, Options{})
-		if err == nil {
-			t.Fatal("expected error from bad embed client")
-		}
+		testSearchVectorEmbedClientError(t, s)
 	})
 
 	t.Run("vlClient returns error", func(t *testing.T) {
-		brokenMux := http.NewServeMux()
-		brokenMux.HandleFunc("/vl-embeddings", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-		})
-		brokenTs := httptest.NewServer(brokenMux)
-		defer brokenTs.Close()
-
-		badClient := embed.NewClient("http://127.0.0.1:0", "key", "model", 3)
-		vlClient := embed.NewVLClient("key", "model", 3, brokenTs.URL+"/vl-embeddings")
-		engine := NewEngineWithVL(s, badClient, vlClient)
-
-		_, err := engine.SearchVector(context.Background(), "query", 0, Options{})
-		if err == nil {
-			t.Fatal("expected error from bad vl client")
-		}
+		testSearchVectorVLClientError(t, s)
 	})
 }
 
