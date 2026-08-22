@@ -134,7 +134,7 @@ func loadEmbeddedOrOverride(overrideDir string, entry os.DirEntry, schemaName st
 		def, err := parseSchema(overrideData, overridePath)
 		loaded := LoadedDef{
 			Name:     schemaName,
-			Embedded: true, // an embedded version exists
+			Embedded: true,       // an embedded version exists
 			Override: err == nil, // override is true only if user override parsed successfully
 			Def:      def,
 		}
