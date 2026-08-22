@@ -133,107 +133,116 @@ func (c *ServiceStartCmd) Run(cfg *config.AppConfig) error {
 
 	switch runtime.GOOS {
 	case "windows":
-		minutes := interval / 60
-		if minutes < 1 {
-			minutes = 1
-		}
-		trArg := fmt.Sprintf(`cmd.exe /c ""%s" sync && "%s" embed"`, bin, bin)
-		out, err := exec.Command("schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO", fmt.Sprintf("%d", minutes), "/TN", windowsTask, "/TR", trArg).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("schtasks create: %s (%w)", string(out), err)
-		}
-		fmt.Printf("Service scheduled via Windows Task Scheduler (every %d min)\n", minutes)
-		fmt.Printf("  Task:   %s\n", windowsTask)
-		fmt.Printf("  Binary: %s\n", bin)
-		return nil
-
+		return startWindowsService(bin, interval)
 	case "linux":
-		dir := systemdDir()
-		if err := os.MkdirAll(dir, config.DefaultDirPerms); err != nil {
-			return fmt.Errorf("create systemd user dir: %w", err)
-		}
-
-		servicePath := filepath.Join(dir, "seek.service")
-		timerPath := filepath.Join(dir, "seek.timer")
-
-		data := struct {
-			Binary   string
-			Interval int
-			LogPath  string
-		}{
-			Binary:   bin,
-			Interval: interval,
-			LogPath:  logPath(),
-		}
-
-		var sBuf bytes.Buffer
-		if err := systemdServiceTemplate.Execute(&sBuf, data); err != nil {
-			return fmt.Errorf("render systemd service: %w", err)
-		}
-		if err := os.WriteFile(servicePath, sBuf.Bytes(), config.DefaultFilePerms); err != nil {
-			return fmt.Errorf("write systemd service: %w", err)
-		}
-
-		var tBuf bytes.Buffer
-		if err := systemdTimerTemplate.Execute(&tBuf, data); err != nil {
-			return fmt.Errorf("render systemd timer: %w", err)
-		}
-		if err := os.WriteFile(timerPath, tBuf.Bytes(), config.DefaultFilePerms); err != nil {
-			return fmt.Errorf("write systemd timer: %w", err)
-		}
-
-		_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
-		out, err := exec.Command("systemctl", "--user", "enable", "--now", "seek.timer").CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("systemctl enable seek.timer: %s (%w)", string(out), err)
-		}
-
-		fmt.Printf("Service started via systemd user timer (every %ds)\n", interval)
-		fmt.Printf("  Unit: %s\n", timerPath)
-		fmt.Printf("  Log:  %s\n", logPath())
-		return nil
-
+		return startLinuxService(bin, interval)
 	case "darwin":
-		path := plistPath()
-		_ = os.MkdirAll(filepath.Dir(path), config.DefaultDirPerms)
-
-		f, err := os.Create(path)
-		if err != nil {
-			return fmt.Errorf("create plist: %w", err)
-		}
-
-		data := struct {
-			Label    string
-			Binary   string
-			Interval int
-			LogPath  string
-		}{
-			Label:    serviceLabel,
-			Binary:   bin,
-			Interval: interval,
-			LogPath:  logPath(),
-		}
-
-		if err := plistTemplate.Execute(f, data); err != nil {
-			f.Close()
-			return fmt.Errorf("write plist: %w", err)
-		}
-		f.Close()
-
-		runLaunchctl("bootout", fmt.Sprintf("gui/%d", os.Getuid()), path)
-		out, err := runLaunchctl("bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), path)
-		if err != nil {
-			return fmt.Errorf("launchctl bootstrap: %s (%w)", string(out), err)
-		}
-
-		fmt.Printf("Service started via launchd (every %ds)\n", interval)
-		fmt.Printf("  Plist: %s\n", path)
-		fmt.Printf("  Log:   %s\n", logPath())
-		return nil
-
+		return startDarwinService(bin, interval)
 	default:
 		return fmt.Errorf("unsupported operating system for background service: %s", runtime.GOOS)
 	}
+}
+
+func startWindowsService(bin string, interval int) error {
+	minutes := interval / 60
+	if minutes < 1 {
+		minutes = 1
+	}
+	trArg := fmt.Sprintf(`cmd.exe /c ""%s" sync && "%s" embed"`, bin, bin)
+	out, err := exec.Command("schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO", fmt.Sprintf("%d", minutes), "/TN", windowsTask, "/TR", trArg).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("schtasks create: %s (%w)", string(out), err)
+	}
+	fmt.Printf("Service scheduled via Windows Task Scheduler (every %d min)\n", minutes)
+	fmt.Printf("  Task:   %s\n", windowsTask)
+	fmt.Printf("  Binary: %s\n", bin)
+	return nil
+}
+
+func startLinuxService(bin string, interval int) error {
+	dir := systemdDir()
+	if err := os.MkdirAll(dir, config.DefaultDirPerms); err != nil {
+		return fmt.Errorf("create systemd user dir: %w", err)
+	}
+
+	servicePath := filepath.Join(dir, "seek.service")
+	timerPath := filepath.Join(dir, "seek.timer")
+
+	data := struct {
+		Binary   string
+		Interval int
+		LogPath  string
+	}{
+		Binary:   bin,
+		Interval: interval,
+		LogPath:  logPath(),
+	}
+
+	var sBuf bytes.Buffer
+	if err := systemdServiceTemplate.Execute(&sBuf, data); err != nil {
+		return fmt.Errorf("render systemd service: %w", err)
+	}
+	if err := os.WriteFile(servicePath, sBuf.Bytes(), config.DefaultFilePerms); err != nil {
+		return fmt.Errorf("write systemd service: %w", err)
+	}
+
+	var tBuf bytes.Buffer
+	if err := systemdTimerTemplate.Execute(&tBuf, data); err != nil {
+		return fmt.Errorf("render systemd timer: %w", err)
+	}
+	if err := os.WriteFile(timerPath, tBuf.Bytes(), config.DefaultFilePerms); err != nil {
+		return fmt.Errorf("write systemd timer: %w", err)
+	}
+
+	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	out, err := exec.Command("systemctl", "--user", "enable", "--now", "seek.timer").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("systemctl enable seek.timer: %s (%w)", string(out), err)
+	}
+
+	fmt.Printf("Service started via systemd user timer (every %ds)\n", interval)
+	fmt.Printf("  Unit: %s\n", timerPath)
+	fmt.Printf("  Log:  %s\n", logPath())
+	return nil
+}
+
+func startDarwinService(bin string, interval int) error {
+	path := plistPath()
+	_ = os.MkdirAll(filepath.Dir(path), config.DefaultDirPerms)
+
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create plist: %w", err)
+	}
+
+	data := struct {
+		Label    string
+		Binary   string
+		Interval int
+		LogPath  string
+	}{
+		Label:    serviceLabel,
+		Binary:   bin,
+		Interval: interval,
+		LogPath:  logPath(),
+	}
+
+	if err := plistTemplate.Execute(f, data); err != nil {
+		f.Close()
+		return fmt.Errorf("write plist: %w", err)
+	}
+	f.Close()
+
+	runLaunchctl("bootout", fmt.Sprintf("gui/%d", os.Getuid()), path)
+	out, err := runLaunchctl("bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), path)
+	if err != nil {
+		return fmt.Errorf("launchctl bootstrap: %s (%w)", string(out), err)
+	}
+
+	fmt.Printf("Service started via launchd (every %ds)\n", interval)
+	fmt.Printf("  Plist: %s\n", path)
+	fmt.Printf("  Log:   %s\n", logPath())
+	return nil
 }
 
 func (c *ServiceStopCmd) Run(cfg *config.AppConfig) error {
