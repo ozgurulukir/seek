@@ -985,7 +985,11 @@ func (s *Store) SearchVector(queryEmb []float32, limit int, filters *FilterSet) 
 		// Fall through to linear scan on error or empty results
 	}
 
-	// Fallback: linear scan over all embedded chunks with optional filters
+	return s.linearSearchVector(queryEmb, limit, filters)
+}
+
+// linearSearchVector performs a linear scan over all embedded chunks with optional filters.
+func (s *Store) linearSearchVector(queryEmb []float32, limit int, filters *FilterSet) ([]SearchResult, error) {
 	sqlQuery := `SELECT ch.id, ch.document_id, ch.seq, ch.content, ch.content_zstd, ch.embedding,
 		        COALESCE(ch.chunk_type, ?), COALESCE(ch.image_path, ''),
 		        COALESCE(ch.start_line, 0), COALESCE(ch.end_line, 0),
