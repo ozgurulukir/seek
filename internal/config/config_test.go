@@ -128,3 +128,50 @@ func TestLoad(t *testing.T) {
 		t.Errorf("configDir was not created")
 	}
 }
+
+func TestLoad_EnvVarPropagation(t *testing.T) {
+	// Isolate the real ~/.config/seek by pointing HOME at a temp dir.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	const apiKey = "expanded-key-42"
+	t.Setenv("SEEK_TEST_API_KEY", apiKey)
+
+	// Embedding api_key references the env var; ocr/rerank keys are absent,
+	// so they must fall back to the *expanded* embedding key.
+	yamlCfg := []byte("embedding:\n" +
+		"  api_key: ${SEEK_TEST_API_KEY}\n" +
+		"ocr: {}\n" +
+		"rerank: {}\n")
+	cfgDir := filepath.Join(tmpHome, ".config", "seek")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("creating temp config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"), yamlCfg, 0o600); err != nil {
+		t.Fatalf("writing temp config.yaml: %v", err)
+	}
+
+	ac, err := Load()
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+
+	// 1. Env expansion of the embedding key itself.
+	if got := ac.Config.Embedding.APIKey; got != apiKey {
+		t.Errorf("Embedding.APIKey = %q, want %q (env expansion)", got, apiKey)
+	}
+	// 2. The expanded key propagates to the OCR and Rerank APIKey fallbacks.
+	if got := ac.Config.OCR.APIKey; got != apiKey {
+		t.Errorf("OCR.APIKey = %q, want %q (fallback to expanded embedding key)", got, apiKey)
+	}
+	if got := ac.Config.Rerank.APIKey; got != apiKey {
+		t.Errorf("Rerank.APIKey = %q, want %q (fallback to expanded embedding key)", got, apiKey)
+	}
+	// 3. Other rerank fallbacks still apply.
+	if got := ac.Config.Rerank.Model; got != DefaultRerankModel {
+		t.Errorf("Rerank.Model = %q, want %q", got, DefaultRerankModel)
+	}
+	if got := ac.Config.Rerank.TopN; got != DefaultRerankTopN {
+		t.Errorf("Rerank.TopN = %d, want %d", got, DefaultRerankTopN)
+	}
+}
