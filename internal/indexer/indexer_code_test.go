@@ -12,14 +12,17 @@ import (
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
-func TestIndexer_CodeCollectionSync(t *testing.T) {
+func setupCodeIndexerTest(t *testing.T) (*indexer.Indexer, *store.Store, *store.Collection, string) {
+	t.Helper()
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 	db, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		db.Close()
+	})
 
 	cfg := &config.AppConfig{
 		DBPath: dbPath,
@@ -37,82 +40,117 @@ func TestIndexer_CodeCollectionSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1. Initial sync (empty)
-	if err := idx.SyncCollection(col); err != nil {
-		t.Fatal(err)
-	}
+	return idx, db, col, codeDir
+}
 
-	// 2. Add files
-	mainGo := filepath.Join(codeDir, "main.go")
+// writeCodeFixtures writes the two fixture files that most subtests operate on.
+// Each subtest calls this (when it needs the files present) so that subtests are
+// self-contained and can be run in isolation via -run 'TestIndexer_CodeCollectionSync/<name>'.
+func writeCodeFixtures(t *testing.T, mainGo, appTs string) {
+	t.Helper()
 	if err := os.WriteFile(mainGo, []byte("package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	appTs := filepath.Join(codeDir, "src", "app.ts")
 	if err := os.WriteFile(appTs, []byte("export const version = '1.0.0';\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
+}
 
-	if err := idx.SyncCollection(col); err != nil {
-		t.Fatal(err)
-	}
+func TestIndexer_CodeCollectionSync(t *testing.T) {
+	idx, db, col, codeDir := setupCodeIndexerTest(t)
 
-	docs, err := db.ListDocumentPaths(col.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(docs) != 2 {
-		t.Fatalf("expected 2 docs, got %d", len(docs))
-	}
+	mainGo := filepath.Join(codeDir, "main.go")
+	appTs := filepath.Join(codeDir, "src", "app.ts")
 
-	// Verify fast field metadata
-	mainDocID := docs[mainGo]
-	langVal, err := db.FastFields().Get(mainDocID, "lang")
-	if err != nil {
-		t.Fatalf("failed to get fastfield: %v", err)
-	}
-	if langVal != "go" {
-		t.Errorf("expected lang 'go', got %v", langVal)
-	}
+	t.Run("Initial empty sync", func(t *testing.T) {
+		if err := idx.SyncCollection(col); err != nil {
+			t.Fatal(err)
+		}
+	})
 
-	tsDocID := docs[appTs]
-	tsLang, err := db.FastFields().Get(tsDocID, "lang")
-	if err != nil {
-		t.Fatalf("failed to get ts fastfield: %v", err)
-	}
-	if tsLang != "typescript" {
-		t.Errorf("expected lang 'typescript', got %v", tsLang)
-	}
+	t.Run("Add files and verify fastfields", func(t *testing.T) {
+		writeCodeFixtures(t, mainGo, appTs)
 
-	// 3. Unchanged sync
-	if err := idx.SyncCollection(col); err != nil {
-		t.Fatal(err)
-	}
+		if err := idx.SyncCollection(col); err != nil {
+			t.Fatal(err)
+		}
 
-	// 4. Update file
-	time.Sleep(10 * time.Millisecond)
-	if err := os.WriteFile(mainGo, []byte("package main\n\nfunc main() {\n\tprintln(\"updated\")\n}\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := idx.SyncCollection(col); err != nil {
-		t.Fatal(err)
-	}
+		docs, err := db.ListDocumentPaths(col.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(docs) != 2 {
+			t.Fatalf("expected 2 docs, got %d", len(docs))
+		}
 
-	// 5. Delete file (orphan cleanup)
-	if err := os.Remove(appTs); err != nil {
-		t.Fatal(err)
-	}
-	if err := idx.SyncCollection(col); err != nil {
-		t.Fatal(err)
-	}
+		// Verify fast field metadata
+		mainDocID := docs[mainGo]
+		langVal, err := db.FastFields().Get(mainDocID, "lang")
+		if err != nil {
+			t.Fatalf("failed to get fastfield: %v", err)
+		}
+		if langVal != "go" {
+			t.Errorf("expected lang 'go', got %v", langVal)
+		}
 
-	docsAfter, err := db.ListDocumentPaths(col.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(docsAfter) != 1 {
-		t.Fatalf("expected 1 doc after delete, got %d", len(docsAfter))
-	}
-	if _, ok := docsAfter[mainGo]; !ok {
-		t.Errorf("expected main.go to still exist")
-	}
+		tsDocID := docs[appTs]
+		tsLang, err := db.FastFields().Get(tsDocID, "lang")
+		if err != nil {
+			t.Fatalf("failed to get ts fastfield: %v", err)
+		}
+		if tsLang != "typescript" {
+			t.Errorf("expected lang 'typescript', got %v", tsLang)
+		}
+	})
+
+	t.Run("Unchanged sync", func(t *testing.T) {
+		// Self-contained: establish an indexed baseline, then re-sync with no changes.
+		writeCodeFixtures(t, mainGo, appTs)
+		if err := idx.SyncCollection(col); err != nil {
+			t.Fatal(err)
+		}
+		if err := idx.SyncCollection(col); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("Update file", func(t *testing.T) {
+		// Self-contained: start from the known fixtures, then modify one.
+		writeCodeFixtures(t, mainGo, appTs)
+		if err := idx.SyncCollection(col); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+		if err := os.WriteFile(mainGo, []byte("package main\n\nfunc main() {\n\tprintln(\"updated\")\n}\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := idx.SyncCollection(col); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("Delete file and orphan cleanup", func(t *testing.T) {
+		// Self-contained: establish an indexed baseline, then delete one file.
+		writeCodeFixtures(t, mainGo, appTs)
+		if err := idx.SyncCollection(col); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(appTs); err != nil {
+			t.Fatal(err)
+		}
+		if err := idx.SyncCollection(col); err != nil {
+			t.Fatal(err)
+		}
+
+		docsAfter, err := db.ListDocumentPaths(col.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(docsAfter) != 1 {
+			t.Fatalf("expected 1 doc after delete, got %d", len(docsAfter))
+		}
+		if _, ok := docsAfter[mainGo]; !ok {
+			t.Errorf("expected main.go to still exist")
+		}
+	})
 }
