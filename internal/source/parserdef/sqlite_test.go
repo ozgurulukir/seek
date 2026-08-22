@@ -699,3 +699,52 @@ func TestFetchAndAssignBatch(t *testing.T) {
 		}
 	}
 }
+
+// TestSQLiteDriverPartialFailureDBIsolation verifies that a malformed database file
+// returns a SessionError for that DB path, but does not prevent sync of other valid DBs.
+func TestSQLiteDriverPartialFailureDBIsolation(t *testing.T) {
+	dir := t.TempDir()
+
+	goodPath := filepath.Join(dir, "good.db")
+	createFixtureDB(t, goodPath)
+
+	badPath := filepath.Join(dir, "bad.db")
+	badDB, err := sql.Open("sqlite3", badPath)
+	if err != nil {
+		t.Fatalf("open bad db: %v", err)
+	}
+	// Create a valid SQLite DB missing the "session" table expected by makeOpencodeDef
+	if _, err := badDB.Exec("CREATE TABLE wrong_schema (id TEXT)"); err != nil {
+		t.Fatalf("create wrong_schema: %v", err)
+	}
+	badDB.Close()
+
+	def := makeOpencodeDef(goodPath)
+	src := &def.Sources[0]
+	ver := &def.Sources[0].Versions[0]
+
+	sessions, errs, err := SyncSessions(src, ver, []string{badPath, goodPath}, time.Time{})
+	if err != nil {
+		t.Fatalf("SyncSessions error: %v", err)
+	}
+
+	// Should have received a SessionError for badPath
+	if len(errs) == 0 {
+		t.Fatal("expected at least one SessionError for badPath, got none")
+	}
+	foundBadErr := false
+	for _, se := range errs {
+		if se.SessionID == badPath {
+			foundBadErr = true
+			break
+		}
+	}
+	if !foundBadErr {
+		t.Errorf("expected SessionError for %s, got errors: %v", badPath, errs)
+	}
+
+	// Should still successfully load the 2 sessions from goodPath
+	if len(sessions) != 2 {
+		t.Errorf("sessions = %d, want 2 from goodPath", len(sessions))
+	}
+}
