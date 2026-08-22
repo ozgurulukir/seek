@@ -305,6 +305,20 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("SQLite FTS5 not enabled. Build with: make build (or: go build -tags \"fts5\")")
 	}
 
+	if err := s.initCoreSchema(); err != nil {
+		return err
+	}
+
+	s.applyAlterStatements()
+
+	if err := s.initFTS(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Store) initCoreSchema() error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS collections (
 			id INTEGER PRIMARY KEY,
@@ -342,7 +356,10 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("exec %q: %w", stmt[:40], err)
 		}
 	}
+	return nil
+}
 
+func (s *Store) applyAlterStatements() {
 	// Add new columns for multimodal support (backward compat via ALTER TABLE)
 	alterStmts := []string{
 		`ALTER TABLE chunks ADD COLUMN chunk_type INTEGER DEFAULT 0`,
@@ -358,7 +375,9 @@ func (s *Store) migrate() error {
 	for _, stmt := range alterStmts {
 		s.execIgnoreDuplicate(stmt)
 	}
+}
 
+func (s *Store) initFTS() error {
 	// FTS5 table: rebuild if the tokenizer config changed (e.g. upgrading from
 	// the old "unicode61" to the Turkish-aware "unicode61 remove_diacritics 2").
 	// A tokenizer change requires re-indexing all content, so we drop and
@@ -405,7 +424,6 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("commit fts rebuild: %w", err)
 		}
 	}
-
 	return nil
 }
 
