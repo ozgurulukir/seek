@@ -135,7 +135,7 @@ func loadEmbeddedOrOverride(overrideDir string, entry os.DirEntry, schemaName st
 		loaded := LoadedDef{
 			Name:     schemaName,
 			Embedded: true, // an embedded version exists
-			Override: true, // but the user override is what's actually loaded
+			Override: err == nil, // override is true only if user override parsed successfully
 			Def:      def,
 		}
 		if err != nil {
@@ -151,7 +151,7 @@ func loadEmbeddedOrOverride(overrideDir string, entry os.DirEntry, schemaName st
 	}
 	def, err := parseSchema(data, "embed:parsers/"+entry.Name())
 	if err != nil {
-		return LoadedDef{Name: schemaName, Embedded: true, Def: nil}, true
+		return LoadedDef{Name: schemaName, Embedded: true, Override: false, Def: nil}, true
 	}
 
 	return LoadedDef{
