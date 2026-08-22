@@ -1,6 +1,7 @@
 package source
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -246,5 +247,67 @@ func TestScanCodexFilesNoDirectory(t *testing.T) {
 	}
 	if len(files) != 0 {
 		t.Errorf("expected 0 files, got %d", len(files))
+	}
+}
+
+func TestParseCodexFileWithImages_EmptyTextWithImages(t *testing.T) {
+	// Redirect HOME so image writes go to a temp dir, not the user's real cache.
+	t.Setenv("HOME", t.TempDir())
+
+	// A 1x1 PNG data URI (70-byte PNG).
+	const pngDataURI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+	// A prior text message, followed by a response item whose content is ONLY
+	// an image block (no input_text / output_text).
+	lines := []string{
+		`{"type":"session_meta","payload":{"id":"sess-123"}}`,
+		`{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"Here is a screenshot of my app"}]}}`,
+		`{"type":"response_item","payload":{"role":"user","content":[{"type":"input_image","image_url":"` + pngDataURI + `"}]}}`,
+	}
+	path := writeTempFile(t, strings.Join(lines, "\n"))
+
+	msgs, sessionID, images, err := ParseCodexFileWithImages(path, 0)
+	if err != nil {
+		t.Fatalf("ParseCodexFileWithImages: %v", err)
+	}
+	if sessionID != "sess-123" {
+		t.Errorf("sessionID = %q, want %q", sessionID, "sess-123")
+	}
+
+	// An image-only response item must NOT append a new empty message:
+	// the result is exactly the single prior text message.
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly 1 message (no empty message from image-only item), got %d: %#v", len(msgs), msgs)
+	}
+	if msgs[0].Role != RoleUser || msgs[0].Content != "Here is a screenshot of my app" {
+		t.Errorf("unexpected first message: %#v", msgs[0])
+	}
+
+	// The image must be extracted and attached to the prior message:
+	// its context is the last message's content (image has no text of its own),
+	// Index is 0, and it is persisted into the (temp-HOME) image cache dir.
+	if len(images) != 1 {
+		t.Fatalf("expected exactly 1 image, got %d", len(images))
+	}
+	img := images[0]
+	wantContext := "Here is a screenshot of my app"
+	if img.Context != wantContext {
+		t.Errorf("image context = %q, want prior message content %q", img.Context, wantContext)
+	}
+	if img.Index != 0 {
+		t.Errorf("image index = %d, want 0", img.Index)
+	}
+	if img.MediaType != "image/png" {
+		t.Errorf("image media type = %q, want %q", img.MediaType, "image/png")
+	}
+	if len(img.Data) == 0 || img.Data[0] != 0x89 || img.Data[1] != 'P' {
+		t.Errorf("image data is not a PNG: % x", img.Data)
+	}
+	wantSavedPath := filepath.Join(ImageCacheDir(), "codex-sess-123-0.png")
+	if img.SavedPath != wantSavedPath {
+		t.Errorf("saved path = %q, want %q", img.SavedPath, wantSavedPath)
+	}
+	if _, err := os.Stat(img.SavedPath); err != nil {
+		t.Errorf("expected saved image at %q: %v", img.SavedPath, err)
 	}
 }
