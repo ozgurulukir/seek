@@ -43,6 +43,19 @@ func setupCodeIndexerTest(t *testing.T) (*indexer.Indexer, *store.Store, *store.
 	return idx, db, col, codeDir
 }
 
+// writeCodeFixtures writes the two fixture files that most subtests operate on.
+// Each subtest calls this (when it needs the files present) so that subtests are
+// self-contained and can be run in isolation via -run 'TestIndexer_CodeCollectionSync/<name>'.
+func writeCodeFixtures(t *testing.T, mainGo, appTs string) {
+	t.Helper()
+	if err := os.WriteFile(mainGo, []byte("package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(appTs, []byte("export const version = '1.0.0';\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestIndexer_CodeCollectionSync(t *testing.T) {
 	idx, db, col, codeDir := setupCodeIndexerTest(t)
 
@@ -56,12 +69,7 @@ func TestIndexer_CodeCollectionSync(t *testing.T) {
 	})
 
 	t.Run("Add files and verify fastfields", func(t *testing.T) {
-		if err := os.WriteFile(mainGo, []byte("package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(appTs, []byte("export const version = '1.0.0';\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
+		writeCodeFixtures(t, mainGo, appTs)
 
 		if err := idx.SyncCollection(col); err != nil {
 			t.Fatal(err)
@@ -96,12 +104,22 @@ func TestIndexer_CodeCollectionSync(t *testing.T) {
 	})
 
 	t.Run("Unchanged sync", func(t *testing.T) {
+		// Self-contained: establish an indexed baseline, then re-sync with no changes.
+		writeCodeFixtures(t, mainGo, appTs)
+		if err := idx.SyncCollection(col); err != nil {
+			t.Fatal(err)
+		}
 		if err := idx.SyncCollection(col); err != nil {
 			t.Fatal(err)
 		}
 	})
 
 	t.Run("Update file", func(t *testing.T) {
+		// Self-contained: start from the known fixtures, then modify one.
+		writeCodeFixtures(t, mainGo, appTs)
+		if err := idx.SyncCollection(col); err != nil {
+			t.Fatal(err)
+		}
 		time.Sleep(10 * time.Millisecond)
 		if err := os.WriteFile(mainGo, []byte("package main\n\nfunc main() {\n\tprintln(\"updated\")\n}\n"), 0644); err != nil {
 			t.Fatal(err)
@@ -112,6 +130,11 @@ func TestIndexer_CodeCollectionSync(t *testing.T) {
 	})
 
 	t.Run("Delete file and orphan cleanup", func(t *testing.T) {
+		// Self-contained: establish an indexed baseline, then delete one file.
+		writeCodeFixtures(t, mainGo, appTs)
+		if err := idx.SyncCollection(col); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.Remove(appTs); err != nil {
 			t.Fatal(err)
 		}
