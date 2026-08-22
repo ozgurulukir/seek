@@ -590,47 +590,17 @@ func (idx *Indexer) syncDocuments(col *store.Collection) error {
 
 	var indexed, skipped, failed, unsupported int
 	for _, f := range files {
-		existing, err := idx.db.GetDocument(col.ID, f.Path)
-		if err == nil && existing.ContentHash == f.ContentHash {
-			if existing.Mtime != f.Mtime {
-				idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
-			}
+		status := idx.syncDocumentFile(col, f, ext)
+		switch status {
+		case docStatusSkipped:
 			skipped++
-			continue
-		}
-
-		// Skip files the active backend doesn't handle (e.g. a format in the
-		// scanner set that xberg's /formats doesn't list). Counted separately
-		// from failures so the summary distinguishes "unsupported" from "errored".
-		if !ext.Supports(f.Path) {
+		case docStatusUnsupported:
 			unsupported++
-			continue
-		}
-
-		res, err := ext.Extract(idx.ctx(), f.Path)
-		if err != nil {
-			idx.log.Printf("  WARN: extract %s: %v\n", f.Path, err)
+		case docStatusFailed:
 			failed++
-			continue
+		case docStatusIndexed:
+			indexed++
 		}
-
-		lineCount := strings.Count(res.Content, "\n") + 1
-		docID, err := idx.db.UpsertDocument(col.ID, f.Path, res.Title, f.ContentHash, f.Mtime, lineCount)
-		if err != nil {
-			idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
-			failed++
-			continue
-		}
-
-		if err := idx.db.UpsertFTS(docID, res.Title, res.Content); err != nil {
-			idx.log.Printf("  WARN: fts %s: %v\n", f.Path, err)
-		}
-
-		idx.db.DeleteChunksForDocument(docID)
-		for _, c := range chunk.ChunkMarkdown(res.Content, 0, 0) {
-			idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil)
-		}
-		indexed++
 	}
 
 	idx.log.Printf("Documents: %d indexed, %d unchanged", indexed, skipped)
@@ -895,4 +865,54 @@ func parserMessagesToText(messages []parserdef.Message) string {
 		fmt.Fprintf(&b, "[%s]: %s\n\n", m.Role, m.Content)
 	}
 	return b.String()
+}
+
+type docSyncStatus int
+
+const (
+	docStatusIndexed docSyncStatus = iota
+	docStatusSkipped
+	docStatusUnsupported
+	docStatusFailed
+)
+
+func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFile, ext extractor.Extractor) docSyncStatus {
+	existing, err := idx.db.GetDocument(col.ID, f.Path)
+	if err == nil && existing.ContentHash == f.ContentHash {
+		if existing.Mtime != f.Mtime {
+			idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
+		}
+		return docStatusSkipped
+	}
+
+	// Skip files the active backend doesn't handle (e.g. a format in the
+	// scanner set that xberg's /formats doesn't list). Counted separately
+	// from failures so the summary distinguishes "unsupported" from "errored".
+	if !ext.Supports(f.Path) {
+		return docStatusUnsupported
+	}
+
+	res, err := ext.Extract(idx.ctx(), f.Path)
+	if err != nil {
+		idx.log.Printf("  WARN: extract %s: %v\n", f.Path, err)
+		return docStatusFailed
+	}
+
+	lineCount := strings.Count(res.Content, "\n") + 1
+	docID, err := idx.db.UpsertDocument(col.ID, f.Path, res.Title, f.ContentHash, f.Mtime, lineCount)
+	if err != nil {
+		idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
+		return docStatusFailed
+	}
+
+	if err := idx.db.UpsertFTS(docID, res.Title, res.Content); err != nil {
+		idx.log.Printf("  WARN: fts %s: %v\n", f.Path, err)
+	}
+
+	idx.db.DeleteChunksForDocument(docID)
+	for _, c := range chunk.ChunkMarkdown(res.Content, 0, 0) {
+		idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil)
+	}
+
+	return docStatusIndexed
 }
