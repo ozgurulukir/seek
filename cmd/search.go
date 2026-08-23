@@ -77,56 +77,8 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 	// Set up compression
 	db.SetCompression(cfg.Config.Compression.Algorithm != "none", cfg.Config.Compression.Level)
 
-	embedClient := newEmbedClient(cfg)
-	vlClient := newVLClient(cfg)
-
-	var engine *search.Engine
-	if vlClient != nil {
-		engine = search.NewEngineWithVL(db, embedClient, vlClient)
-	} else {
-		engine = search.NewEngine(db, embedClient)
-	}
-
-	// Optional Cross-Encoder reranking (automatically enabled if configured in config.yaml)
-	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.APIKey != "" {
-		reranker := embed.NewRerankClient(cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.APIKey, cfg.Config.Rerank.Model)
-		engine.WithReranker(reranker)
-	}
-
-	// Build filters
-	var filters *store.FilterSet
-	colName := c.Collection
-	if colName == "" {
-		colName = c.Repo
-	}
-	if colName != "" || c.DocType != "" || c.Lang != "" || c.After != "" || c.Before != "" || c.ChunkType != "" || c.Path != "" || c.Workspace != "" {
-		filters = store.NewFilterSet()
-		if colName != "" {
-			filters.Add(&store.CollectionFilter{Name: colName})
-		}
-		if c.DocType != "" {
-			filters.Add(&store.DocTypeFilter{Type: c.DocType})
-		}
-		if c.Lang != "" {
-			filters.Add(&store.FastFieldFilter{Field: "lang", Value: strings.ToLower(c.Lang)})
-		}
-		if c.After != "" || c.Before != "" {
-			filters.Add(&store.DateRangeFilter{After: c.After, Before: c.Before})
-		}
-		if c.ChunkType != "" {
-			ct := 0
-			if strings.ToLower(c.ChunkType) == "image" {
-				ct = 1
-			}
-			filters.Add(&store.ChunkTypeFilter{Type: ct})
-		}
-		if c.Path != "" {
-			filters.Add(&store.PathFilter{Pattern: c.Path})
-		}
-		if c.Workspace != "" {
-			filters.Add(&store.FastFieldFilter{Field: "workspace", Value: c.Workspace})
-		}
-	}
+	engine, embedClient, vlClient := c.buildEngine(db, cfg)
+	filters := c.buildFilters()
 
 	// Build analyzer if tokenization is enabled
 	var analyzer *search.Analyzer
@@ -144,38 +96,16 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 		Analyzer:     analyzer,
 	}
 
-	var results []store.SearchResult
-
-	switch {
-	case c.Lex:
-		results, err = engine.SearchBM25(ctx, c.Query, c.Limit, opts)
-	case c.Vec:
-		if embedClient == nil && vlClient == nil {
-			return fmt.Errorf("vector search requires embedding API key")
-		}
-		results, err = engine.SearchVector(ctx, c.Query, c.Limit, opts)
-	default:
-		results, err = engine.SearchHybrid(ctx, c.Query, c.Limit, opts)
-	}
-
+	results, err := c.executeSearch(ctx, engine, embedClient, vlClient, opts)
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
 	}
 
 	// Run aggregations if requested
 	if len(c.Aggs) > 0 {
-		aggResults, err := engine.RunAggregations(ctx, c.Aggs, filters)
-		if err != nil {
+		if err := c.printAggregations(ctx, engine, filters); err != nil {
 			return fmt.Errorf("aggregations: %w", err)
 		}
-		fmt.Println("\nAggregations:")
-		for spec, buckets := range aggResults {
-			fmt.Printf("  %s:\n", spec)
-			for _, b := range buckets {
-				fmt.Printf("    %s: %d\n", b.Key, b.Count)
-			}
-		}
-		fmt.Println()
 	}
 
 	if len(results) == 0 {
@@ -183,24 +113,122 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 		return nil
 	}
 
-	// Expand surrounding chunk context if -C / --context is requested
-	if c.Context > 0 {
-		for idx := range results {
-			if results[idx].DocumentID > 0 {
-				expanded, sLine, eLine, err := db.GetSurroundingContext(results[idx].DocumentID, results[idx].Seq, c.Context)
-				if err == nil && expanded != "" {
-					results[idx].Content = expanded
-					if sLine > 0 {
-						results[idx].StartLine = sLine
-					}
-					if eLine > 0 {
-						results[idx].EndLine = eLine
-					}
+	c.expandContext(db, results)
+	c.printResults(results)
+
+	return nil
+}
+
+func (c *SearchCmd) buildEngine(db *store.Store, cfg *config.AppConfig) (*search.Engine, *embed.Client, *embed.VLClient) {
+	embedClient := newEmbedClient(cfg)
+	vlClient := newVLClient(cfg)
+
+	var engine *search.Engine
+	if vlClient != nil {
+		engine = search.NewEngineWithVL(db, embedClient, vlClient)
+	} else {
+		engine = search.NewEngine(db, embedClient)
+	}
+
+	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.APIKey != "" {
+		reranker := embed.NewRerankClient(cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.APIKey, cfg.Config.Rerank.Model)
+		engine.WithReranker(reranker)
+	}
+
+	return engine, embedClient, vlClient
+}
+
+func (c *SearchCmd) buildFilters() *store.FilterSet {
+	colName := c.Collection
+	if colName == "" {
+		colName = c.Repo
+	}
+
+	if colName == "" && c.DocType == "" && c.Lang == "" && c.After == "" && c.Before == "" && c.ChunkType == "" && c.Path == "" && c.Workspace == "" {
+		return nil
+	}
+
+	filters := store.NewFilterSet()
+	if colName != "" {
+		filters.Add(&store.CollectionFilter{Name: colName})
+	}
+	if c.DocType != "" {
+		filters.Add(&store.DocTypeFilter{Type: c.DocType})
+	}
+	if c.Lang != "" {
+		filters.Add(&store.FastFieldFilter{Field: "lang", Value: strings.ToLower(c.Lang)})
+	}
+	if c.After != "" || c.Before != "" {
+		filters.Add(&store.DateRangeFilter{After: c.After, Before: c.Before})
+	}
+	if c.ChunkType != "" {
+		ct := 0
+		if strings.ToLower(c.ChunkType) == "image" {
+			ct = 1
+		}
+		filters.Add(&store.ChunkTypeFilter{Type: ct})
+	}
+	if c.Path != "" {
+		filters.Add(&store.PathFilter{Pattern: c.Path})
+	}
+	if c.Workspace != "" {
+		filters.Add(&store.FastFieldFilter{Field: "workspace", Value: c.Workspace})
+	}
+
+	return filters
+}
+
+func (c *SearchCmd) executeSearch(ctx context.Context, engine *search.Engine, embedClient *embed.Client, vlClient *embed.VLClient, opts search.Options) ([]store.SearchResult, error) {
+	switch {
+	case c.Lex:
+		return engine.SearchBM25(ctx, c.Query, c.Limit, opts)
+	case c.Vec:
+		if embedClient == nil && vlClient == nil {
+			return nil, fmt.Errorf("vector search requires embedding API key")
+		}
+		return engine.SearchVector(ctx, c.Query, c.Limit, opts)
+	default:
+		return engine.SearchHybrid(ctx, c.Query, c.Limit, opts)
+	}
+}
+
+func (c *SearchCmd) printAggregations(ctx context.Context, engine *search.Engine, filters *store.FilterSet) error {
+	aggResults, err := engine.RunAggregations(ctx, c.Aggs, filters)
+	if err != nil {
+		return err
+	}
+	fmt.Println("\nAggregations:")
+	for spec, buckets := range aggResults {
+		fmt.Printf("  %s:\n", spec)
+		for _, b := range buckets {
+			fmt.Printf("    %s: %d\n", b.Key, b.Count)
+		}
+	}
+	fmt.Println()
+	return nil
+}
+
+func (c *SearchCmd) expandContext(db *store.Store, results []store.SearchResult) {
+	if c.Context <= 0 {
+		return
+	}
+	for idx := range results {
+		if results[idx].DocumentID > 0 {
+			expanded, sLine, eLine, err := db.GetSurroundingContext(results[idx].DocumentID, results[idx].Seq, c.Context)
+			if err == nil && expanded != "" {
+				results[idx].Content = expanded
+				if sLine > 0 {
+					results[idx].StartLine = sLine
+				}
+				if eLine > 0 {
+					results[idx].EndLine = eLine
 				}
 			}
 		}
 	}
+}
 
+func (c *SearchCmd) printResults(results []store.SearchResult) {
 	for i, r := range results {
 		pathLoc := formatRelPath(r.Path)
 		if r.StartLine > 0 {
@@ -229,8 +257,6 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 		}
 	}
 	fmt.Println()
-
-	return nil
 }
 
 // runAnalyze handles the --analyze flag: tokenizes and stems the query text.
