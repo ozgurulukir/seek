@@ -1,7 +1,10 @@
 package cmd_test
 
 import (
+	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -9,6 +12,26 @@ import (
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/store"
 )
+
+// captureStdout runs fn while capturing everything it writes to stdout.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	done := make(chan string)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+	fn()
+	w.Close()
+	os.Stdout = old
+	return <-done
+}
 
 func TestSearchCmd_Analyze(t *testing.T) {
 	searchCmd := &cmd.SearchCmd{
@@ -46,8 +69,15 @@ func TestSearchCmd_Execution(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = db.InsertChunkWithLines(docID, 0, "This is a search result content test", 1, 5, nil)
+	const content = "This is a search result content test"
+
+	err = db.InsertChunkWithLines(docID, 0, content, 1, 5, []float32{0.1, 0.2, 0.3, 0.4})
 	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Populate the FTS index; without this BM25 finds nothing.
+	if err := db.UpsertFTS(docID, "Test Doc", content); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
@@ -62,16 +92,29 @@ func TestSearchCmd_Execution(t *testing.T) {
 		Context:    1,
 	}
 
-	if err := searchCmd.Run(cfg); err != nil {
-		t.Fatalf("SearchCmd.Run failed: %v", err)
+	out := captureStdout(t, func() {
+		if err := searchCmd.Run(cfg); err != nil {
+			t.Errorf("SearchCmd.Run failed: %v", err)
+		}
+	})
+	if !strings.Contains(out, "test.md") {
+		t.Errorf("BM25 search output missing seeded document path, got: %q", out)
+	}
+	if strings.Contains(out, "No results found.") {
+		t.Errorf("BM25 search returned no results despite matching seed data")
 	}
 
-	// 2. Autocomplete mode
+	// 2. Autocomplete mode (requires chunks with non-nil embeddings)
 	autoCmd := &cmd.SearchCmd{
 		Query:        "sear",
 		Autocomplete: true,
 	}
-	if err := autoCmd.Run(cfg); err != nil {
-		t.Fatalf("SearchCmd.Run autocomplete mode failed: %v", err)
+	out = captureStdout(t, func() {
+		if err := autoCmd.Run(cfg); err != nil {
+			t.Errorf("SearchCmd.Run autocomplete mode failed: %v", err)
+		}
+	})
+	if !strings.Contains(out, "search") {
+		t.Errorf("autocomplete output missing 'search' suggestion, got: %q", out)
 	}
 }
