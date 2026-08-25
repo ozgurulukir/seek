@@ -222,6 +222,83 @@ func matchesGitignore(relPath string, patterns []string) bool {
 	return false
 }
 
+func shouldSkipDir(info os.FileInfo, relPath string, gitignorePatterns []string) bool {
+	baseName := info.Name()
+	if IgnoredDirectories[baseName] || (len(baseName) > 1 && strings.HasPrefix(baseName, ".") && baseName != ".") {
+		return true
+	}
+	if len(gitignorePatterns) > 0 && matchesGitignore(relPath, gitignorePatterns) {
+		return true
+	}
+	return false
+}
+
+func isIgnoredFile(baseName string, relPath string, gitignorePatterns []string) bool {
+	if IgnoredFiles[baseName] {
+		return true
+	}
+
+	lowerBase := strings.ToLower(baseName)
+	if strings.HasSuffix(lowerBase, ".min.js") ||
+		strings.HasSuffix(lowerBase, ".min.css") ||
+		strings.HasSuffix(lowerBase, ".map") ||
+		strings.HasSuffix(lowerBase, ".bundle.js") {
+		return true
+	}
+
+	if len(gitignorePatterns) > 0 && matchesGitignore(relPath, gitignorePatterns) {
+		return true
+	}
+
+	return false
+}
+
+func processCodeFile(path, relPath string, info os.FileInfo, pattern string) (*CodeFileInfo, error) {
+	lang, ext := DetectLanguage(path)
+	if lang == "" {
+		return nil, nil
+	}
+
+	baseName := info.Name()
+	if pattern != "" && pattern != "**/*" && pattern != "*" {
+		matched, _ := filepath.Match(pattern, baseName)
+		if !matched {
+			return nil, nil
+		}
+	}
+
+	// Check max file size (skip gigantic files > 5MB to avoid memory pressure)
+	if info.Size() > 5*1024*1024 {
+		return nil, nil
+	}
+
+	// Null-byte check for binaries
+	if IsBinaryFile(path) {
+		return nil, nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	content := string(data)
+
+	hash := sha256.Sum256(data)
+	normRel := filepath.ToSlash(relPath)
+
+	return &CodeFileInfo{
+		Path:         path,
+		RelativePath: normRel,
+		Title:        normRel,
+		Content:      content,
+		ContentHash:  fmt.Sprintf("%x", hash),
+		Mtime:        float64(info.ModTime().Unix()),
+		LineCount:    strings.Count(content, "\n") + 1,
+		Language:     lang,
+		Extension:    ext,
+	}, nil
+}
+
 // ScanCode scans a directory for source code files.
 func ScanCode(dir, pattern string) ([]CodeFileInfo, error) {
 	var files []CodeFileInfo
@@ -247,81 +324,23 @@ func ScanCode(dir, pattern string) ([]CodeFileInfo, error) {
 
 		// Check directory exclusion
 		if info.IsDir() {
-			baseName := info.Name()
-			if IgnoredDirectories[baseName] || (len(baseName) > 1 && strings.HasPrefix(baseName, ".") && baseName != ".") {
-				return filepath.SkipDir
-			}
-			if len(gitignorePatterns) > 0 && matchesGitignore(relPath, gitignorePatterns) {
+			if shouldSkipDir(info, relPath, gitignorePatterns) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		baseName := info.Name()
-		if IgnoredFiles[baseName] {
+		if isIgnoredFile(info.Name(), relPath, gitignorePatterns) {
 			return nil
 		}
 
-		// Skip minified or bundle files
-		lowerBase := strings.ToLower(baseName)
-		if strings.HasSuffix(lowerBase, ".min.js") ||
-			strings.HasSuffix(lowerBase, ".min.css") ||
-			strings.HasSuffix(lowerBase, ".map") ||
-			strings.HasSuffix(lowerBase, ".bundle.js") {
-			return nil
-		}
-
-		if len(gitignorePatterns) > 0 && matchesGitignore(relPath, gitignorePatterns) {
-			return nil
-		}
-
-		// Check supported extension / language
-		lang, ext := DetectLanguage(path)
-		if lang == "" {
-			return nil
-		}
-
-		// If pattern is supplied and not default wildcards, check match
-		if pattern != "" && pattern != "**/*" && pattern != "*" {
-			matched, _ := filepath.Match(pattern, baseName)
-			if !matched {
-				return nil
-			}
-		}
-
-		// Check max file size (skip gigantic files > 5MB to avoid memory pressure)
-		if info.Size() > 5*1024*1024 {
-			return nil
-		}
-
-		// Null-byte check for binaries
-		if IsBinaryFile(path) {
-			return nil
-		}
-
-		data, err := os.ReadFile(path)
+		codeFile, err := processCodeFile(path, relPath, info, pattern)
 		if err != nil {
 			return nil
 		}
-		content := string(data)
-
-		hash := sha256.Sum256(data)
-		normRel := filepath.ToSlash(relPath)
-
-		// Title: relative path for unambiguous code navigation
-		title := normRel
-
-		files = append(files, CodeFileInfo{
-			Path:         path,
-			RelativePath: normRel,
-			Title:        title,
-			Content:      content,
-			ContentHash:  fmt.Sprintf("%x", hash),
-			Mtime:        float64(info.ModTime().Unix()),
-			LineCount:    strings.Count(content, "\n") + 1,
-			Language:     lang,
-			Extension:    ext,
-		})
+		if codeFile != nil {
+			files = append(files, *codeFile)
+		}
 
 		return nil
 	})
