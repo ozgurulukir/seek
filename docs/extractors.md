@@ -10,7 +10,7 @@
 
 1. **`builtin` Backend (Default):**
    - **Markdown (`.md`):** Content-hash incremental sync with structural header chunking.
-   - **Source Code (`--code`):** 35+ languages, `.gitignore`-aware scanning, AST/structural function chunking.
+   - **Source Code (`--code`):** 35+ languages, `.gitignore`-aware scanning, structural block and line-based sliding window chunking.
    - **PDFs (`--pdf`):** Rasterizes pages to PNG via `go-fitz` for vision-language (VL) embedding; extracts embedded text for keyword search.
    - **Images (`--images`):** `.png`, `.jpg`, `.webp` indexed directly for multimodal embedding.
 
