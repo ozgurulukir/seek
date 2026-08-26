@@ -51,10 +51,20 @@
 
 ## 🛠️ Step-by-Step Local Walkthrough
 
-### 1. Pull the Local Embedding Model
-Install [Ollama](https://ollama.com) and pull the recommended high-performance embedding model:
+### 1. Launch Local Embedding Model
+
+Choose either **Option A (Ollama)** or **Option B (Pure `uv` FastEmbed)**:
+
+**Option A — Ollama:**
 ```bash
 ollama pull nomic-embed-text
+# Runs at http://localhost:11434/v1
+```
+
+**Option B — Pure `uv` FastEmbed (ONNX, Ultra-lightweight ~22MB, No Ollama needed):**
+```bash
+uv run tools/embed_server/server.py
+# Runs at http://127.0.0.1:8002/v1 (default: all-MiniLM-L6-v2, 384 dims, ~2-5ms)
 ```
 
 ### 2. Launch Local Helper Services (`tools/`)
@@ -69,12 +79,24 @@ uv run tools/xberg_server/server.py
 ```
 
 ### 3. Configure `~/.config/seek/config.yaml`
+
+**For Option A (Ollama - Nomic 768 dims):**
 ```yaml
 embedding:
   base_url: http://localhost:11434/v1
   api_key: ollama
   model: nomic-embed-text
   dimensions: 768
+```
+
+**For Option B (Pure `uv` FastEmbed - MiniLM 384 dims):**
+```yaml
+embedding:
+  base_url: http://127.0.0.1:8002/v1
+  api_key: local
+  model: sentence-transformers/all-MiniLM-L6-v2
+  dimensions: 384
+```
 
 rerank:
   enabled: true

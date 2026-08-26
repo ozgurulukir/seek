@@ -245,3 +245,34 @@ func TestTaskPrefixesDisableAutoDetect(t *testing.T) {
 		t.Errorf("lookalike prefixes = (%q, %q), want empty", q, d)
 	}
 }
+
+func TestChunkConfigParsing(t *testing.T) {
+	yamlContent := `
+chunk:
+  max_size: 2500
+  overlap: 250
+`
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
+
+	configPath := filepath.Join(tmpDir, ".config", "seek", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	appCfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if appCfg.Config.Chunk.MaxSize != 2500 {
+		t.Errorf("Chunk.MaxSize = %d, want 2500", appCfg.Config.Chunk.MaxSize)
+	}
+	if appCfg.Config.Chunk.Overlap != 250 {
+		t.Errorf("Chunk.Overlap = %d, want 250", appCfg.Config.Chunk.Overlap)
+	}
+}

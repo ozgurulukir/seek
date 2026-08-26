@@ -61,6 +61,13 @@ func (idx *Indexer) WithExtractor(ext extractor.Extractor) *Indexer {
 	return idx
 }
 
+func (idx *Indexer) chunkSize() (int, int) {
+	if idx.cfg == nil {
+		return 0, 0
+	}
+	return idx.cfg.Config.Chunk.MaxSize, idx.cfg.Config.Chunk.Overlap
+}
+
 // extractorFor resolves the extractor to use for a collection. Precedence:
 //  1. idx.ext (explicit override, e.g. --backend flag);
 //  2. col.Backend (per-collection override persisted at add time);
@@ -244,7 +251,8 @@ func (idx *Indexer) syncConversation(
 				idx.db.DeleteChunksForDocument(docID)
 			}
 
-			chunks := chunk.ChunkConversation(text, 0)
+			maxSize, _ := idx.chunkSize()
+			chunks := chunk.ChunkConversation(text, maxSize)
 			for _, c := range chunks {
 				if err := idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil); err != nil {
 					idx.log.Printf("  WARN: embed %s: %v\n", f.Path, err)
@@ -374,7 +382,8 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 		}
 
 		idx.db.DeleteChunksForDocument(docID)
-		chunks := chunk.ChunkMarkdown(f.Content, 0, 0)
+		maxSize, overlap := idx.chunkSize()
+		chunks := chunk.ChunkMarkdown(f.Content, maxSize, overlap)
 		for _, c := range chunks {
 			idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil)
 		}
@@ -530,7 +539,8 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 		} else if res.Content != "" {
 			// Text-only result (e.g. xberg backend for PDF): chunk as markdown.
 			idx.db.UpsertFTS(docID, f.Name, res.Content)
-			for _, c := range chunk.ChunkMarkdown(res.Content, 0, 0) {
+			maxSize, overlap := idx.chunkSize()
+			for _, c := range chunk.ChunkMarkdown(res.Content, maxSize, overlap) {
 				idx.db.InsertChunk(docID, c.Seq, c.Content, nil)
 			}
 		}
@@ -691,7 +701,8 @@ func (idx *Indexer) indexCodeFile(colID int64, f source.CodeFileInfo) (bool, err
 	}
 
 	idx.db.DeleteChunksForDocument(docID)
-	chunks := chunk.ChunkCode(f.Content, f.Language, 0, 0)
+	maxSize, overlap := idx.chunkSize()
+	chunks := chunk.ChunkCode(f.Content, f.Language, maxSize, overlap)
 	for _, c := range chunks {
 		if err := idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil); err != nil {
 			idx.log.Printf("  WARN: chunk %s: %v\n", f.Path, err)
@@ -811,7 +822,8 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 
 		// Chunks: delete old + insert new.
 		idx.db.DeleteChunksForDocument(docID)
-		chunks := chunk.ChunkConversation(text, 0)
+		maxSize, _ := idx.chunkSize()
+		chunks := chunk.ChunkConversation(text, maxSize)
 		for _, c := range chunks {
 			if err := idx.db.InsertChunk(docID, c.Seq, c.Content, nil); err != nil {
 				idx.log.Printf("  WARN: chunk %s: %v\n", docPath, err)
@@ -928,7 +940,8 @@ func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFil
 	}
 
 	idx.db.DeleteChunksForDocument(docID)
-	for _, c := range chunk.ChunkMarkdown(res.Content, 0, 0) {
+	maxSize, overlap := idx.chunkSize()
+	for _, c := range chunk.ChunkMarkdown(res.Content, maxSize, overlap) {
 		idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil)
 	}
 

@@ -14,6 +14,9 @@ func ChunkCode(content string, lang string, maxSize, overlap int) []Chunk {
 	if overlap <= 0 {
 		overlap = DefaultOverlap
 	}
+	if overlap >= maxSize {
+		overlap = maxSize / 2
+	}
 
 	content = strings.TrimSpace(content)
 	if content == "" {

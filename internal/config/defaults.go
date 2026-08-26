@@ -30,6 +30,11 @@ const (
 	// DefaultImageSnippetLen is the length for image context results in search.
 	DefaultImageSnippetLen = 150
 
+	// DefaultChunkMaxSize is the default max chunk size in characters.
+	DefaultChunkMaxSize = 1000
+	// DefaultChunkOverlap is the default overlap in characters.
+	DefaultChunkOverlap = 100
+
 	// DefaultEmbeddingBatchSize is the default batch size for text embeddings.
 	DefaultEmbeddingBatchSize = 6
 	// DefaultVLMaxContents is the max contents per multimodal request.

@@ -93,3 +93,16 @@ func TestChunkCode_Empty(t *testing.T) {
 		t.Errorf("expected 0 chunks for empty string, got %d", len(chunks))
 	}
 }
+
+func TestChunkCode_ExcessiveOverlap(t *testing.T) {
+	code := `func A() {
+	println("1")
+	println("2")
+	println("3")
+	println("4")
+}`
+	chunks := chunk.ChunkCode(code, "go", 30, 100)
+	if len(chunks) == 0 {
+		t.Fatal("expected chunks, got 0")
+	}
+}

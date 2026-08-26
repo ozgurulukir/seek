@@ -230,6 +230,13 @@ seek search "query" \
 - `vl_base_url` — custom VL endpoint (defaults to DashScope if unset)
 - `task_prefix` — input prefixes for asymmetric models like Nomic (`search_query:`/`search_document:`, auto-detected)
 
+**Chunking (configurable chunk size and overlap):**
+```yaml
+chunk:
+  max_size: 2000    # max chunk size in characters (default: 1000)
+  overlap: 200      # chunk overlap in characters (default: 100)
+```
+
 **OCR (extracting text from scanned PDF pages):**
 ```yaml
 ocr:

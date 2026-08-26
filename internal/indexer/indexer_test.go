@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -266,4 +267,71 @@ func TestIndexer_ParserCollectionSync(t *testing.T) {
 				len(chunksFinal), firstChunkContent)
 		}
 	})
+}
+
+func TestIndexerCustomChunkConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "index.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	notesDir := filepath.Join(tmpDir, "notes")
+	if err := os.MkdirAll(notesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a markdown file with ~1600 characters across multiple paragraphs
+	longText := strings.Repeat("This is a test paragraph for chunking verification.\n\n", 30)
+	if err := os.WriteFile(filepath.Join(notesDir, "note.md"), []byte(longText), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	col, err := db.CreateCollection("mynotes", "markdown", notesDir, "*.md")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	// 1. With default chunk size (1000), ~1400 chars should produce >1 chunks
+	appCfgDefault := &config.AppConfig{
+		Config: config.Config{},
+	}
+	idxDefault := indexer.New(appCfgDefault, db).WithLogger(nopLogger{})
+	if err := idxDefault.SyncCollection(col); err != nil {
+		t.Fatalf("SyncCollection: %v", err)
+	}
+
+	chunksDefault, err := db.GetChunksWithoutEmbedding(true)
+	if err != nil {
+		t.Fatalf("GetChunksWithoutEmbedding: %v", err)
+	}
+	if len(chunksDefault) <= 1 {
+		t.Errorf("expected >1 chunks with default max_size=1000, got %d", len(chunksDefault))
+	}
+
+	// 2. With custom large chunk size (3000), ~1400 chars should produce exactly 1 chunk
+	for _, ch := range chunksDefault {
+		db.DeleteChunksForDocument(ch.DocumentID)
+		db.DB().Exec("UPDATE documents SET content_hash = '' WHERE id = ?", ch.DocumentID)
+	}
+
+	appCfgCustom := &config.AppConfig{
+		Config: config.Config{
+			Chunk: config.ChunkConfig{MaxSize: 3000, Overlap: 200},
+		},
+	}
+	idxCustom := indexer.New(appCfgCustom, db).WithLogger(nopLogger{})
+	if err := idxCustom.SyncCollection(col); err != nil {
+		t.Fatalf("SyncCollection with custom chunk: %v", err)
+	}
+
+	chunksCustom, err := db.GetChunksWithoutEmbedding(true)
+	if err != nil {
+		t.Fatalf("GetChunksWithoutEmbedding: %v", err)
+	}
+	if len(chunksCustom) != 1 {
+		t.Errorf("expected exactly 1 chunk with max_size=3000, got %d", len(chunksCustom))
+	}
 }

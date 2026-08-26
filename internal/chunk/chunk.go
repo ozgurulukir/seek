@@ -34,6 +34,9 @@ func ChunkMarkdown(content string, maxSize, overlap int) []Chunk {
 	if overlap <= 0 {
 		overlap = DefaultOverlap
 	}
+	if overlap >= maxSize {
+		overlap = maxSize / 2
+	}
 
 	// Split by headers first
 	sections := splitByHeaders(content)

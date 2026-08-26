@@ -241,3 +241,12 @@ func TestSplitBySizeNoOverlap(t *testing.T) {
 		}
 	}
 }
+
+func TestChunkMarkdown_ExcessiveOverlap(t *testing.T) {
+	// Overlap >= maxSize should be gracefully capped without infinite loop or failure
+	content := strings.Repeat("para one content line\n\n", 10)
+	chunks := ChunkMarkdown(content, 100, 200)
+	if len(chunks) == 0 {
+		t.Fatal("expected chunks, got 0")
+	}
+}

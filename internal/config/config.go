@@ -184,9 +184,18 @@ type ExtractorConfig struct {
 	Timeout time.Duration `yaml:"timeout,omitempty"`
 }
 
+// ChunkConfig configures text and code chunking parameters.
+type ChunkConfig struct {
+	// MaxSize is the maximum chunk size in characters (default: 1000).
+	MaxSize int `yaml:"max_size,omitempty"`
+	// Overlap is the sliding window overlap in characters (default: 100).
+	Overlap int `yaml:"overlap,omitempty"`
+}
+
 // Config holds all configuration sections.
 type Config struct {
 	Embedding    EmbeddingConfig   `yaml:"embedding"`
+	Chunk        ChunkConfig       `yaml:"chunk,omitempty"`
 	OCR          OCRConfig         `yaml:"ocr,omitempty"`
 	Rerank       RerankConfig      `yaml:"rerank,omitempty"`
 	Search       SearchConfig      `yaml:"search,omitempty"`
