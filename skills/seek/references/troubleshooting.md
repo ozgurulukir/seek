@@ -22,7 +22,7 @@ seek embed   # generate embeddings for new chunks
 
 ## Force re-embed
 
-After changing model or dimensions:
+After changing model, dimensions, or task prefixes:
 
 ```bash
 seek embed -f

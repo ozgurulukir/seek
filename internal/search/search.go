@@ -58,8 +58,8 @@ func (e *Engine) WithReranker(r embed.Reranker) *Engine {
 	return e
 }
 
-// SearchBM25 performs BM25 full-text search with optional filters.
-func (e *Engine) SearchBM25(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
+// searchBM25Raw executes the BM25 full-text query against FTS5 and returns raw candidate hits.
+func (e *Engine) searchBM25Raw(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
@@ -83,19 +83,11 @@ func (e *Engine) SearchBM25(ctx context.Context, query string, limit int, opts O
 		// On parse error, fall back to raw query
 	}
 
-	results, err := e.store.SearchFTS(ftsQuery, limit*2, opts.Filters)
-	if err != nil {
-		return nil, err
-	}
-	sorted, err := e.sortResults(results, opts)
-	if err != nil {
-		return nil, err
-	}
-	return e.rerankResults(ctx, query, sorted, limit), nil
+	return e.store.SearchFTS(ftsQuery, limit, opts.Filters)
 }
 
-// SearchVector performs vector semantic search with optional filters.
-func (e *Engine) SearchVector(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
+// searchVectorRaw executes the vector semantic query and returns raw candidate hits.
+func (e *Engine) searchVectorRaw(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
@@ -117,18 +109,70 @@ func (e *Engine) SearchVector(ctx context.Context, query string, limit int, opts
 		return nil, fmt.Errorf("vector search requires embedding client")
 	}
 
-	results, err := e.store.SearchVector(qEmb, limit*2, opts.Filters)
-	if err != nil {
-		return nil, err
-	}
-	sorted, err := e.sortResults(results, opts)
-	if err != nil {
-		return nil, err
-	}
-	return e.rerankResults(ctx, query, sorted, limit), nil
+	return e.store.SearchVector(qEmb, limit, opts.Filters)
 }
 
-// SearchHybrid performs hybrid search using RRF fusion with optional filters and reranking.
+// SearchBM25 performs BM25 full-text search with optional filters, reranking, and sorting.
+func (e *Engine) SearchBM25(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+
+	rawLimit := limit * 2
+	if e.reranker != nil {
+		rawLimit = limit * 3
+	}
+
+	results, err := e.searchBM25Raw(ctx, query, rawLimit, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	if opts.SortBy != "" {
+		sorted, err := e.sortResults(results, opts)
+		if err != nil {
+			return nil, err
+		}
+		if len(sorted) > limit {
+			sorted = sorted[:limit]
+		}
+		return sorted, nil
+	}
+
+	return e.rerankResults(ctx, query, results, limit), nil
+}
+
+// SearchVector performs vector semantic search with optional filters, reranking, and sorting.
+func (e *Engine) SearchVector(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+
+	rawLimit := limit * 2
+	if e.reranker != nil {
+		rawLimit = limit * 3
+	}
+
+	results, err := e.searchVectorRaw(ctx, query, rawLimit, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	if opts.SortBy != "" {
+		sorted, err := e.sortResults(results, opts)
+		if err != nil {
+			return nil, err
+		}
+		if len(sorted) > limit {
+			sorted = sorted[:limit]
+		}
+		return sorted, nil
+	}
+
+	return e.rerankResults(ctx, query, results, limit), nil
+}
+
+// SearchHybrid performs hybrid search using RRF fusion with optional filters, reranking, and sorting.
 func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
 	if limit <= 0 {
 		limit = DefaultLimit
@@ -139,21 +183,35 @@ func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts
 		candidateLimit = limit * 3
 	}
 
-	bm25Results, err := e.SearchBM25(ctx, query, candidateLimit, opts)
-	if err != nil {
-		return nil, err
+	bm25Results, bm25Err := e.searchBM25Raw(ctx, query, candidateLimit, opts)
+	vecResults, vecErr := e.searchVectorRaw(ctx, query, candidateLimit, opts)
+
+	if bm25Err != nil && vecErr != nil {
+		return nil, fmt.Errorf("hybrid search failed: bm25: %v; vector: %w", bm25Err, vecErr)
 	}
 
-	vecResults, err := e.SearchVector(ctx, query, candidateLimit, opts)
-	if err != nil {
-		// Fall back to BM25 only if vector search fails
-		if len(bm25Results) > limit {
-			bm25Results = bm25Results[:limit]
+	var fused []store.SearchResult
+	if bm25Err != nil {
+		// Fall back to Vector candidates (keep full candidate pool for reranker)
+		fused = vecResults
+	} else if vecErr != nil {
+		// Fall back to BM25 candidates (keep full candidate pool for reranker)
+		fused = bm25Results
+	} else {
+		fused = rrfFusion(bm25Results, vecResults, candidateLimit)
+	}
+
+	if opts.SortBy != "" {
+		sorted, err := e.sortResults(fused, opts)
+		if err != nil {
+			return nil, err
 		}
-		return bm25Results, nil
+		if len(sorted) > limit {
+			sorted = sorted[:limit]
+		}
+		return sorted, nil
 	}
 
-	fused := rrfFusion(bm25Results, vecResults, candidateLimit)
 	return e.rerankResults(ctx, query, fused, limit), nil
 }
 

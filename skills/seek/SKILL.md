@@ -228,6 +228,7 @@ seek search "query" \
 - `dimensions` — output vector dimension (fixed at index time)
 - `multimodal` — force VL (vision-language) image+text embedding
 - `vl_base_url` — custom VL endpoint (defaults to DashScope if unset)
+- `task_prefix` — input prefixes for asymmetric models like Nomic (`search_query:`/`search_document:`, auto-detected)
 
 **OCR (extracting text from scanned PDF pages):**
 ```yaml

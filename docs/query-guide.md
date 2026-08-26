@@ -61,6 +61,23 @@ seek search "layout error" --chunk-type image
 
 ---
 
+## 🔀 Sorting by Metadata Fields (`--sort-by`, `--sort-order`)
+
+By default, search results are ordered by hybrid relevance score (or cross-encoder score if configured). You can explicitly sort results by any indexed fast-field:
+
+```bash
+# Sort by creation / modification time
+seek search "deploy" --sort-by created_at --sort-order desc
+
+# Sort alphabetically by title
+seek search "architecture" --sort-by title --sort-order asc
+
+# Sort by line count / document size
+seek search "parser" --sort-by line_count --sort-order desc
+```
+
+---
+
 ## 📍 Precision Source Addressing & Context Expansion (`-C`)
 
 ### 1. Precise 1-Based Line Spans

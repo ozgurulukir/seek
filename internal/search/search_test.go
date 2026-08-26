@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/embed"
@@ -818,6 +819,134 @@ func TestSearchBM25(t *testing.T) {
 		}
 		if res[0].Title != "Rust Language" || res[1].Title != "Python" || res[2].Title != "Go Language" {
 			t.Errorf("unexpected sort order: %s, %s, %s", res[0].Title, res[1].Title, res[2].Title)
+		}
+	})
+}
+
+type mockCountingReranker struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (m *mockCountingReranker) Rerank(ctx context.Context, query string, documents []string, topN int) ([]embed.RerankResult, error) {
+	m.mu.Lock()
+	m.calls++
+	m.mu.Unlock()
+
+	out := make([]embed.RerankResult, len(documents))
+	for i := range documents {
+		out[i] = embed.RerankResult{Index: i, RelevanceScore: 0.99 - float64(i)*0.05}
+	}
+	return out, nil
+}
+
+func TestSearchHybrid_SingleRerankerCall(t *testing.T) {
+	s := newTestStore(t)
+	col, _ := s.CreateCollection("test", "markdown", "/tmp", "*.md")
+	doc1, _ := s.UpsertDocument(col.ID, "/tmp/doc1.md", "doc1", "h1", 1, 1)
+	_ = s.InsertChunk(doc1, 0, "apple computer", []float32{1.0, 0.0})
+	_ = s.UpsertFTS(doc1, "doc1", "apple computer")
+
+	doc2, _ := s.UpsertDocument(col.ID, "/tmp/doc2.md", "doc2", "h2", 1, 1)
+	_ = s.InsertChunk(doc2, 0, "apple fruit", []float32{0.0, 1.0})
+	_ = s.UpsertFTS(doc2, "doc2", "apple fruit")
+
+	client := newTestEmbedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{
+				{"embedding": []float32{1.0, 0.0}, "index": 0},
+			},
+		})
+	})
+
+	reranker := &mockCountingReranker{}
+	engine := NewEngine(s, client).WithReranker(reranker)
+
+	results, err := engine.SearchHybrid(context.Background(), "apple", 10, Options{})
+	if err != nil {
+		t.Fatalf("SearchHybrid error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatalf("expected results, got 0")
+	}
+
+	if reranker.calls != 1 {
+		t.Errorf("reranker calls = %d, want exactly 1 (single-pass reranking)", reranker.calls)
+	}
+}
+
+func TestSearchHybrid_SortByFastField(t *testing.T) {
+	s := newTestStore(t)
+	col, _ := s.CreateCollection("docs", "code", "/docs", "*")
+	engine := NewEngine(s, nil)
+
+	doc1, _ := s.UpsertDocument(col.ID, "/docs/1", "Go Language", "hash1", 1, 1)
+	s.UpsertFTS(doc1, "Go Language", "Go is a compiled language.")
+	s.FastFields().Set(doc1, "title", "Go Language")
+
+	doc2, _ := s.UpsertDocument(col.ID, "/docs/2", "Python", "hash2", 1, 1)
+	s.UpsertFTS(doc2, "Python", "Python is an interpreted language.")
+	s.FastFields().Set(doc2, "title", "Python")
+
+	doc3, _ := s.UpsertDocument(col.ID, "/docs/3", "Rust Language", "hash3", 1, 1)
+	s.UpsertFTS(doc3, "Rust Language", "Rust is a systems language.")
+	s.FastFields().Set(doc3, "title", "Rust Language")
+
+	ctx := context.Background()
+
+	t.Run("hybrid sort title asc", func(t *testing.T) {
+		res, err := engine.SearchHybrid(ctx, "language", 10, Options{SortBy: "title", SortOrder: "asc"})
+		if err != nil {
+			t.Fatalf("SearchHybrid error: %v", err)
+		}
+		if len(res) != 3 {
+			t.Fatalf("expected 3 results, got %d", len(res))
+		}
+		if res[0].Title != "Go Language" || res[1].Title != "Python" || res[2].Title != "Rust Language" {
+			t.Errorf("unexpected sort order asc: %s, %s, %s", res[0].Title, res[1].Title, res[2].Title)
+		}
+	})
+
+	t.Run("hybrid sort title desc", func(t *testing.T) {
+		res, err := engine.SearchHybrid(ctx, "language", 10, Options{SortBy: "title", SortOrder: "desc"})
+		if err != nil {
+			t.Fatalf("SearchHybrid error: %v", err)
+		}
+		if len(res) != 3 {
+			t.Fatalf("expected 3 results, got %d", len(res))
+		}
+		if res[0].Title != "Rust Language" || res[1].Title != "Python" || res[2].Title != "Go Language" {
+			t.Errorf("unexpected sort order desc: %s, %s, %s", res[0].Title, res[1].Title, res[2].Title)
+		}
+	})
+}
+
+func TestSearchHybrid_SymmetricFallback(t *testing.T) {
+	s := newTestStore(t)
+	col, _ := s.CreateCollection("test", "markdown", "/tmp", "*.md")
+	doc1, _ := s.UpsertDocument(col.ID, "/tmp/doc1.md", "doc1", "h1", 1, 1)
+	_ = s.InsertChunk(doc1, 0, "alpha beta", []float32{1.0, 0.0})
+	_ = s.UpsertFTS(doc1, "doc1", "alpha beta")
+
+	t.Run("vector fails fallback to bm25", func(t *testing.T) {
+		// Vector client is nil -> vector search fails, but BM25 succeeds
+		engine := NewEngine(s, nil)
+		results, err := engine.SearchHybrid(context.Background(), "alpha", 10, Options{})
+		if err != nil {
+			t.Fatalf("SearchHybrid unexpected error: %v", err)
+		}
+		if len(results) != 1 || results[0].Title != "doc1" {
+			t.Errorf("expected doc1 from BM25 fallback, got %v", results)
+		}
+	})
+
+	t.Run("both fail returns error", func(t *testing.T) {
+		engine := NewEngine(s, nil)
+		// Query with unmatched double quotes causes FTS5 syntax error
+		_, err := engine.SearchHybrid(context.Background(), `"unclosed quote`, 10, Options{QueryMode: "raw"})
+		if err == nil {
+			t.Fatal("expected error when both BM25 and vector fail")
 		}
 	})
 }
