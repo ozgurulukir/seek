@@ -20,13 +20,19 @@ seek sync    # incremental sync
 seek embed   # generate embeddings for new chunks
 ```
 
-## Force re-embed
+## Force re-embed & Re-indexing
 
-After changing model, dimensions, or task prefixes:
-
-```bash
-seek embed -f
-```
+- **After changing model or task prefixes:**
+  ```bash
+  seek embed -f
+  ```
+- **After changing chunk size (`chunk.max_size`) or dimensions:**
+  Re-index collection so files are sliced into new chunk boundaries:
+  ```bash
+  seek rm <collection>
+  seek add <path> [--code|--documents|...]
+  seek embed
+  ```
 
 ## Collection not found
 
