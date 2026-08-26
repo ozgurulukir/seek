@@ -266,7 +266,7 @@ func newTestEmbedClient(t *testing.T, handler http.HandlerFunc) *embed.Client {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return embed.NewClient(srv.URL, "test-key", "test-model", 2)
+	return embed.NewClient(srv.URL, "test-key", "test-model", 2, embed.TaskPrefix{})
 }
 
 func insertDoc(t *testing.T, s *store.Store, path, title, content string) int64 {
@@ -542,7 +542,7 @@ func TestSearchHybridVLClient(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	vlClient := embed.NewVLClient("test-key", "test-model", 2, srv.URL)
+	vlClient := embed.NewVLClient("test-key", "test-model", 2, srv.URL, embed.TaskPrefix{})
 	engine := NewEngineWithVL(s, nil, vlClient)
 
 	results, err := engine.SearchHybrid(context.Background(), "apple", 10, Options{})
@@ -607,7 +607,7 @@ func testSearchVectorNoEmbedClients(t *testing.T, s *store.Store) {
 
 func testSearchVectorWithEmbedClient(t *testing.T, s *store.Store, baseURL string) {
 	t.Helper()
-	client := embed.NewClient(baseURL, "key", "model", 3)
+	client := embed.NewClient(baseURL, "key", "model", 3, embed.TaskPrefix{})
 	engine := NewEngine(s, client)
 
 	results, err := engine.SearchVector(context.Background(), "query", 0, Options{})
@@ -623,8 +623,8 @@ func testSearchVectorWithVLClientPrecedence(t *testing.T, s *store.Store, baseUR
 	t.Helper()
 	// Create a broken embed client that points to a non-existent URL.
 	// If vlClient takes precedence, this broken client won't be called.
-	badClient := embed.NewClient("http://127.0.0.1:0", "key", "model", 3)
-	vlClient := embed.NewVLClient("key", "model", 3, baseURL+"/vl-embeddings")
+	badClient := embed.NewClient("http://127.0.0.1:0", "key", "model", 3, embed.TaskPrefix{})
+	vlClient := embed.NewVLClient("key", "model", 3, baseURL+"/vl-embeddings", embed.TaskPrefix{})
 
 	engine := NewEngineWithVL(s, badClient, vlClient)
 
@@ -638,7 +638,7 @@ func testSearchVectorWithVLClientPrecedence(t *testing.T, s *store.Store, baseUR
 
 func testSearchVectorLimitDefaults(t *testing.T, s *store.Store, baseURL string) {
 	t.Helper()
-	client := embed.NewClient(baseURL, "key", "model", 3)
+	client := embed.NewClient(baseURL, "key", "model", 3, embed.TaskPrefix{})
 	engine := NewEngine(s, client)
 
 	// If limit is <= 0, it becomes DefaultLimit inside SearchVector.
@@ -657,7 +657,7 @@ func testSearchVectorEmbedClientError(t *testing.T, s *store.Store) {
 	brokenTs := httptest.NewServer(brokenMux)
 	defer brokenTs.Close()
 
-	client := embed.NewClient(brokenTs.URL, "key", "model", 3)
+	client := embed.NewClient(brokenTs.URL, "key", "model", 3, embed.TaskPrefix{})
 	engine := NewEngine(s, client)
 
 	_, err := engine.SearchVector(context.Background(), "query", 0, Options{})
@@ -675,8 +675,8 @@ func testSearchVectorVLClientError(t *testing.T, s *store.Store) {
 	brokenTs := httptest.NewServer(brokenMux)
 	defer brokenTs.Close()
 
-	badClient := embed.NewClient("http://127.0.0.1:0", "key", "model", 3)
-	vlClient := embed.NewVLClient("key", "model", 3, brokenTs.URL+"/vl-embeddings")
+	badClient := embed.NewClient("http://127.0.0.1:0", "key", "model", 3, embed.TaskPrefix{})
+	vlClient := embed.NewVLClient("key", "model", 3, brokenTs.URL+"/vl-embeddings", embed.TaskPrefix{})
 	engine := NewEngineWithVL(s, badClient, vlClient)
 
 	_, err := engine.SearchVector(context.Background(), "query", 0, Options{})

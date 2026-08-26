@@ -12,6 +12,21 @@ import (
 	"github.com/google/renameio"
 )
 
+// TaskPrefixConfig holds model-specific input prefixes for asymmetric
+// embedding models. Nomic-style models expect "search_query: " on queries
+// and "search_document: " on indexed texts; E5 expects "query: "/"passage: ".
+// Empty fields fall back to model-family auto-detection (see TaskPrefixes);
+// set DisableAutoDetect to keep only explicitly configured prefixes.
+type TaskPrefixConfig struct {
+	Query    string `yaml:"query,omitempty"`
+	Document string `yaml:"document,omitempty"`
+	// DisableAutoDetect opts out of model-family auto-detection so only the
+	// explicit Query/Document prefixes above apply. Use it when the provider
+	// already adds prefixes server-side or for family lookalikes that are
+	// actually instruction-free (e.g. bge-en-icl).
+	DisableAutoDetect bool `yaml:"disable_auto_detect,omitempty"`
+}
+
 type EmbeddingConfig struct {
 	BaseURL    string `yaml:"base_url"`
 	APIKey     string `yaml:"api_key"`
@@ -23,6 +38,55 @@ type EmbeddingConfig struct {
 	// Multimodal forces the vision-language (image+text) embedding path.
 	// When false, it is inferred from the model name (vl-embedding / multimodal).
 	Multimodal bool `yaml:"multimodal,omitempty"`
+	// TaskPrefix overrides the query/document input prefixes for models
+	// that require them. When unset, well-known model families are detected
+	// from the model name.
+	TaskPrefix TaskPrefixConfig `yaml:"task_prefix,omitempty"`
+}
+
+// TaskPrefixes resolves the input prefixes to prepend to query and document
+// texts before embedding. Explicit config wins field-by-field; missing
+// fields are inferred from well-known model families:
+//
+//	nomic-embed*      → "search_query: " / "search_document: "
+//	*e5* (intfloat)   → "query: " / "passage: "
+//	bge-*-en (v1)     → retrieval instruction on queries only
+//
+// Models that distinguish query/document via request fields instead of text
+// prefixes (Cohere input_type, Voyage, Jina task, Gemini task_type) are not
+// auto-detected; set task_prefix manually only when the provider documents
+// a text-prefix mode. Switching prefixes changes the vector space: re-embed
+// collections after enabling them (seek rm <collection> && seek add && seek embed -f).
+func (e EmbeddingConfig) TaskPrefixes() (query, document string) {
+	query, document = e.TaskPrefix.Query, e.TaskPrefix.Document
+	if e.TaskPrefix.DisableAutoDetect {
+		return query, document
+	}
+	m := strings.ToLower(e.Model)
+	switch {
+	case strings.Contains(m, "nomic-embed"):
+		if query == "" {
+			query = "search_query: "
+		}
+		if document == "" {
+			document = "search_document: "
+		}
+	case strings.Contains(m, "e5-") || strings.Contains(m, "/e5"):
+		if query == "" {
+			query = "query: "
+		}
+		if document == "" {
+			document = "passage: "
+		}
+	case strings.Contains(m, "bge-") && strings.Contains(m, "-en") &&
+		!strings.Contains(m, "m3") && !strings.Contains(m, "rerank"):
+		// BGE v1 English models take a retrieval instruction on queries;
+		// bge-m3 is instruction-free and excluded above.
+		if query == "" {
+			query = "Represent this sentence for searching relevant passages: "
+		}
+	}
+	return query, document
 }
 
 // IsMultimodal reports whether to use the vision-language embedding client.

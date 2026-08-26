@@ -294,7 +294,7 @@ func (c *EmbedCmd) embedRealtime(db *store.Store, client *embed.Client, chunks [
 			end = len(texts)
 		}
 
-		embeddings, err := client.Embed(texts[i:end])
+		embeddings, err := client.EmbedDocuments(texts[i:end])
 		if err != nil {
 			fmt.Printf("  WARN: batch %d-%d: %v\n", i, end, err)
 			continue

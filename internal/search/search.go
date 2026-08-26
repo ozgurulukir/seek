@@ -109,7 +109,7 @@ func (e *Engine) SearchVector(ctx context.Context, query string, limit int, opts
 			return nil, err
 		}
 	} else if e.embedClient != nil {
-		qEmb, err = e.embedClient.EmbedSingle(query)
+		qEmb, err = e.embedClient.EmbedQuery(query)
 		if err != nil {
 			return nil, err
 		}

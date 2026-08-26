@@ -177,16 +177,14 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 		vlBaseURL = strings.TrimSpace(vlStr)
 	}
 
-	// Preserve existing configuration sections (rerank, extractor, vector_index, etc.)
+	// Preserve existing configuration sections (rerank, extractor, task_prefix, etc.)
 	savedCfg := cfg.Config
-	savedCfg.Embedding = config.EmbeddingConfig{
-		BaseURL:    baseURL,
-		APIKey:     apiKey,
-		Model:      model,
-		Dimensions: dimensions,
-		Multimodal: multimodal,
-		VLBaseURL:  vlBaseURL,
-	}
+	savedCfg.Embedding.BaseURL = baseURL
+	savedCfg.Embedding.APIKey = apiKey
+	savedCfg.Embedding.Model = model
+	savedCfg.Embedding.Dimensions = dimensions
+	savedCfg.Embedding.Multimodal = multimodal
+	savedCfg.Embedding.VLBaseURL = vlBaseURL
 
 	if err := config.Save(savedCfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
@@ -213,6 +211,10 @@ func (c *AuthStatusCmd) Run(cfg *config.AppConfig) error {
 	fmt.Printf("Model:      %s\n", cfg.Config.Embedding.Model)
 	fmt.Printf("Dimensions: %d\n", cfg.Config.Embedding.Dimensions)
 	fmt.Printf("API Key:    %s\n", maskKey(key))
+	q, d := cfg.Config.Embedding.TaskPrefixes()
+	if q != "" || d != "" {
+		fmt.Printf("Task Prefix: query=%q doc=%q\n", q, d)
+	}
 	if cfg.Config.Embedding.IsMultimodal() {
 		vl := cfg.Config.Embedding.VLBaseURL
 		if vl == "" {

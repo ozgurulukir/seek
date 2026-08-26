@@ -44,20 +44,25 @@ type batchResponseLine struct {
 }
 
 // PrepareBatchJSONL creates the JSONL content for batch embedding.
-// Each chunk gets a custom_id of "chunk-{index}".
+// Each chunk gets a custom_id of "chunk-{index}". The document task prefix
+// is applied to every input, matching EmbedDocuments.
 func (c *Client) PrepareBatchJSONL(texts []string) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 
 	for i, text := range texts {
+		docInput := text
+		if c.taskPrefix.Document != "" && !strings.HasPrefix(text, c.taskPrefix.Document) {
+			docInput = c.taskPrefix.Document + text
+		}
 		line := batchRequestLine{
 			CustomID: fmt.Sprintf("chunk-%d", i),
 			Method:   "POST",
 			URL:      "/v1/embeddings",
 			Body: map[string]interface{}{
 				"model": c.model,
-				"input": text,
+				"input": docInput,
 			},
 		}
 		if c.dimensions > 0 {

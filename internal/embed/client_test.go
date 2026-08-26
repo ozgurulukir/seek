@@ -16,13 +16,13 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	c := NewClient(srv.URL, "test-key", "test-model", 8)
+	c := NewClient(srv.URL, "test-key", "test-model", 8, TaskPrefix{})
 	c.http = srv.Client()
 	return c
 }
 
 func TestNewClient(t *testing.T) {
-	c := NewClient("https://api.example/v1", "k", "m", 16)
+	c := NewClient("https://api.example/v1", "k", "m", 16, TaskPrefix{})
 	if c.baseURL != "https://api.example/v1" {
 		t.Errorf("baseURL = %q, want %q", c.baseURL, "https://api.example/v1")
 	}
@@ -66,9 +66,9 @@ func TestEmbedRequestShape(t *testing.T) {
 		})
 	})
 
-	_, err := c.Embed([]string{"hello"})
+	_, err := c.EmbedDocuments([]string{"hello"})
 	if err != nil {
-		t.Fatalf("Embed: %v", err)
+		t.Fatalf("EmbedDocuments: %v", err)
 	}
 
 	if gotPath != "/embeddings" {
@@ -97,8 +97,8 @@ func TestEmbedOmitsDimensionsWhenZero(t *testing.T) {
 	})
 	c.dimensions = 0
 
-	if _, err := c.Embed([]string{"x"}); err != nil {
-		t.Fatalf("Embed: %v", err)
+	if _, err := c.EmbedDocuments([]string{"x"}); err != nil {
+		t.Fatalf("EmbedDocuments: %v", err)
 	}
 	if gotBody.Dimensions != 0 {
 		t.Errorf("dimensions = %d, want 0 (omitted)", gotBody.Dimensions)
@@ -121,9 +121,9 @@ func TestEmbedReordersByIndex(t *testing.T) {
 		})
 	})
 
-	got, err := c.Embed([]string{"a", "b", "c"})
+	got, err := c.EmbedDocuments([]string{"a", "b", "c"})
 	if err != nil {
-		t.Fatalf("Embed: %v", err)
+		t.Fatalf("EmbedDocuments: %v", err)
 	}
 	want := [][]float32{{1, 1}, {2, 2}, {3, 3}}
 	if !reflect.DeepEqual(got, want) {
@@ -137,7 +137,7 @@ func TestEmbedHTTPError(t *testing.T) {
 		w.Write([]byte("boom"))
 	})
 
-	_, err := c.Embed([]string{"a"})
+	_, err := c.EmbedDocuments([]string{"a"})
 	if err == nil {
 		t.Fatal("expected error for non-200 status")
 	}
@@ -158,7 +158,7 @@ func TestEmbedAPIErrorField(t *testing.T) {
 		})
 	})
 
-	_, err := c.Embed([]string{"a"})
+	_, err := c.EmbedDocuments([]string{"a"})
 	if err == nil {
 		t.Fatal("expected error for API error field")
 	}
@@ -167,7 +167,7 @@ func TestEmbedAPIErrorField(t *testing.T) {
 	}
 }
 
-func TestEmbedSingle(t *testing.T) {
+func TestEmbedQuery(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(embeddingResponse{
@@ -180,26 +180,26 @@ func TestEmbedSingle(t *testing.T) {
 		})
 	})
 
-	got, err := c.EmbedSingle("hello")
+	got, err := c.EmbedQuery("hello")
 	if err != nil {
-		t.Fatalf("EmbedSingle: %v", err)
+		t.Fatalf("EmbedQuery: %v", err)
 	}
 	if !reflect.DeepEqual(got, []float32{0.5, 0.5}) {
 		t.Errorf("embedding = %v, want [0.5 0.5]", got)
 	}
 }
 
-func TestEmbedSingleNoResult(t *testing.T) {
+func TestEmbedQueryNoResult(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(embeddingResponse{})
 	})
 
-	// Embed returns a len-1 slice with a nil inner slice when the API returns
-	// no data, so EmbedSingle yields a nil embedding without error.
-	got, err := c.EmbedSingle("hello")
+	// embed returns a len-1 slice with a nil inner slice when the API returns
+	// no data, so EmbedQuery yields a nil embedding without error.
+	got, err := c.EmbedQuery("hello")
 	if err != nil {
-		t.Fatalf("EmbedSingle: %v", err)
+		t.Fatalf("EmbedQuery: %v", err)
 	}
 	if got != nil {
 		t.Errorf("embedding = %v, want nil", got)
@@ -282,5 +282,97 @@ func TestBatchEmbedErrorPropagates(t *testing.T) {
 
 	if _, err := c.BatchEmbed([]string{"a", "b"}, 1); err == nil {
 		t.Fatal("expected error from failing batch")
+	}
+}
+
+func TestEmbedDocumentsAppliesDocumentPrefix(t *testing.T) {
+	var gotBody embeddingRequest
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(embeddingResponse{})
+	})
+	c.taskPrefix = TaskPrefix{Query: "search_query: ", Document: "search_document: "}
+
+	if _, err := c.EmbedDocuments([]string{"alpha", "beta"}); err != nil {
+		t.Fatalf("EmbedDocuments: %v", err)
+	}
+	want := []string{"search_document: alpha", "search_document: beta"}
+	if !reflect.DeepEqual(gotBody.Input, want) {
+		t.Errorf("input = %v, want %v", gotBody.Input, want)
+	}
+}
+
+func TestEmbedQueryAppliesQueryPrefix(t *testing.T) {
+	var gotBody embeddingRequest
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(embeddingResponse{})
+	})
+	c.taskPrefix = TaskPrefix{Query: "search_query: ", Document: "search_document: "}
+
+	if _, err := c.EmbedQuery("hello"); err != nil {
+		t.Fatalf("EmbedQuery: %v", err)
+	}
+	if !reflect.DeepEqual(gotBody.Input, []string{"search_query: hello"}) {
+		t.Errorf("input = %v, want [search_query: hello]", gotBody.Input)
+	}
+}
+
+func TestTaskPrefixZeroValueSendsRawText(t *testing.T) {
+	var inputs [][]string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var body embeddingRequest
+		json.NewDecoder(r.Body).Decode(&body)
+		inputs = append(inputs, body.Input)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(embeddingResponse{})
+	})
+
+	if _, err := c.EmbedDocuments([]string{"plain"}); err != nil {
+		t.Fatalf("EmbedDocuments: %v", err)
+	}
+	if _, err := c.EmbedQuery("plain query"); err != nil {
+		t.Fatalf("EmbedQuery: %v", err)
+	}
+
+	if len(inputs) != 2 {
+		t.Fatalf("captured %d requests, want 2", len(inputs))
+	}
+	if !reflect.DeepEqual(inputs[0], []string{"plain"}) {
+		t.Errorf("document input = %v, want [plain]", inputs[0])
+	}
+	if !reflect.DeepEqual(inputs[1], []string{"plain query"}) {
+		t.Errorf("query input = %v, want [plain query]", inputs[1])
+	}
+}
+
+func TestTaskPrefixIdempotent(t *testing.T) {
+	var inputs [][]string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var body embeddingRequest
+		json.NewDecoder(r.Body).Decode(&body)
+		inputs = append(inputs, body.Input)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(embeddingResponse{})
+	})
+	c.taskPrefix = TaskPrefix{Query: "search_query: ", Document: "search_document: "}
+
+	// Pass already prefixed strings
+	if _, err := c.EmbedDocuments([]string{"search_document: doc1", "doc2"}); err != nil {
+		t.Fatalf("EmbedDocuments: %v", err)
+	}
+	if _, err := c.EmbedQuery("search_query: query1"); err != nil {
+		t.Fatalf("EmbedQuery: %v", err)
+	}
+
+	wantDoc := []string{"search_document: doc1", "search_document: doc2"}
+	if !reflect.DeepEqual(inputs[0], wantDoc) {
+		t.Errorf("document input = %v, want %v", inputs[0], wantDoc)
+	}
+	wantQuery := []string{"search_query: query1"}
+	if !reflect.DeepEqual(inputs[1], wantQuery) {
+		t.Errorf("query input = %v, want %v", inputs[1], wantQuery)
 	}
 }

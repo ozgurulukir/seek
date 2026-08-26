@@ -425,11 +425,13 @@ func newEmbedClient(cfg *config.AppConfig) *embed.Client {
 	if err != nil {
 		return nil
 	}
+	q, d := cfg.Config.Embedding.TaskPrefixes()
 	return embed.NewClient(
 		cfg.Config.Embedding.BaseURL,
 		key,
 		cfg.Config.Embedding.Model,
 		cfg.Config.Embedding.Dimensions,
+		embed.TaskPrefix{Query: q, Document: d},
 	)
 }
 
@@ -443,7 +445,8 @@ func newVLClient(cfg *config.AppConfig) *embed.VLClient {
 	if !ec.IsMultimodal() {
 		return nil
 	}
-	return embed.NewVLClient(key, ec.Model, ec.Dimensions, ec.VLBaseURL)
+	q, d := ec.TaskPrefixes()
+	return embed.NewVLClient(key, ec.Model, ec.Dimensions, ec.VLBaseURL, embed.TaskPrefix{Query: q, Document: d})
 }
 
 // indexChunks stores chunks in DB without embeddings.

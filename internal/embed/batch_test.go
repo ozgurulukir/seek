@@ -16,13 +16,13 @@ func newTestBatchClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	c := NewClient(srv.URL, "test-key", "test-model", 8)
+	c := NewClient(srv.URL, "test-key", "test-model", 8, TaskPrefix{})
 	c.http = srv.Client()
 	return c
 }
 
 func TestPrepareBatchJSONL(t *testing.T) {
-	c := NewClient("https://api.example/v1", "k", "m", 4)
+	c := NewClient("https://api.example/v1", "k", "m", 4, TaskPrefix{})
 	data, err := c.PrepareBatchJSONL([]string{"hello", "world"})
 	if err != nil {
 		t.Fatalf("PrepareBatchJSONL: %v", err)
@@ -58,7 +58,7 @@ func TestPrepareBatchJSONL(t *testing.T) {
 }
 
 func TestPrepareBatchJSONLOmitsDimensionsWhenZero(t *testing.T) {
-	c := NewClient("https://api.example/v1", "k", "m", 0)
+	c := NewClient("https://api.example/v1", "k", "m", 0, TaskPrefix{})
 	data, err := c.PrepareBatchJSONL([]string{"x"})
 	if err != nil {
 		t.Fatalf("PrepareBatchJSONL: %v", err)
@@ -293,12 +293,55 @@ func TestBatchEmbedAsync(t *testing.T) {
 }
 
 func TestBatchEmbedAsyncEmpty(t *testing.T) {
-	c := NewClient("https://api.example/v1", "k", "m", 8)
+	c := NewClient("https://api.example/v1", "k", "m", 8, TaskPrefix{})
 	got, err := c.BatchEmbedAsync(nil, nil)
 	if err != nil {
 		t.Fatalf("BatchEmbedAsync(nil): %v", err)
 	}
 	if got != nil {
 		t.Errorf("embeddings = %v, want nil", got)
+	}
+}
+
+func TestPrepareBatchJSONLAppliesDocumentPrefix(t *testing.T) {
+	c := NewClient("https://api.example/v1", "k", "m", 4, TaskPrefix{Query: "search_query: ", Document: "search_document: "})
+	data, err := c.PrepareBatchJSONL([]string{"hello"})
+	if err != nil {
+		t.Fatalf("PrepareBatchJSONL: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("got %d lines, want 1", len(lines))
+	}
+	var first batchRequestLine
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatalf("unmarshal line 0: %v", err)
+	}
+	if got := first.Body["input"]; got != "search_document: hello" {
+		t.Errorf("body.input = %v, want %q", got, "search_document: hello")
+	}
+}
+
+func TestPrepareBatchJSONLIdempotent(t *testing.T) {
+	c := NewClient("https://api.example/v1", "k", "m", 4, TaskPrefix{Query: "search_query: ", Document: "search_document: "})
+	data, err := c.PrepareBatchJSONL([]string{"search_document: already_prefixed", "raw"})
+	if err != nil {
+		t.Fatalf("PrepareBatchJSONL: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want 2", len(lines))
+	}
+	var line0, line1 batchRequestLine
+	json.Unmarshal([]byte(lines[0]), &line0)
+	json.Unmarshal([]byte(lines[1]), &line1)
+
+	if line0.Body["input"] != "search_document: already_prefixed" {
+		t.Errorf("line0 input = %v, want %q", line0.Body["input"], "search_document: already_prefixed")
+	}
+	if line1.Body["input"] != "search_document: raw" {
+		t.Errorf("line1 input = %v, want %q", line1.Body["input"], "search_document: raw")
 	}
 }

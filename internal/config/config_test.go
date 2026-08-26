@@ -109,6 +109,7 @@ func TestLoad(t *testing.T) {
 	// Create a temporary HOME directory for testing Load()
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
 
 	ac, err := Load()
 	if err != nil {
@@ -133,6 +134,7 @@ func TestLoad_EnvVarPropagation(t *testing.T) {
 	// Isolate the real ~/.config/seek by pointing HOME at a temp dir.
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
 
 	const apiKey = "expanded-key-42"
 	t.Setenv("SEEK_TEST_API_KEY", apiKey)
@@ -173,5 +175,73 @@ func TestLoad_EnvVarPropagation(t *testing.T) {
 	}
 	if got := ac.Config.Rerank.TopN; got != DefaultRerankTopN {
 		t.Errorf("Rerank.TopN = %d, want %d", got, DefaultRerankTopN)
+	}
+}
+
+func TestTaskPrefixes(t *testing.T) {
+	cases := []struct {
+		name         string
+		cfg          EmbeddingConfig
+		wantQuery    string
+		wantDocument string
+	}{
+		{"nomic full", EmbeddingConfig{Model: "nomic-embed-text"}, "search_query: ", "search_document: "},
+		{"nomic versioned", EmbeddingConfig{Model: "nomic-embed-text-v1.5"}, "search_query: ", "search_document: "},
+		{"e5 bare", EmbeddingConfig{Model: "e5-small-v2"}, "query: ", "passage: "},
+		{"e5 namespaced", EmbeddingConfig{Model: "intfloat/multilingual-e5-large"}, "query: ", "passage: "},
+		{"bge v1 en query only", EmbeddingConfig{Model: "bge-large-en-v1.5"}, "Represent this sentence for searching relevant passages: ", ""},
+		{"bge m3 none", EmbeddingConfig{Model: "bge-m3"}, "", ""},
+		{"bge reranker none", EmbeddingConfig{Model: "bge-reranker-v2-m3"}, "", ""},
+		{"openai none", EmbeddingConfig{Model: "text-embedding-3-small"}, "", ""},
+		{"qwen none", EmbeddingConfig{Model: "text-embedding-v4"}, "", ""},
+		{"explicit override wins", EmbeddingConfig{
+			Model:      "nomic-embed-text",
+			TaskPrefix: TaskPrefixConfig{Query: "q: ", Document: "d: "},
+		}, "q: ", "d: "},
+		{"explicit query only, rest auto", EmbeddingConfig{
+			Model:      "nomic-embed-text",
+			TaskPrefix: TaskPrefixConfig{Query: "sorgu: "},
+		}, "sorgu: ", "search_document: "},
+		{"empty model none", EmbeddingConfig{}, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotQuery, gotDocument := tc.cfg.TaskPrefixes()
+			if gotQuery != tc.wantQuery {
+				t.Errorf("query prefix = %q, want %q", gotQuery, tc.wantQuery)
+			}
+			if gotDocument != tc.wantDocument {
+				t.Errorf("document prefix = %q, want %q", gotDocument, tc.wantDocument)
+			}
+		})
+	}
+}
+
+func TestTaskPrefixesDisableAutoDetect(t *testing.T) {
+	// A model-family name that would auto-detect is kept raw when
+	// disable_auto_detect is set, and explicit prefixes still apply.
+	cfg := EmbeddingConfig{
+		Model: "nomic-embed-text",
+		TaskPrefix: TaskPrefixConfig{
+			Query:             "q: ",
+			DisableAutoDetect: true,
+		},
+	}
+	gotQuery, gotDocument := cfg.TaskPrefixes()
+	if gotQuery != "q: " {
+		t.Errorf("query prefix = %q, want %q", gotQuery, "q: ")
+	}
+	if gotDocument != "" {
+		t.Errorf("document prefix = %q, want empty (no auto-detect)", gotDocument)
+	}
+
+	// bge-en-icl looks like a BGE v1 English model but is instruction-free;
+	// disable_auto_detect is the escape hatch for it.
+	lookalike := EmbeddingConfig{
+		Model:      "bge-en-icl",
+		TaskPrefix: TaskPrefixConfig{DisableAutoDetect: true},
+	}
+	if q, d := lookalike.TaskPrefixes(); q != "" || d != "" {
+		t.Errorf("lookalike prefixes = (%q, %q), want empty", q, d)
 	}
 }

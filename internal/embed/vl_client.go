@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/ozgurulukir/seek/internal/config"
 )
@@ -34,12 +35,14 @@ type VLClient struct {
 	model      string
 	dimensions int
 	endpoint   string
+	taskPrefix TaskPrefix
 	http       *http.Client
 }
 
 // NewVLClient creates a new multimodal embedding client. If endpoint is empty,
-// DefaultVLEndpoint (DashScope) is used.
-func NewVLClient(apiKey, model string, dimensions int, endpoint string) *VLClient {
+// DefaultVLEndpoint (DashScope) is used. The task prefix is applied to query
+// texts (EmbedText) and document texts (EmbedBatch) like the text Client.
+func NewVLClient(apiKey, model string, dimensions int, endpoint string, taskPrefix TaskPrefix) *VLClient {
 	if endpoint == "" {
 		endpoint = DefaultVLEndpoint
 	}
@@ -48,6 +51,7 @@ func NewVLClient(apiKey, model string, dimensions int, endpoint string) *VLClien
 		model:      model,
 		dimensions: dimensions,
 		endpoint:   endpoint,
+		taskPrefix: taskPrefix,
 		http:       &http.Client{Timeout: config.DefaultVLTimeout},
 	}
 }
@@ -84,10 +88,10 @@ type vlResponse struct {
 	Message string `json:"message,omitempty"`
 }
 
-// EmbedText embeds pure text via the VL API.
+// EmbedText embeds a search query via the VL API, prepending the configured
+// query task prefix.
 func (c *VLClient) EmbedText(text string) ([]float32, error) {
-	items := []EmbedItem{{Text: text}}
-	results, err := c.EmbedBatch(items)
+	results, err := c.embedRaw([]EmbedItem{{Text: c.taskPrefix.applyQuery(text)}})
 	if err != nil {
 		return nil, err
 	}
@@ -113,9 +117,26 @@ func (c *VLClient) EmbedImage(imageDataURI string, context string) ([]float32, e
 	return results[0], nil
 }
 
-// EmbedBatch embeds multiple items. It automatically splits into sub-batches
-// respecting the 20-content and 5-image limits per request.
+// EmbedBatch embeds document items, prepending the configured document task
+// prefix to each item's text (image context included). It automatically
+// splits into sub-batches respecting the 20-content and 5-image limits per
+// request.
 func (c *VLClient) EmbedBatch(items []EmbedItem) ([][]float32, error) {
+	if c.taskPrefix.Document != "" {
+		prefixed := make([]EmbedItem, len(items))
+		copy(prefixed, items)
+		for i := range prefixed {
+			if (prefixed[i].Text != "" || prefixed[i].ImageURI == "") && !strings.HasPrefix(prefixed[i].Text, c.taskPrefix.Document) {
+				prefixed[i].Text = c.taskPrefix.Document + prefixed[i].Text
+			}
+		}
+		items = prefixed
+	}
+	return c.embedRaw(items)
+}
+
+// embedRaw batches and sends items without any task-prefix transformation.
+func (c *VLClient) embedRaw(items []EmbedItem) ([][]float32, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}

@@ -62,7 +62,7 @@ func TestEmbedVLTextChunks(t *testing.T) {
 		t.Fatalf("failed to get chunks: %v", err)
 	}
 
-	vlClient := embed.NewVLClient("test-key", "test-model", 3, ts.URL)
+	vlClient := embed.NewVLClient("test-key", "test-model", 3, ts.URL, embed.TaskPrefix{})
 	cmd := &EmbedCmd{}
 
 	updated := cmd.embedVLTextChunks(db, vlClient, chunks)
@@ -131,7 +131,7 @@ func TestEmbedVLImageChunks(t *testing.T) {
 		t.Fatalf("failed to get chunks: %v", err)
 	}
 
-	vlClient := embed.NewVLClient("test-key", "test-model", 3, ts.URL)
+	vlClient := embed.NewVLClient("test-key", "test-model", 3, ts.URL, embed.TaskPrefix{})
 	cmd := &EmbedCmd{}
 
 	updated := cmd.embedVLImageChunks(db, vlClient, chunks)
