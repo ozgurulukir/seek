@@ -112,8 +112,13 @@ func (a *Analyzer) Analyze(text string) []string {
 	return result
 }
 
+// minFTS5PrefixLen is the minimum length of a stemmed term that gets `*` prefix
+// expansion. Terms shorter than this skip the wildcard to avoid slow FTS5 suffix scans.
+const minFTS5PrefixLen = 3
+
 // AnalyzeForQuery is like Analyze but adds a `*` prefix expansion for stemmed terms.
 // This allows FTS5 to match both the stemmed form and its suffixes (e.g., "kitap*" matches "kitap" and "kitaplar").
+// Terms shorter than minFTS5PrefixLen skip the wildcard to avoid expensive FTS5 suffix scans.
 func (a *Analyzer) AnalyzeForQuery(text string) []string {
 	tokens := AnalyzeToken(text)
 	var result []string
@@ -127,7 +132,7 @@ func (a *Analyzer) AnalyzeForQuery(text string) []string {
 		}
 		if a.enableStemmer && a.stemmer != nil {
 			stemmed := a.stemmer(token)
-			if stemmed != token {
+			if stemmed != token && len(stemmed) >= minFTS5PrefixLen {
 				result = append(result, stemmed+"*")
 			} else {
 				result = append(result, stemmed)

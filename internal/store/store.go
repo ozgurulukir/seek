@@ -994,7 +994,10 @@ func (s *Store) SearchVector(queryEmb []float32, limit int, filters *FilterSet) 
 		}
 		results, err := s.vectorIndex.Search(queryEmb, searchLimit)
 		if err == nil && len(results) > 0 {
-			fullResults := s.fetchSearchResults(results, filters)
+			fullResults, err := s.fetchSearchResults(results, filters)
+			if err != nil {
+				return nil, err
+			}
 			if len(fullResults) > limit {
 				fullResults = fullResults[:limit]
 			}
@@ -1106,9 +1109,9 @@ func (s *Store) linearSearchVector(queryEmb []float32, limit int, filters *Filte
 
 // fetchSearchResults fetches full SearchResult data for HNSW results.
 // Filters are pushed into the SQL WHERE clause so the DB handles filtering.
-func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) []SearchResult {
+func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) ([]SearchResult, error) {
 	if len(results) == 0 {
-		return nil
+		return nil, nil
 	}
 	// Build a lookup map
 	resultMap := make(map[int64]SearchResult)
@@ -1156,7 +1159,7 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) [
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("fetch search results query: %w", err)
 	}
 	defer rows.Close()
 
@@ -1176,12 +1179,12 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) [
 			collection  string
 		)
 		if err := rows.Scan(&chunkID, &docID, &seq, &content, &contentZstd, &chunkType, &imagePath, &startLine, &endLine, &title, &path, &collection); err != nil {
-			continue
+			return nil, fmt.Errorf("fetch search results scan: %w", err)
 		}
 		if len(contentZstd) > 0 {
 			content, err = DecompressString(contentZstd)
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("fetch search results decompress chunk %d: %w", chunkID, err)
 			}
 		}
 		if r, ok := resultMap[chunkID]; ok {
@@ -1199,7 +1202,7 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) [
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil
+		return nil, fmt.Errorf("fetch search results rows iteration: %w", err)
 	}
 
 	// Preserve HNSW ordering while excluding chunks that failed filters or were deleted
@@ -1209,7 +1212,7 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) [
 			out = append(out, res)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func (s *Store) UpdateChunkEmbedding(chunkID int64, embedding []float32) error {

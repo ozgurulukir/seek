@@ -3,6 +3,7 @@ package source
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -91,6 +92,12 @@ func TestScanImages_EmptyDir(t *testing.T) {
 }
 
 func TestScanImages_ReadError(t *testing.T) {
+	// Windows does not enforce POSIX read permissions — Chmod(0222) does not
+	// prevent reading, so this test cannot verify read-error skipping on Windows.
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not support POSIX read-only file permissions")
+	}
+
 	dir := t.TempDir()
 
 	// Write a valid file

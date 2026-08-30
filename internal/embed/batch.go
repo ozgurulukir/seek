@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -279,7 +279,7 @@ func (c *Client) DownloadBatchResults(fileID string) (map[string][]float32, erro
 	// embeddings. The caller detects incomplete results by comparing
 	// len(results) to the expected count.
 	if parseErrors > 0 || apiErrors > 0 {
-		fmt.Fprintf(os.Stderr, "WARN: batch download: %d parse errors, %d API errors out of %d lines\n",
+		log.Printf("WARN: batch download: %d parse errors, %d API errors out of %d lines",
 			parseErrors, apiErrors, len(lines))
 	}
 	return results, nil

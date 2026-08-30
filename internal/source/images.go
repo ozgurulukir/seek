@@ -55,7 +55,7 @@ func ScanImages(dir string) ([]ImageFile, error) {
 			Path:        path,
 			Name:        name,
 			ContentHash: fmt.Sprintf("%x", hash),
-			Mtime:       float64(info.ModTime().Unix()),
+			Mtime:       float64(info.ModTime().UnixNano()) / 1e9,
 		})
 		return nil
 	})

@@ -66,7 +66,7 @@ func ScanMarkdown(dir, pattern string) ([]FileInfo, error) {
 			Title:       title,
 			Content:     content,
 			ContentHash: fmt.Sprintf("%x", hash),
-			Mtime:       float64(info.ModTime().Unix()),
+			Mtime:       float64(info.ModTime().UnixNano()) / 1e9,
 			LineCount:   strings.Count(content, "\n") + 1,
 		})
 

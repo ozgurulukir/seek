@@ -51,7 +51,7 @@ func ScanClaudeFiles() ([]ConversationFile, error) {
 		}
 		files = append(files, ConversationFile{
 			Path:  path,
-			Mtime: float64(info.ModTime().Unix()),
+			Mtime: float64(info.ModTime().UnixNano()) / 1e9,
 		})
 		return nil
 	})

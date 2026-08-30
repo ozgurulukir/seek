@@ -179,15 +179,13 @@ func splitCodeLines(block string, maxSize, overlap int) []string {
 			current.Reset()
 			currentLines = nil
 
+			// Write overlap content in forward order into the new chunk buffer
 			if overlapBuilder.Len() > 0 {
-				// Reconstruct overlap in forward order
-				startIdx := len(lines)
-				for j, l := range lines {
-					if strings.Contains(overlapBuilder.String(), l) {
-						if j < startIdx {
-							startIdx = j
-						}
-					}
+				ovLines := strings.Split(strings.TrimSpace(overlapBuilder.String()), "\n")
+				for i := len(ovLines) - 1; i >= 0; i-- {
+					current.WriteString(ovLines[i])
+					current.WriteString("\n")
+					currentLines = append(currentLines, ovLines[i])
 				}
 			}
 		}
