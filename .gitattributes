@@ -1,0 +1,5 @@
+# Go source — always LF (gofmt/go build expect LF on all platforms)
+*.go text eol=lf
+
+# Auto-detect text vs binary for everything else
+* text=auto
