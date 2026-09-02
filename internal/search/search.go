@@ -1,9 +1,11 @@
 package search
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/ozgurulukir/seek/internal/embed"
@@ -12,7 +14,8 @@ import (
 
 const (
 	DefaultLimit = 20
-	RRFk         = 60
+	DefaultRRFK  = 60
+	RRFk         = DefaultRRFK // Deprecated: use DefaultRRFK or Options.RRFK
 )
 
 // Options configures search behavior.
@@ -27,6 +30,8 @@ type Options struct {
 	QueryMode string
 	// Limit is the max results.
 	Limit int
+	// RRFK is the Reciprocal Rank Fusion k constant. If <= 0, DefaultRRFK (60) is used.
+	RRFK int
 	// SortBy is the field name to sort by (empty = relevance score).
 	SortBy string
 	// SortOrder is "asc" or "desc".
@@ -198,7 +203,7 @@ func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts
 		// Fall back to BM25 candidates (keep full candidate pool for reranker)
 		fused = bm25Results
 	} else {
-		fused = rrfFusion(bm25Results, vecResults, candidateLimit)
+		fused = rrfFusionWithK(bm25Results, vecResults, candidateLimit, opts.RRFK)
 	}
 
 	if opts.SortBy != "" {
@@ -274,6 +279,13 @@ func (e *Engine) RunAggregations(ctx context.Context, specs []string, filters *s
 }
 
 func rrfFusion(bm25, vec []store.SearchResult, limit int) []store.SearchResult {
+	return rrfFusionWithK(bm25, vec, limit, DefaultRRFK)
+}
+
+func rrfFusionWithK(bm25, vec []store.SearchResult, limit int, k int) []store.SearchResult {
+	if k <= 0 {
+		k = DefaultRRFK
+	}
 	// Key by DocumentID for document-level fusion.
 	// BM25 returns ChunkID==0 (document-level), vector returns real chunk IDs.
 	// Using docID ensures both branches can merge for the same document.
@@ -281,12 +293,12 @@ func rrfFusion(bm25, vec []store.SearchResult, limit int) []store.SearchResult {
 	resultMap := make(map[int64]store.SearchResult)
 
 	for rank, r := range bm25 {
-		scores[r.DocumentID] += 1.0 / float64(RRFk+rank+1)
+		scores[r.DocumentID] += 1.0 / float64(k+rank+1)
 		resultMap[r.DocumentID] = r
 	}
 
 	for rank, r := range vec {
-		scores[r.DocumentID] += 1.0 / float64(RRFk+rank+1)
+		scores[r.DocumentID] += 1.0 / float64(k+rank+1)
 		if _, exists := resultMap[r.DocumentID]; !exists {
 			resultMap[r.DocumentID] = r
 		}
@@ -301,8 +313,11 @@ func rrfFusion(bm25, vec []store.SearchResult, limit int) []store.SearchResult {
 	for id, s := range scores {
 		sorted = append(sorted, scored{id, s})
 	}
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].score > sorted[j].score
+	slices.SortFunc(sorted, func(a, b scored) int {
+		if c := cmp.Compare(b.score, a.score); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.docID, b.docID)
 	})
 
 	if len(sorted) > limit {

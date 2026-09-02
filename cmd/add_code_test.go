@@ -3,6 +3,7 @@ package cmd_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -14,7 +15,6 @@ import (
 func TestAddCmd_CodeCollection(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
-
 	cfg := &config.AppConfig{
 		DBPath:   dbPath,
 		CacheDir: filepath.Join(tmpDir, "cache"),
@@ -40,6 +40,9 @@ func TestAddCmd_CodeCollection(t *testing.T) {
 	}
 
 	if err := addCmd.Run(cfg); err != nil {
+		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
+			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags fts5 ./... or make test")
+		}
 		t.Fatalf("AddCmd.Run failed: %v", err)
 	}
 

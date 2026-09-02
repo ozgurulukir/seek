@@ -16,10 +16,7 @@ func setupCodeIndexerTest(t *testing.T) (*indexer.Indexer, *store.Store, *store.
 	t.Helper()
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
-	db, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := openTestStore(t, dbPath)
 	t.Cleanup(func() {
 		db.Close()
 	})

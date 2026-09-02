@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -165,6 +166,29 @@ func TestRRFFusionScoringFormula(t *testing.T) {
 	}
 }
 
+func TestRRFFusionCustomK(t *testing.T) {
+	bm25 := []store.SearchResult{
+		mkResult(1, "doc1"), // rank 0
+	}
+	vec := []store.SearchResult{
+		mkResult(1, "doc1"), // rank 0
+	}
+
+	// With k=30: 1/(30+0+1) + 1/(30+0+1) = 2/31 ≈ 0.064516
+	resCustom := rrfFusionWithK(bm25, vec, DefaultLimit, 30)
+	wantScore30 := 2.0 / 31.0
+	if math.Abs(resCustom[0].Score-wantScore30) > 1e-9 {
+		t.Errorf("k=30 score=%f, want %f", resCustom[0].Score, wantScore30)
+	}
+
+	// With fallback k<=0: should use DefaultRRFK (60)
+	resFallback := rrfFusionWithK(bm25, vec, DefaultLimit, 0)
+	wantScore60 := 2.0 / 61.0
+	if math.Abs(resFallback[0].Score-wantScore60) > 1e-9 {
+		t.Errorf("fallback k=0 score=%f, want %f", resFallback[0].Score, wantScore60)
+	}
+}
+
 func TestRRFFusionDistinctDocsRanking(t *testing.T) {
 	// 5 docs in BM25, 2 distinct docs in vector.
 	// All docs are unique across lists, so we expect 7 results.
@@ -257,6 +281,9 @@ func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	s, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
+		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
+			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags fts5 ./... or make test")
+		}
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
@@ -426,6 +453,82 @@ func TestRunAggregations(t *testing.T) {
 	_, err = engine.RunAggregations(ctx, []string{"invalid_column_name:terms"}, nil)
 	if err == nil {
 		t.Errorf("expected error for invalid column execution, got nil")
+	}
+}
+
+func TestRangeAggregation_CustomField(t *testing.T) {
+	s := newTestStore(t)
+	engine := NewEngine(s, nil)
+	ctx := context.Background()
+
+	col, err := s.CreateCollection("test-col", "markdown", "/tmp", "*.md")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	// Upsert documents with distinct mtimes:
+	// doc1: mtime 2.0, line_count 100
+	// doc2: mtime 8.0, line_count 100
+	// doc3: mtime 25.0, line_count 100
+	_, _ = s.UpsertDocument(col.ID, "/tmp/doc1.md", "doc1", "hash1", 2.0, 100)
+	_, _ = s.UpsertDocument(col.ID, "/tmp/doc2.md", "doc2", "hash2", 8.0, 100)
+	_, _ = s.UpsertDocument(col.ID, "/tmp/doc3.md", "doc3", "hash3", 25.0, 100)
+
+	// If RangeAggregation ignored field, all line_counts (100) would bucket together.
+	// But using mtime, 2.0 is in 0-5, 8.0 is in 5-20, 25.0 is in other.
+	specs := []string{
+		"mtime:range:0-5,5-20",
+	}
+
+	result, err := engine.RunAggregations(ctx, specs, nil)
+	if err != nil {
+		t.Fatalf("RunAggregations failed: %v", err)
+	}
+
+	mtimeRanges, ok := result["mtime:range:0-5,5-20"]
+	if !ok {
+		t.Fatalf("missing mtime:range in results")
+	}
+
+	counts := make(map[string]int)
+	for _, b := range mtimeRanges {
+		counts[b.Key] = b.Count
+	}
+
+	if counts["0-5"] != 1 {
+		t.Errorf("expected 1 document in 0-5, got %d", counts["0-5"])
+	}
+	if counts["5-20"] != 1 {
+		t.Errorf("expected 1 document in 5-20, got %d", counts["5-20"])
+	}
+	if counts["other"] != 1 {
+		t.Errorf("expected 1 document in other, got %d", counts["other"])
+	}
+
+	// Verify fallback when Field is empty
+	fallbackAgg := &RangeAggregation{Ranges: []string{"0-50", "50-150"}}
+	q, _ := fallbackAgg.SQL()
+	if !strings.Contains(q, "d.line_count") {
+		t.Errorf("expected fallback to d.line_count, got SQL: %s", q)
+	}
+
+	// Verify open-ended lower and upper ranges (-10 and 20-)
+	openAgg := &RangeAggregation{Field: "mtime", Ranges: []string{"-10", "20-"}}
+	resOpen, err := ExecuteAggregation(s.DB(), openAgg)
+	if err != nil {
+		t.Fatalf("ExecuteAggregation open ranges: %v", err)
+	}
+	openCounts := make(map[string]int)
+	for _, b := range resOpen {
+		openCounts[b.Key] = b.Count
+	}
+	// doc1(2.0) and doc2(8.0) are < 10 -> count 2
+	if openCounts["-10"] != 2 {
+		t.Errorf("expected 2 docs in -10, got %d", openCounts["-10"])
+	}
+	// doc3(25.0) is >= 20 -> count 1
+	if openCounts["20-"] != 1 {
+		t.Errorf("expected 1 doc in 20-, got %d", openCounts["20-"])
 	}
 }
 

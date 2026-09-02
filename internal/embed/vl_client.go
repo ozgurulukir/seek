@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/ozgurulukir/seek/internal/config"
 )
@@ -302,4 +304,131 @@ func ImagePathToMediaType(path string) string {
 	default:
 		return "image/png"
 	}
+}
+
+// EmbedTextsInBatches embeds text strings in batches with rate-limiting pauses.
+func (c *VLClient) EmbedTextsInBatches(texts []string, batchSize int, pause time.Duration, onBatch func(batchStart int, embeddings [][]float32) error) (int, error) {
+	if batchSize <= 0 {
+		batchSize = 20
+	}
+	updated := 0
+	var firstErr error
+	for i := 0; i < len(texts); i += batchSize {
+		end := i + batchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+
+		items := make([]EmbedItem, end-i)
+		for j := i; j < end; j++ {
+			items[j-i] = EmbedItem{Text: texts[j]}
+		}
+
+		embeddings, err := c.EmbedBatch(items)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("text batch %d-%d: %w", i, end, err)
+			}
+			continue
+		}
+
+		if onBatch != nil {
+			if err := onBatch(i, embeddings); err != nil {
+				return updated, err
+			}
+		}
+		for _, emb := range embeddings {
+			if emb != nil {
+				updated++
+			}
+		}
+
+		if end < len(texts) && pause > 0 {
+			time.Sleep(pause)
+		}
+	}
+	return updated, firstErr
+}
+
+// ImageBatchItem pairs an image path with optional context text.
+type ImageBatchItem struct {
+	ImagePath string
+	Text      string
+}
+
+// EmbedImagesInBatches reads images concurrently, formats data URIs, and embeds them in batches.
+func (c *VLClient) EmbedImagesInBatches(items []ImageBatchItem, batchSize int, pause time.Duration, onBatch func(batchStart int, embeddings [][]float32, validIndices []int) error) (int, error) {
+	if batchSize <= 0 {
+		batchSize = 5
+	}
+	updated := 0
+	var firstErr error
+	for i := 0; i < len(items); i += batchSize {
+		end := i + batchSize
+		if end > len(items) {
+			end = len(items)
+		}
+
+		type readResult struct {
+			dataURI string
+			err     error
+		}
+		results := make([]readResult, end-i)
+		var wg sync.WaitGroup
+
+		for j := i; j < end; j++ {
+			wg.Add(1)
+			go func(idx int, item ImageBatchItem) {
+				defer wg.Done()
+				mediaType := ImagePathToMediaType(item.ImagePath)
+				dataURI, err := ImageToDataURI(item.ImagePath, mediaType)
+				results[idx-i] = readResult{dataURI, err}
+			}(j, items[j])
+		}
+		wg.Wait()
+
+		embedItems := make([]EmbedItem, 0, end-i)
+		validIndices := make([]int, 0, end-i)
+
+		for j := i; j < end; j++ {
+			item := items[j]
+			res := results[j-i]
+			if res.err != nil {
+				continue
+			}
+			embedItems = append(embedItems, EmbedItem{
+				Text:     item.Text,
+				ImageURI: res.dataURI,
+			})
+			validIndices = append(validIndices, j)
+		}
+
+		if len(embedItems) == 0 {
+			continue
+		}
+
+		embeddings, err := c.EmbedBatch(embedItems)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("image batch %d-%d: %w", i, end, err)
+			}
+			continue
+		}
+
+		if onBatch != nil {
+			if err := onBatch(i, embeddings, validIndices); err != nil {
+				return updated, err
+			}
+		}
+		for _, emb := range embeddings {
+			if emb != nil {
+				updated++
+			}
+		}
+
+		if end < len(items) && pause > 0 {
+			time.Sleep(pause)
+		}
+	}
+	return updated, firstErr
 }

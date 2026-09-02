@@ -109,8 +109,8 @@ var SupportedExtensions = map[string]string{
 	".nix":  "nix",
 }
 
-// IgnoredDirectories is the set of directory names ignored during code scanning.
-var IgnoredDirectories = map[string]bool{
+// ignoredDirectories is the set of directory names ignored during code scanning.
+var ignoredDirectories = map[string]bool{
 	".git":             true,
 	".svn":             true,
 	".hg":              true,
@@ -141,8 +141,8 @@ var IgnoredDirectories = map[string]bool{
 	".turbo":           true,
 }
 
-// IgnoredFiles contains exact file names or suffixes that should be skipped.
-var IgnoredFiles = map[string]bool{
+// ignoredFiles contains exact file names or suffixes that should be skipped.
+var ignoredFiles = map[string]bool{
 	"package-lock.json": true,
 	"yarn.lock":         true,
 	"pnpm-lock.yaml":    true,
@@ -154,6 +154,16 @@ var IgnoredFiles = map[string]bool{
 	"mix.lock":          true,
 	".DS_Store":         true,
 	"Thumbs.db":         true,
+}
+
+// IsIgnoredDirectory reports whether the directory name is in the default ignored list.
+func IsIgnoredDirectory(name string) bool {
+	return ignoredDirectories[name]
+}
+
+// IsIgnoredFile reports whether the file name is in the default ignored list.
+func IsIgnoredFile(name string) bool {
+	return ignoredFiles[name]
 }
 
 // DetectLanguage returns the programming language for a given file path based on extension.
@@ -224,7 +234,7 @@ func matchesGitignore(relPath string, patterns []string) bool {
 
 func shouldSkipDir(info os.FileInfo, relPath string, gitignorePatterns []string) bool {
 	baseName := info.Name()
-	if IgnoredDirectories[baseName] || (len(baseName) > 1 && strings.HasPrefix(baseName, ".") && baseName != ".") {
+	if IsIgnoredDirectory(baseName) || (len(baseName) > 1 && strings.HasPrefix(baseName, ".") && baseName != ".") {
 		return true
 	}
 	if len(gitignorePatterns) > 0 && matchesGitignore(relPath, gitignorePatterns) {
@@ -234,7 +244,7 @@ func shouldSkipDir(info os.FileInfo, relPath string, gitignorePatterns []string)
 }
 
 func isIgnoredFile(baseName string, relPath string, gitignorePatterns []string) bool {
-	if IgnoredFiles[baseName] {
+	if IsIgnoredFile(baseName) {
 		return true
 	}
 

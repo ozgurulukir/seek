@@ -2,9 +2,11 @@ package search
 
 import (
 	"context"
-	"github.com/ozgurulukir/seek/internal/store"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/ozgurulukir/seek/internal/store"
 )
 
 func TestEngine_SearchWithOptions(t *testing.T) {
@@ -12,6 +14,9 @@ func TestEngine_SearchWithOptions(t *testing.T) {
 	dbPath := filepath.Join(tempDir, "test.db")
 	s, err := store.Open(dbPath)
 	if err != nil {
+		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
+			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags fts5 ./... or make test")
+		}
 		t.Fatalf("failed to open store: %v", err)
 	}
 	defer s.Close()

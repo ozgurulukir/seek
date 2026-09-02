@@ -152,16 +152,34 @@ type RangeAggregation struct {
 
 func (a *RangeAggregation) SQL() (string, []interface{}) {
 	field := "d.line_count"
+	if a.Field != "" {
+		switch strings.ToLower(a.Field) {
+		case "line_count", "lines", "d.line_count":
+			field = "d.line_count"
+		case "mtime", "d.mtime":
+			field = "d.mtime"
+		case "id", "d.id":
+			field = "d.id"
+		case "collection_id", "d.collection_id":
+			field = "d.collection_id"
+		default:
+			// Safely escape user-supplied column name to prevent SQL injection
+			field = escapeColumnName(a.Field)
+		}
+	}
 	var cases []string
 	var args []interface{}
 	for _, r := range a.Ranges {
 		parts := strings.SplitN(r, "-", 2)
 		if len(parts) == 2 {
 			low, high := parts[0], parts[1]
-			if high == "" {
+			if low == "" && high != "" {
+				cases = append(cases, fmt.Sprintf("WHEN %s < ? THEN ?", field))
+				args = append(args, high, r)
+			} else if high == "" && low != "" {
 				cases = append(cases, fmt.Sprintf("WHEN %s >= ? THEN ?", field))
 				args = append(args, low, r)
-			} else {
+			} else if low != "" && high != "" {
 				cases = append(cases, fmt.Sprintf("WHEN %s >= ? AND %s < ? THEN ?", field, field))
 				args = append(args, low, high, r)
 			}

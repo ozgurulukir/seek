@@ -32,6 +32,10 @@ const (
 // remove_diacritics 2 enables full Unicode case-folding (incl. Turkish İ/ı,
 // ç/ğ/ş/ü/ö), so non-ASCII terms are indexed and queried consistently.
 // Stored as a constant because FTS5 tokenizer params are fixed at CREATE time.
+//
+// CAUTION: Changing this constant causes migrate() to detect a tokenizer change
+// via sqlite_master on next DB open, triggering an automatic DROP, CREATE, and
+// full repopulation of documents_fts from chunk contents. Do not change casually.
 const FTSTokenize = "unicode61 remove_diacritics 2"
 
 // FTSTitleWeight is the bm25 column weight applied to the title column (10x),
@@ -265,37 +269,112 @@ func (s *Store) SetCompression(enabled bool, level int) {
 // It clears the index first to ensure consistency — otherwise repeated
 // syncs (e.g. after each `seek embed`) would accumulate duplicate/stale
 // entries and grow the HNSW graph indefinitely.
+// SyncVectorIndex adds all embedded chunks to the vector index.
+// It clears the index first to ensure consistency.
 func (s *Store) SyncVectorIndex() error {
+	_, err := s.syncVectorIndexFull()
+	return err
+}
+
+func (s *Store) syncVectorIndexFull() (int, error) {
 	if s.vectorIndex == nil {
-		return nil
+		return 0, nil
 	}
 
 	// Clear existing entries so we rebuild from the current DB state.
 	if err := s.vectorIndex.Clear(); err != nil {
-		return fmt.Errorf("clear vector index: %w", err)
+		return 0, fmt.Errorf("clear vector index: %w", err)
 	}
 
 	rows, err := s.db.Query(`SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL`)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer rows.Close()
 
+	added := 0
 	for rows.Next() {
 		var chunkID int64
 		var embBlob []byte
 		if err := rows.Scan(&chunkID, &embBlob); err != nil {
-			return err
+			return added, err
 		}
 		emb := decodeEmbedding(embBlob)
 		if err := s.vectorIndex.Add(chunkID, emb); err != nil {
-			return err
+			return added, err
+		}
+		added++
+	}
+	if err := rows.Err(); err != nil {
+		return added, fmt.Errorf("sync vector index rows: %w", err)
+	}
+	return added, nil
+}
+
+// SyncVectorIndexIncremental adds newly embedded chunks that are not yet in the vector index.
+// If the vector index is empty or contains stale entries from deleted documents, it runs a full sync.
+// It scans only chunk IDs first to avoid loading megabytes of embedding BLOBs into memory.
+func (s *Store) SyncVectorIndexIncremental() (int, error) {
+	if s.vectorIndex == nil {
+		return 0, nil
+	}
+
+	if s.vectorIndex.Len() == 0 {
+		return s.syncVectorIndexFull()
+	}
+
+	var dbCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL`).Scan(&dbCount); err != nil {
+		return 0, err
+	}
+
+	// If index has more entries than DB has embedded chunks, chunks were deleted;
+	// perform full sync to purge stale entries from the HNSW graph.
+	if s.vectorIndex.Len() > dbCount {
+		return s.syncVectorIndexFull()
+	}
+
+	// Fast ID-only scan: minimal RAM & I/O (does not read multi-megabyte BLOBs)
+	rows, err := s.db.Query(`SELECT id FROM chunks WHERE embedding IS NOT NULL`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	var missingIDs []int64
+	for rows.Next() {
+		var chunkID int64
+		if err := rows.Scan(&chunkID); err != nil {
+			return 0, err
+		}
+		if !s.vectorIndex.Contains(chunkID) {
+			missingIDs = append(missingIDs, chunkID)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("sync vector index rows: %w", err)
+		return 0, fmt.Errorf("sync vector index id scan: %w", err)
 	}
-	return nil
+
+	if len(missingIDs) == 0 {
+		return 0, nil
+	}
+
+	// Load and insert embeddings only for missing chunks
+	added := 0
+	for _, chunkID := range missingIDs {
+		var embBlob []byte
+		err := s.db.QueryRow(`SELECT embedding FROM chunks WHERE id = ?`, chunkID).Scan(&embBlob)
+		if err != nil || len(embBlob) == 0 {
+			continue
+		}
+		emb := decodeEmbedding(embBlob)
+		if err := s.vectorIndex.Add(chunkID, emb); err != nil {
+			return added, err
+		}
+		added++
+	}
+
+	return added, nil
 }
 
 func (s *Store) migrate() error {
@@ -394,6 +473,10 @@ func (s *Store) initFTS() error {
 		if _, err := s.db.Exec(`BEGIN`); err != nil {
 			return fmt.Errorf("begin fts rebuild tx: %w", err)
 		}
+		if _, err := s.db.Exec(`DROP TABLE IF EXISTS documents_fts_vocab`); err != nil {
+			s.db.Exec(`ROLLBACK`)
+			return fmt.Errorf("drop documents_fts_vocab: %w", err)
+		}
 		if _, err := s.db.Exec(`DROP TABLE IF EXISTS documents_fts`); err != nil {
 			s.db.Exec(`ROLLBACK`)
 			return fmt.Errorf("drop documents_fts: %w", err)
@@ -414,6 +497,12 @@ func (s *Store) initFTS() error {
 			s.db.Exec(`ROLLBACK`)
 		}
 		return fmt.Errorf("create documents_fts: %w", err)
+	}
+	// Create vocab table for zero-memory, instant prefix autocompletion
+	vocabDDL := `CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts_vocab USING fts5vocab(documents_fts, 'row')`
+	if _, err := s.db.Exec(vocabDDL); err != nil {
+		// Non-fatal if sqlite environment lacks fts5vocab
+		_ = err
 	}
 	if needRebuild {
 		if err := s.rebuildFTSFromDocuments(); err != nil {
@@ -1217,7 +1306,15 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) (
 
 func (s *Store) UpdateChunkEmbedding(chunkID int64, embedding []float32) error {
 	_, err := s.db.Exec(`UPDATE chunks SET embedding = ? WHERE id = ?`, encodeEmbedding(embedding), chunkID)
-	return err
+	if err != nil {
+		return err
+	}
+	if s.vectorIndex != nil {
+		if err := s.vectorIndex.Add(chunkID, embedding); err != nil {
+			return fmt.Errorf("update vector index: %w", err)
+		}
+	}
+	return nil
 }
 
 // GetChunksWithoutEmbedding returns chunks that don't have embeddings yet.
@@ -1302,4 +1399,34 @@ func cosineSimilarity(a, b []float32) float64 {
 		return 0
 	}
 	return float64(sim)
+}
+
+// AutocompleteTerms returns matching terms with the given prefix from the FTS vocab table.
+func (s *Store) AutocompleteTerms(prefix string, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	if prefix == "" {
+		return nil, nil
+	}
+	endPrefix := prefix + "\uffff"
+	query := `SELECT term FROM documents_fts_vocab WHERE term >= ? AND term < ? ORDER BY term LIMIT ?`
+	rows, err := s.db.Query(query, prefix, endPrefix, limit)
+	if err != nil {
+		return nil, fmt.Errorf("autocomplete query: %w", err)
+	}
+	defer rows.Close()
+
+	var terms []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err == nil {
+			terms = append(terms, t)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("autocomplete rows: %w", err)
+	}
+	return terms, nil
 }

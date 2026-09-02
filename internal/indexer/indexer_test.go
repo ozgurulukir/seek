@@ -19,13 +19,22 @@ type nopLogger struct{}
 
 func (nopLogger) Printf(format string, v ...interface{}) {}
 
+func openTestStore(t *testing.T, dbPath string) *store.Store {
+	t.Helper()
+	db, err := store.Open(dbPath)
+	if err != nil {
+		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
+			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags fts5 ./... or make test")
+		}
+		t.Fatal(err)
+	}
+	return db
+}
+
 func TestIndexer_IncrementalSync(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
-	db, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := openTestStore(t, dbPath)
 	defer db.Close()
 
 	cfg := &config.AppConfig{
@@ -146,10 +155,7 @@ func setupParserSyncTest(t *testing.T) *parserSyncTestEnv {
 	t.Helper()
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "seek.db")
-	db, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := openTestStore(t, dbPath)
 	t.Cleanup(func() { db.Close() })
 
 	extPath := filepath.Join(tmpDir, "external.db")
@@ -272,10 +278,7 @@ func TestIndexer_ParserCollectionSync(t *testing.T) {
 func TestIndexerCustomChunkConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "index.db")
-	db, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	db := openTestStore(t, dbPath)
 	defer db.Close()
 
 	notesDir := filepath.Join(tmpDir, "notes")

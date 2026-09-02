@@ -3,6 +3,7 @@ package search_test
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/embed"
@@ -26,6 +27,9 @@ func TestSearchWithReranker(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "test.db")
 	db, err := store.Open(dbPath)
 	if err != nil {
+		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
+			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags fts5 ./... or make test")
+		}
 		t.Fatal(err)
 	}
 	defer db.Close()

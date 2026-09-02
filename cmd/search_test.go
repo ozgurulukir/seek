@@ -56,6 +56,9 @@ func TestSearchCmd_Execution(t *testing.T) {
 
 	db, err := store.Open(dbPath)
 	if err != nil {
+		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
+			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags fts5 ./... or make test")
+		}
 		t.Fatal(err)
 	}
 
@@ -116,5 +119,19 @@ func TestSearchCmd_Execution(t *testing.T) {
 	})
 	if !strings.Contains(out, "search") {
 		t.Errorf("autocomplete output missing 'search' suggestion, got: %q", out)
+	}
+
+	// 3. Multi-word autocomplete test
+	multiAutoCmd := &cmd.SearchCmd{
+		Query:        "find sea",
+		Autocomplete: true,
+	}
+	out = captureStdout(t, func() {
+		if err := multiAutoCmd.Run(cfg); err != nil {
+			t.Errorf("SearchCmd.Run multi-word autocomplete failed: %v", err)
+		}
+	})
+	if !strings.Contains(out, "find search") {
+		t.Errorf("autocomplete output missing 'find search' suggestion, got: %q", out)
 	}
 }

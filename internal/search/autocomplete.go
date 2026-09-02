@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"slices"
 
 	"github.com/blevesearch/vellum"
 )
@@ -23,16 +23,18 @@ func NewAutocomplete(terms []string) (*Autocomplete, error) {
 		return &Autocomplete{terms: nil}, nil
 	}
 
-	// Deduplicate and sort terms
-	seen := make(map[string]bool)
-	unique := make([]string, 0, len(terms))
+	// Filter out empty terms, deduplicate and sort
+	var unique []string
 	for _, t := range terms {
-		if !seen[t] {
-			seen[t] = true
+		if t != "" {
 			unique = append(unique, t)
 		}
 	}
-	sort.Strings(unique)
+	if len(unique) == 0 {
+		return &Autocomplete{terms: nil}, nil
+	}
+	slices.Sort(unique)
+	unique = slices.Compact(unique)
 
 	// Build FST in memory via a temp file (vellum only supports file-based I/O)
 	tmpFile, err := os.CreateTemp("", "autocomplete-fst-*.bin")

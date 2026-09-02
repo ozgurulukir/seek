@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -64,8 +63,14 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
 		}
 		if vectorIndex {
 			fmt.Println("Syncing vector index...")
-			if err := db.SyncVectorIndex(); err != nil {
-				fmt.Printf("  WARN: vector index sync: %v\n", err)
+			var syncErr error
+			if c.Force {
+				syncErr = db.SyncVectorIndex()
+			} else {
+				_, syncErr = db.SyncVectorIndexIncremental()
+			}
+			if syncErr != nil {
+				fmt.Printf("  WARN: vector index sync: %v\n", syncErr)
 			}
 		}
 		return nil
@@ -97,8 +102,14 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
 	// Sync HNSW index with newly embedded chunks
 	if vectorIndex {
 		fmt.Println("Syncing vector index...")
-		if err := db.SyncVectorIndex(); err != nil {
-			fmt.Printf("  WARN: vector index sync: %v\n", err)
+		var syncErr error
+		if c.Force {
+			syncErr = db.SyncVectorIndex()
+		} else {
+			_, syncErr = db.SyncVectorIndexIncremental()
+		}
+		if syncErr != nil {
+			fmt.Printf("  WARN: vector index sync: %v\n", syncErr)
 		}
 	}
 
@@ -132,27 +143,15 @@ func (c *EmbedCmd) embedWithVL(cfg *config.AppConfig, db *store.Store, textChunk
 func (c *EmbedCmd) embedVLTextChunks(db *store.Store, vlClient *embed.VLClient, textChunks []store.Chunk) int {
 	fmt.Printf("Embedding %d text chunks via VL realtime API...\n", len(textChunks))
 
+	texts := make([]string, len(textChunks))
+	for i, ch := range textChunks {
+		texts[i] = ch.Content
+	}
+
 	updated := 0
-	const textBatchSize = 20
-	for i := 0; i < len(textChunks); i += textBatchSize {
-		end := i + textBatchSize
-		if end > len(textChunks) {
-			end = len(textChunks)
-		}
-
-		items := make([]embed.EmbedItem, end-i)
-		for j := i; j < end; j++ {
-			items[j-i] = embed.EmbedItem{Text: textChunks[j].Content}
-		}
-
-		embeddings, err := vlClient.EmbedBatch(items)
-		if err != nil {
-			fmt.Printf("  WARN: text batch %d-%d: %v\n", i, end, err)
-			continue
-		}
-
+	_, err := vlClient.EmbedTextsInBatches(texts, 20, 200*time.Millisecond, func(batchStart int, embeddings [][]float32) error {
 		for j, emb := range embeddings {
-			idx := i + j
+			idx := batchStart + j
 			if emb == nil {
 				continue
 			}
@@ -162,14 +161,13 @@ func (c *EmbedCmd) embedVLTextChunks(db *store.Store, vlClient *embed.VLClient, 
 			}
 			updated++
 		}
-
 		fmt.Printf("\r  text: %d/%d", updated, len(textChunks))
-
-		// Small rate limit pause between batches
-		if end < len(textChunks) {
-			time.Sleep(200 * time.Millisecond)
-		}
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("\n  WARN: text batch: %v\n", err)
 	}
+
 	fmt.Println()
 	return updated
 }
@@ -177,60 +175,13 @@ func (c *EmbedCmd) embedVLTextChunks(db *store.Store, vlClient *embed.VLClient, 
 func (c *EmbedCmd) embedVLImageChunks(db *store.Store, vlClient *embed.VLClient, imageChunks []store.Chunk) int {
 	fmt.Printf("Embedding %d image chunks via VL realtime API...\n", len(imageChunks))
 
-	const imageBatchSize = 5
+	items := make([]embed.ImageBatchItem, len(imageChunks))
+	for i, ch := range imageChunks {
+		items[i] = embed.ImageBatchItem{ImagePath: ch.ImagePath, Text: ch.Content}
+	}
+
 	imageUpdated := 0
-
-	for i := 0; i < len(imageChunks); i += imageBatchSize {
-		end := i + imageBatchSize
-		if end > len(imageChunks) {
-			end = len(imageChunks)
-		}
-
-		type readResult struct {
-			dataURI string
-			err     error
-		}
-		results := make([]readResult, end-i)
-		var wg sync.WaitGroup
-
-		for j := i; j < end; j++ {
-			wg.Add(1)
-			go func(idx int, ch store.Chunk) {
-				defer wg.Done()
-				mediaType := embed.ImagePathToMediaType(ch.ImagePath)
-				dataURI, err := embed.ImageToDataURI(ch.ImagePath, mediaType)
-				results[idx-i] = readResult{dataURI, err}
-			}(j, imageChunks[j])
-		}
-		wg.Wait()
-
-		items := make([]embed.EmbedItem, 0, end-i)
-		validIndices := make([]int, 0, end-i)
-
-		for j := i; j < end; j++ {
-			ch := imageChunks[j]
-			res := results[j-i]
-			if res.err != nil {
-				fmt.Printf("  WARN: read image %s: %v\n", ch.ImagePath, res.err)
-				continue
-			}
-			items = append(items, embed.EmbedItem{
-				Text:     ch.Content,
-				ImageURI: res.dataURI,
-			})
-			validIndices = append(validIndices, j)
-		}
-
-		if len(items) == 0 {
-			continue
-		}
-
-		embeddings, err := vlClient.EmbedBatch(items)
-		if err != nil {
-			fmt.Printf("  WARN: image batch %d-%d: %v\n", i, end, err)
-			continue
-		}
-
+	_, err := vlClient.EmbedImagesInBatches(items, 5, 500*time.Millisecond, func(batchStart int, embeddings [][]float32, validIndices []int) error {
 		for j, emb := range embeddings {
 			if emb == nil || j >= len(validIndices) {
 				continue
@@ -242,14 +193,13 @@ func (c *EmbedCmd) embedVLImageChunks(db *store.Store, vlClient *embed.VLClient,
 			}
 			imageUpdated++
 		}
-
 		fmt.Printf("\r  images: %d/%d", imageUpdated, len(imageChunks))
-
-		// Rate limit pause between image batches
-		if end < len(imageChunks) {
-			time.Sleep(500 * time.Millisecond)
-		}
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("\n  WARN: image batch: %v\n", err)
 	}
+
 	fmt.Println()
 	return imageUpdated
 }

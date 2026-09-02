@@ -28,6 +28,7 @@ type VectorIndex interface {
 	Save(path string) error
 	Load(path string) error
 	Len() int
+	Contains(id int64) bool
 }
 
 // --- HNSW Implementation ---
@@ -159,6 +160,13 @@ func (h *hnswIndex) Len() int {
 	return h.graph.Len()
 }
 
+func (h *hnswIndex) Contains(id int64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, ok := h.graph.Lookup(id)
+	return ok
+}
+
 // --- Linear Scan Fallback ---
 
 type linearIndex struct {
@@ -239,6 +247,13 @@ func (l *linearIndex) Len() int {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return len(l.vectors)
+}
+
+func (l *linearIndex) Contains(id int64) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	_, ok := l.vectors[id]
+	return ok
 }
 
 // --- Vector Index Factory ---

@@ -91,6 +91,7 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 		Aggregations: c.Aggs,
 		QueryMode:    c.QueryMode,
 		Limit:        c.Limit,
+		RRFK:         cfg.Config.Search.RRFK,
 		SortBy:       c.SortBy,
 		SortOrder:    c.SortOrder,
 		Analyzer:     analyzer,
@@ -250,7 +251,15 @@ func (c *SearchCmd) printResults(results []store.SearchResult) {
 		} else if r.Content != "" {
 			maxSnippetLen := config.DefaultTextSnippetLen
 			if c.Context > 0 {
-				maxSnippetLen = config.DefaultTextSnippetLen * (c.Context*2 + 1)
+				ctxVal := c.Context
+				if ctxVal > 50 {
+					ctxVal = 50
+				}
+				maxSnippetLen = config.DefaultTextSnippetLen * (ctxVal*2 + 1)
+				const maxAllowedSnippetLen = 10000
+				if maxSnippetLen > maxAllowedSnippetLen {
+					maxSnippetLen = maxAllowedSnippetLen
+				}
 			}
 			snippet := formatSnippet(r.Content, maxSnippetLen)
 			fmt.Printf("    %s\n", snippet)
@@ -275,49 +284,31 @@ func (c *SearchCmd) runAutocomplete(cfg *config.AppConfig) error {
 	}
 	defer db.Close()
 
-	// Set up compression
-	db.SetCompression(cfg.Config.Compression.Algorithm != "none", cfg.Config.Compression.Level)
+	query := strings.TrimSpace(c.Query)
+	var results []string
 
-	// Collect terms from chunk content for autocomplete
-	rows, err := db.DB().Query(`SELECT content, content_zstd FROM chunks WHERE embedding IS NOT NULL`)
-	if err != nil {
-		return fmt.Errorf("query chunks: %w", err)
-	}
-	defer rows.Close()
-
-	termSet := make(map[string]bool)
-	for rows.Next() {
-		var content string
-		var contentZstd []byte
-		if err := rows.Scan(&content, &contentZstd); err != nil {
-			continue
-		}
-		if len(contentZstd) > 0 {
-			content, err = store.DecompressString(contentZstd)
+	// Support multi-word queries by completing the last word while preserving prefix
+	lastSpace := strings.LastIndex(query, " ")
+	if lastSpace >= 0 {
+		lead := query[:lastSpace+1]
+		word := query[lastSpace+1:]
+		if word != "" {
+			completions, err := db.AutocompleteTerms(word, c.AutocompleteMax)
 			if err != nil {
-				continue
+				return fmt.Errorf("autocomplete: %w", err)
+			}
+			for _, comp := range completions {
+				results = append(results, lead+comp)
 			}
 		}
-		tokens := search.AnalyzeToken(content)
-		for _, t := range tokens {
-			if len(t) >= 2 {
-				termSet[t] = true
-			}
+	} else {
+		var err error
+		results, err = db.AutocompleteTerms(query, c.AutocompleteMax)
+		if err != nil {
+			return fmt.Errorf("autocomplete: %w", err)
 		}
 	}
 
-	terms := make([]string, 0, len(termSet))
-	for t := range termSet {
-		terms = append(terms, t)
-	}
-
-	ac, err := search.NewAutocomplete(terms)
-	if err != nil {
-		return fmt.Errorf("build autocomplete: %w", err)
-	}
-	defer ac.Close()
-
-	results := ac.Complete(c.Query, c.AutocompleteMax)
 	if len(results) == 0 {
 		fmt.Println("No suggestions found.")
 		return nil
