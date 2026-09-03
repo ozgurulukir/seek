@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: 'Create a draft release'
+        type: boolean
+        default: false
+      prerelease:
+        description: 'Mark as a pre-release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - os: linux
+            arch: amd64
+            runner: ubuntu-latest
+            artifact_name: linux-amd64
+            archive_ext: tar.gz
+
+          # macOS Apple Silicon (ARM64)
+          - os: darwin
+            arch: arm64
+            runner: macos-latest
+            artifact_name: darwin-arm64
+            archive_ext: tar.gz
+
+          # macOS Intel (x86_64)
+          - os: darwin
+            arch: amd64
+            runner: macos-13
+            artifact_name: darwin-amd64
+            archive_ext: tar.gz
+
+          # Windows x86_64
+          - os: windows
+            arch: amd64
+            runner: windows-latest
+            artifact_name: windows-amd64
+            archive_ext: zip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Configure MinGW on Windows
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "CC=gcc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build binary
+        shell: bash
+        run: |
+          VERSION="${{ github.ref_name }}"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "main" ]; then
+            VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+          COMMIT="$(git rev-parse --short HEAD)"
+
+          EXT=""
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            EXT=".exe"
+          fi
+
+          mkdir -p bin
+          CGO_ENABLED=1 go build -tags fts5 \
+            -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT}" \
+            -o "bin/seek${EXT}" .
+
+      - name: Package release archive
+        shell: bash
+        run: |
+          VERSION="${{ github.ref_name }}"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "main" ]; then
+            VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+
+          PKG_NAME="seek_${VERSION}_${{ matrix.artifact_name }}"
+          mkdir -p "dist/${PKG_NAME}"
+
+          # Include documentation in package
+          cp README.md "dist/${PKG_NAME}/" 2>/dev/null || true
+          cp ATTRIBUTION.md "dist/${PKG_NAME}/" 2>/dev/null || true
+          cp LICENSE "dist/${PKG_NAME}/" 2>/dev/null || true
+
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            cp bin/seek.exe "dist/${PKG_NAME}/"
+            (cd dist && 7z a "${PKG_NAME}.zip" "${PKG_NAME}")
+          else
+            cp bin/seek "dist/${PKG_NAME}/"
+            (cd dist && tar -czvf "${PKG_NAME}.tar.gz" "${PKG_NAME}")
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/*.${{ matrix.archive_ext }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_assets
+          merge-multiple: true
+
+      - name: Generate SHA256 Checksums
+        run: |
+          cd release_assets
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release_assets/*
+          generate_release_notes: true
+          draft: ${{ github.event.inputs.draft == 'true' }}
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
