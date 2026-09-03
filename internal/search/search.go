@@ -40,12 +40,18 @@ type Options struct {
 	Analyzer *Analyzer
 }
 
+// Logger matches indexer.Logger for uniform diagnostic output.
+type Logger interface {
+	Printf(format string, v ...interface{})
+}
+
 // Engine performs BM25, vector, and hybrid search with optional filters, aggregations, and reranking.
 type Engine struct {
 	store       *store.Store
 	embedClient *embed.Client
 	vlClient    *embed.VLClient
 	reranker    embed.Reranker
+	logger      Logger
 }
 
 func NewEngine(s *store.Store, ec *embed.Client) *Engine {
@@ -63,6 +69,25 @@ func (e *Engine) WithReranker(r embed.Reranker) *Engine {
 	return e
 }
 
+// WithLogger attaches a logger for diagnostic warnings and info messages.
+func (e *Engine) WithLogger(l Logger) *Engine {
+	e.logger = l
+	return e
+}
+
+// renderFTS5 converts an AST Query to an FTS5 query string using the optional analyzer.
+func renderFTS5(q Query, a *Analyzer) string {
+	if q == nil {
+		return ""
+	}
+	if a != nil {
+		fts, _ := ToFTS5WithAnalyzer(q, a)
+		return fts
+	}
+	fts, _ := ToFTS5(q)
+	return fts
+}
+
 // searchBM25Raw executes the BM25 full-text query against FTS5 and returns raw candidate hits.
 func (e *Engine) searchBM25Raw(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
 	if limit <= 0 {
@@ -71,19 +96,11 @@ func (e *Engine) searchBM25Raw(ctx context.Context, query string, limit int, opt
 
 	ftsQuery := query
 	if opts.Query != nil {
-		if opts.Analyzer != nil {
-			ftsQuery, _ = ToFTS5WithAnalyzer(opts.Query, opts.Analyzer)
-		} else {
-			ftsQuery, _ = ToFTS5(opts.Query)
-		}
+		ftsQuery = renderFTS5(opts.Query, opts.Analyzer)
 	} else if opts.QueryMode != "raw" {
 		parsed, err := ParseQuery(query)
 		if err == nil && parsed != nil {
-			if opts.Analyzer != nil {
-				ftsQuery, _ = ToFTS5WithAnalyzer(parsed, opts.Analyzer)
-			} else {
-				ftsQuery, _ = ToFTS5(parsed)
-			}
+			ftsQuery = renderFTS5(parsed, opts.Analyzer)
 		}
 		// On parse error, fall back to raw query
 	}
@@ -197,9 +214,15 @@ func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts
 
 	var fused []store.SearchResult
 	if bm25Err != nil {
+		if e.logger != nil {
+			e.logger.Printf("  WARN: hybrid search BM25 leg failed: %v\n", bm25Err)
+		}
 		// Fall back to Vector candidates (keep full candidate pool for reranker)
 		fused = vecResults
 	} else if vecErr != nil {
+		if e.logger != nil {
+			e.logger.Printf("  WARN: hybrid search vector leg failed: %v\n", vecErr)
+		}
 		// Fall back to BM25 candidates (keep full candidate pool for reranker)
 		fused = bm25Results
 	} else {

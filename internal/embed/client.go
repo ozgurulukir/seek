@@ -132,9 +132,10 @@ func (c *Client) embed(texts []string) ([][]float32, error) {
 	// Re-order by index
 	result := make([][]float32, len(texts))
 	for _, d := range embResp.Data {
-		if d.Index >= 0 && d.Index < len(result) {
-			result[d.Index] = d.Embedding
+		if d.Index < 0 || d.Index >= len(result) {
+			return nil, fmt.Errorf("embedding API returned index %d out of range (expected 0..%d)", d.Index, len(result)-1)
 		}
+		result[d.Index] = d.Embedding
 	}
 
 	return result, nil

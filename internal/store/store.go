@@ -870,34 +870,46 @@ func (s *Store) UpdateDocumentMtime(docID int64, mtime float64) error {
 // --- FTS ---
 
 func (s *Store) UpsertFTS(docID int64, title, content string) error {
-	// Delete existing then insert (FTS5 doesn't support upsert).
-	// Note: if the INSERT fails after DELETE succeeds, the FTS entry is lost
-	// until the next sync rebuilds it. This is acceptable because sync is
-	// idempotent and will recreate the entry.
-	if _, err := s.db.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
 		return fmt.Errorf("delete fts entry: %w", err)
 	}
-	if _, err := s.db.Exec(`INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, title, content); err != nil {
+	if _, err := tx.Exec(`INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, title, content); err != nil {
 		return fmt.Errorf("insert fts entry: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // AppendFTS appends content to an existing FTS entry, preserving earlier text and title.
 func (s *Store) AppendFTS(docID int64, newContent string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
 	var existingTitle, existingContent string
-	err := s.db.QueryRow(`SELECT title, content FROM documents_fts WHERE rowid = ?`, docID).Scan(&existingTitle, &existingContent)
+	err = tx.QueryRow(`SELECT title, content FROM documents_fts WHERE rowid = ?`, docID).Scan(&existingTitle, &existingContent)
 	if err != nil {
 		// No existing entry — just insert
-		_, err = s.db.Exec(`INSERT INTO documents_fts (rowid, title, content) VALUES (?, '', ?)`, docID, newContent)
-		return err
+		if _, err := tx.Exec(`INSERT INTO documents_fts (rowid, title, content) VALUES (?, '', ?)`, docID, newContent); err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
 	combined := existingContent + "\n" + newContent
-	if _, err := s.db.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
 		return fmt.Errorf("delete fts entry: %w", err)
 	}
-	_, err = s.db.Exec(`INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, existingTitle, combined)
-	return err
+	if _, err := tx.Exec(`INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, existingTitle, combined); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]SearchResult, error) {
@@ -926,21 +938,54 @@ func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]Search
 	}
 	defer rows.Close()
 	var results []SearchResult
+	var docIDs []int64
 	for rows.Next() {
 		var r SearchResult
 		if err := rows.Scan(&r.DocumentID, &r.Title, &r.Path, &r.Collection, &r.Content, &r.Score); err != nil {
 			return nil, err
 		}
-		// Populate line numbers from first chunk if available
-		var sLine, eLine int
-		if err := s.db.QueryRow(`SELECT COALESCE(start_line, 0), COALESCE(end_line, 0) FROM chunks WHERE document_id = ? ORDER BY seq ASC LIMIT 1`, r.DocumentID).Scan(&sLine, &eLine); err == nil {
-			r.StartLine = sLine
-			r.EndLine = eLine
-		}
 		results = append(results, r)
+		docIDs = append(docIDs, r.DocumentID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("search fts rows: %w", err)
+	}
+
+	// Populate line numbers from first chunk for all results in a single batch query
+	if len(docIDs) > 0 {
+		placeholders := make([]string, len(docIDs))
+		docArgs := make([]interface{}, len(docIDs))
+		for i, id := range docIDs {
+			placeholders[i] = "?"
+			docArgs[i] = id
+		}
+		chunkQuery := fmt.Sprintf(`SELECT document_id, COALESCE(start_line, 0), COALESCE(end_line, 0)
+			FROM (
+				SELECT document_id, start_line, end_line,
+				       ROW_NUMBER() OVER (PARTITION BY document_id ORDER BY seq ASC) as rn
+				FROM chunks WHERE document_id IN (%s)
+			) WHERE rn = 1`, strings.Join(placeholders, ","))
+		chunkRows, err := s.db.Query(chunkQuery, docArgs...)
+		if err == nil {
+			defer chunkRows.Close()
+			type lineSpan struct {
+				start, end int
+			}
+			spans := make(map[int64]lineSpan, len(docIDs))
+			for chunkRows.Next() {
+				var docID int64
+				var sLine, eLine int
+				if err := chunkRows.Scan(&docID, &sLine, &eLine); err == nil {
+					spans[docID] = lineSpan{start: sLine, end: eLine}
+				}
+			}
+			for i := range results {
+				if span, ok := spans[results[i].DocumentID]; ok {
+					results[i].StartLine = span.start
+					results[i].EndLine = span.end
+				}
+			}
+		}
 	}
 	return results, nil
 }

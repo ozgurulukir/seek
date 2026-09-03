@@ -13,14 +13,22 @@ func TestParseQuery(t *testing.T) {
 	}{
 		{`"hello world"`, false, "*search.PhraseQuery"},
 		{`hello AND world`, false, "*search.BooleanQuery"},
+		{`seek review`, false, "*search.BooleanQuery"},
+		{`go programming language`, false, "*search.BooleanQuery"},
 		{`hello OR world`, false, "*search.BooleanQuery"},
 		{`NOT hello`, false, "*search.BooleanQuery"},
 		{`pref*`, false, "*search.PrefixQuery"},
 		{`hello~2`, false, "*search.FuzzyQuery"},
+		{`hello~`, false, "*search.FuzzyQuery"},
 		{`title:hello`, false, "*search.FieldQuery"},
 		{`NEAR(hello world, 5)`, false, "*search.NearQuery"},
 		{`(a AND b) OR c`, false, "*search.BooleanQuery"},
 		{`hello`, false, "*search.TermQuery"},
+		{`yön`, false, "*search.TermQuery"},
+		{`öğren`, false, "*search.TermQuery"},
+		{`açık`, false, "*search.TermQuery"},
+		{`şişe`, false, "*search.TermQuery"},
+		{`gül`, false, "*search.TermQuery"},
 		{"", false, ""},
 		{`INVALID (`, true, ""},
 	}
@@ -52,6 +60,39 @@ func TestParseQuery(t *testing.T) {
 	}
 }
 
+func TestParseQuery_TurkishUTF8(t *testing.T) {
+	// Verify multi-byte UTF-8 tokens are not sliced or mangled
+	q, err := ParseQuery("yön bulma")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	bq, ok := q.(*BooleanQuery)
+	if !ok {
+		t.Fatalf("expected *BooleanQuery, got %T", q)
+	}
+	left, ok := bq.Left.(*TermQuery)
+	if !ok || left.Value != "yön" {
+		t.Fatalf("expected left term 'yön', got %v", bq.Left)
+	}
+	right, ok := bq.Right.(*TermQuery)
+	if !ok || right.Value != "bulma" {
+		t.Fatalf("expected right term 'bulma', got %v", bq.Right)
+	}
+
+	// Single terms with various Turkish multi-byte runes
+	singleCases := []string{"öä", "aç", "şişe", "çağrı", "İstanbul"}
+	for _, sc := range singleCases {
+		sq, err := ParseQuery(sc)
+		if err != nil {
+			t.Fatalf("unexpected error parsing %q: %v", sc, err)
+		}
+		tq, ok := sq.(*TermQuery)
+		if !ok || tq.Value != sc {
+			t.Fatalf("expected TermQuery with %q, got %#v", sc, sq)
+		}
+	}
+}
+
 func TestToFTS5(t *testing.T) {
 	tests := []struct {
 		q         Query
@@ -65,7 +106,8 @@ func TestToFTS5(t *testing.T) {
 		{&FieldQuery{Field: "title", Query: &TermQuery{Value: "hello"}}, "title:hello", false},
 		{&NearQuery{Terms: []string{"hello", "world"}, N: 5}, "NEAR(hello world, 5)", false},
 		{&BooleanQuery{Left: &TermQuery{Value: "a"}, Op: "AND", Right: &TermQuery{Value: "b"}}, "(a AND b)", false},
-		{&BooleanQuery{Left: &TermQuery{Value: ""}, Op: "NOT", Right: &TermQuery{Value: "b"}}, "(* NOT b)", false},
+		{&BooleanQuery{Left: &TermQuery{Value: "a"}, Op: "NOT", Right: &TermQuery{Value: "b"}}, "(a NOT b)", false},
+		{&BooleanQuery{Left: &TermQuery{Value: ""}, Op: "NOT", Right: &TermQuery{Value: "b"}}, "", false},
 	}
 
 	for _, tt := range tests {

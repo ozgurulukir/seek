@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -70,7 +71,11 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 		vi, err := store.NewVectorIndex(cfg)
 		if err == nil {
 			db.SetVectorIndex(vi)
-			defer vi.Save(cfg.Config.VectorIndex.HNSW.PersistPath)
+			defer func() {
+				if err := vi.Save(cfg.Config.VectorIndex.HNSW.PersistPath); err != nil {
+					fmt.Fprintf(os.Stderr, "  WARN: failed to persist vector index: %v\n", err)
+				}
+			}()
 		}
 	}
 
@@ -120,6 +125,12 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 	return nil
 }
 
+type searchLogger struct{}
+
+func (searchLogger) Printf(format string, v ...interface{}) {
+	fmt.Fprintf(os.Stderr, format, v...)
+}
+
 func (c *SearchCmd) buildEngine(db *store.Store, cfg *config.AppConfig) (*search.Engine, *embed.Client, *embed.VLClient) {
 	embedClient := newEmbedClient(cfg)
 	vlClient := newVLClient(cfg)
@@ -130,6 +141,7 @@ func (c *SearchCmd) buildEngine(db *store.Store, cfg *config.AppConfig) (*search
 	} else {
 		engine = search.NewEngine(db, embedClient)
 	}
+	engine.WithLogger(searchLogger{})
 
 	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.APIKey != "" {
 		reranker := embed.NewRerankClient(cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.APIKey, cfg.Config.Rerank.Model)

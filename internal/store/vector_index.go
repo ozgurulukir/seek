@@ -38,7 +38,7 @@ type hnswIndex struct {
 	dim      int
 	m        int
 	efSearch int
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	dirty    bool
 }
 
@@ -71,8 +71,8 @@ func (h *hnswIndex) Search(query []float32, k int) ([]VectorResult, error) {
 	if len(query) != h.dim {
 		return nil, fmt.Errorf("vector dimension mismatch: got %d, want %d", len(query), h.dim)
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	if h.graph.Len() == 0 {
 		return nil, nil
 	}
@@ -155,14 +155,14 @@ func (h *hnswIndex) Load(path string) error {
 }
 
 func (h *hnswIndex) Len() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	return h.graph.Len()
 }
 
 func (h *hnswIndex) Contains(id int64) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	_, ok := h.graph.Lookup(id)
 	return ok
 }

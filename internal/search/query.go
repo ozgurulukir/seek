@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // --- AST Types ---
@@ -109,22 +110,24 @@ func (s *scanner) peek() rune {
 	if s.pos >= len(s.input) {
 		return 0
 	}
-	return rune(s.input[s.pos])
+	r, _ := utf8.DecodeRuneInString(s.input[s.pos:])
+	return r
 }
 
 func (s *scanner) next() rune {
-	r := s.peek()
-	if r != 0 {
-		s.pos++
+	if s.pos >= len(s.input) {
+		return 0
 	}
+	r, size := utf8.DecodeRuneInString(s.input[s.pos:])
+	s.pos += size
 	return r
 }
 
 func (s *scanner) skipSpace() {
 	for s.pos < len(s.input) {
-		r := s.peek()
-		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
-			s.pos++
+		r, size := utf8.DecodeRuneInString(s.input[s.pos:])
+		if unicode.IsSpace(r) {
+			s.pos += size
 		} else {
 			break
 		}
@@ -134,16 +137,28 @@ func (s *scanner) skipSpace() {
 func (s *scanner) scanIdent() string {
 	start := s.pos
 	for s.pos < len(s.input) {
-		r := s.peek()
+		r, size := utf8.DecodeRuneInString(s.input[s.pos:])
 		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' {
-			s.pos++
+			s.pos += size
 		} else {
 			break
 		}
 	}
 	// Include trailing * for prefix queries (e.g., pref*)
 	if s.pos < len(s.input) && s.peek() == '*' {
-		s.pos++
+		s.next()
+	}
+	// Include trailing ~N for fuzzy queries (e.g., term~ or term~2)
+	if s.pos < len(s.input) && s.peek() == '~' {
+		s.next()
+		for s.pos < len(s.input) {
+			r, size := utf8.DecodeRuneInString(s.input[s.pos:])
+			if unicode.IsDigit(r) {
+				s.pos += size
+			} else {
+				break
+			}
+		}
 	}
 	return s.input[start:s.pos]
 }
@@ -151,9 +166,9 @@ func (s *scanner) scanIdent() string {
 func (s *scanner) scanNumber() string {
 	start := s.pos
 	for s.pos < len(s.input) {
-		r := s.peek()
+		r, size := utf8.DecodeRuneInString(s.input[s.pos:])
 		if r >= '0' && r <= '9' {
-			s.pos++
+			s.pos += size
 		} else {
 			break
 		}
@@ -163,7 +178,7 @@ func (s *scanner) scanNumber() string {
 
 func (s *scanner) scanString(quote rune) string {
 	start := s.pos
-	s.pos++ // skip opening quote
+	s.next() // skip opening quote
 	for s.pos < len(s.input) {
 		r := s.next()
 		if r == quote {
@@ -183,19 +198,19 @@ func (s *scanner) scanToken() token {
 
 	switch {
 	case r == '(':
-		s.pos++
+		s.next()
 		return token{typ: tokenLParen, pos: pos}
 	case r == ')':
-		s.pos++
+		s.next()
 		return token{typ: tokenRParen, pos: pos}
 	case r == ',':
-		s.pos++
+		s.next()
 		return token{typ: tokenComma, pos: pos}
 	case r == ':':
-		s.pos++
+		s.next()
 		return token{typ: tokenColon, pos: pos}
 	case r == '*':
-		s.pos++
+		s.next()
 		return token{typ: tokenStar, pos: pos}
 	case r == '"':
 		return token{typ: tokenString, val: s.scanString('"'), pos: pos}
@@ -212,7 +227,7 @@ func (s *scanner) scanToken() token {
 		}
 		return token{typ: tokenIdent, val: val, pos: pos}
 	default:
-		s.pos++
+		s.next()
 		return token{typ: tokenEOF, val: string(r), pos: pos}
 	}
 }
@@ -281,10 +296,16 @@ func (p *parser) parseAnd() (Query, error) {
 			p.s.pos = tok.pos // put back
 			return left, nil
 		}
-		if tok.typ != tokenIdent || tok.val != "AND" {
-			p.s.pos = tok.pos // put back
-			return left, nil
+		if tok.typ == tokenIdent && tok.val == "AND" {
+			right, err := p.parseUnary()
+			if err != nil {
+				return nil, err
+			}
+			left = &BooleanQuery{Left: left, Op: "AND", Right: right}
+			continue
 		}
+		// Implicit AND: adjacent terms/expressions without operator are treated as AND
+		p.s.pos = tok.pos // put back
 		right, err := p.parseUnary()
 		if err != nil {
 			return nil, err
@@ -476,7 +497,8 @@ func toFTS5(q Query, a *Analyzer) (string, bool) {
 		op := strings.ToUpper(v.Op)
 		if op == "NOT" {
 			if ls == "" || ls == "()" || ls == `""` {
-				return fmt.Sprintf("(* NOT %s)", rs), false
+				// Pure negation queries (unary NOT) cannot be answered by FTS5 alone without a positive set.
+				return "", false
 			}
 			return fmt.Sprintf("(%s NOT %s)", ls, rs), false
 		}
