@@ -14,20 +14,33 @@
 
 ## 📦 Install
 
-**Linux / macOS** (requires Go 1.24+, CGO):
+### Fast Install (Recommended)
+
+**Linux & macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/ozgurulukir/seek/main/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/ozgurulukir/seek/main/install.ps1 | iex
+```
+
+<details>
+<summary><b>Build from Source</b> (Requires Go 1.24+ and CGO)</summary>
+
+**Linux / macOS:**
 ```bash
 make build
 ln -sf $(pwd)/seek /usr/local/bin/seek
 ```
 
-**Windows** (PowerShell, requires Go 1.24+ and a C compiler like `zig` or MinGW `gcc`):
+**Windows (PowerShell):**
 ```powershell
 $env:CC="zig cc"; $env:CGO_ENABLED="1"
 go build -tags fts5 -o seek.exe .
-
-# Optional: install directly to your PATH (~/go/bin):
-# go install -tags fts5 .
 ```
+</details>
 
 ### Install Agent Skill
 
