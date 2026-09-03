@@ -197,14 +197,14 @@ func (idx *Indexer) syncConversation(
 			failed++
 			continue
 		}
-		if existing != nil && existing.LineCount >= lineCount {
-			idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
-			skipped++
-			continue
-		}
-
+		// Conversation files are expected to be append-only: a file that
+		// shrank (or has the same line count) was truncated or edited in
+		// place, so the incremental path below cannot reconstruct its
+		// content from the delta. Fall through to a full re-parse
+		// (fromLine = 0), which replaces FTS and re-chunks the whole file,
+		// keeping the index in sync with what is actually on disk.
 		fromLine := 0
-		if existing != nil {
+		if existing != nil && existing.LineCount < lineCount {
 			fromLine = existing.LineCount
 		}
 
@@ -216,6 +216,21 @@ func (idx *Indexer) syncConversation(
 		}
 
 		if messages == nil && len(images) == 0 {
+			if existing != nil {
+				if fromLine == 0 {
+					// A full re-parse that yields nothing means the file no
+					// longer contains parseable content (e.g. truncated to
+					// empty or to metadata-only lines). Remove the stale
+					// document so its FTS entry and chunks go with it,
+					// mirroring deleted files.
+					idx.db.DeleteDocument(existing.ID)
+				} else {
+					// Append that produced no new content: just record the
+					// mtime so subsequent syncs skip this file without
+					// re-parsing it.
+					idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
+				}
+			}
 			skipped++
 			continue
 		}
@@ -237,7 +252,19 @@ func (idx *Indexer) syncConversation(
 			continue
 		}
 
-		nextSeq := 0
+		// On an append, new chunks must continue after the seqs from the
+		// previous sync and their line spans must be offset into the full
+		// file — the parser only saw lines after fromLine, so both its
+		// chunk text and its line numbers are relative to the delta.
+		baseSeq := 0
+		if fromLine > 0 {
+			if ms, err := idx.db.MaxChunkSeq(docID); err != nil {
+				idx.log.Printf("  WARN: chunk seq %s: %v\n", f.Path, err)
+			} else {
+				baseSeq = ms + 1
+			}
+		}
+		nextSeq := baseSeq
 		if messages != nil {
 			text := toText(messages)
 			if fromLine > 0 {
@@ -253,12 +280,17 @@ func (idx *Indexer) syncConversation(
 
 			maxSize, _ := idx.chunkSize()
 			chunks := chunk.ChunkConversation(text, maxSize)
-			for _, c := range chunks {
-				if err := idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil); err != nil {
+			for i := range chunks {
+				chunks[i].Seq = baseSeq + i
+				if fromLine > 0 {
+					chunks[i].StartLine += fromLine
+					chunks[i].EndLine += fromLine
+				}
+				if err := idx.db.InsertChunkWithLines(docID, chunks[i].Seq, chunks[i].Content, chunks[i].StartLine, chunks[i].EndLine, nil); err != nil {
 					idx.log.Printf("  WARN: embed %s: %v\n", f.Path, err)
 				}
 			}
-			nextSeq = len(chunks)
+			nextSeq = baseSeq + len(chunks)
 		}
 
 		for _, img := range images {
@@ -289,6 +321,9 @@ func (idx *Indexer) syncClaude(col *store.Collection) error {
 		func(path string, fromLine int) (map[string]interface{}, string, []source.ConversationImage, error) {
 			convID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 			msgs, imgs, err := source.ParseClaudeFileWithImages(path, fromLine, convID)
+			if len(msgs) == 0 {
+				return nil, convID, imgs, err
+			}
 			return map[string]interface{}{"msgs": msgs}, convID, imgs, err
 		},
 		func(m map[string]interface{}) string {
@@ -312,6 +347,9 @@ func (idx *Indexer) syncCodex(col *store.Collection) error {
 	return idx.syncConversation(col, source.ScanCodexFiles,
 		func(path string, fromLine int) (map[string]interface{}, string, []source.ConversationImage, error) {
 			msgs, sessionID, imgs, err := source.ParseCodexFileWithImages(path, fromLine)
+			if len(msgs) == 0 {
+				return nil, sessionID, imgs, err
+			}
 			return map[string]interface{}{"msgs": msgs}, sessionID, imgs, err
 		},
 		func(m map[string]interface{}) string {

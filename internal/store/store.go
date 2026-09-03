@@ -952,6 +952,21 @@ func (s *Store) DeleteChunksForDocument(docID int64) error {
 	return err
 }
 
+// MaxChunkSeq returns the highest seq among a document's chunks, or 0 when the
+// document has no chunks. Callers inserting new chunks (e.g. incremental
+// conversation sync) use MaxChunkSeq+1 to continue the sequence instead of
+// restarting at 0 and colliding with earlier chunks.
+func (s *Store) MaxChunkSeq(docID int64) (int, error) {
+	var seq sql.NullInt64
+	if err := s.db.QueryRow(`SELECT MAX(seq) FROM chunks WHERE document_id = ?`, docID).Scan(&seq); err != nil {
+		return 0, err
+	}
+	if !seq.Valid {
+		return 0, nil
+	}
+	return int(seq.Int64), nil
+}
+
 func (s *Store) InsertChunk(docID int64, seq int, content string, embedding []float32) error {
 	return s.InsertChunkWithLines(docID, seq, content, 0, 0, embedding)
 }
