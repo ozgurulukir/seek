@@ -262,11 +262,22 @@ func (c *VLClient) doRequest(items []EmbedItem) ([][]float32, error) {
 		return nil, fmt.Errorf("vl API error [%s]: %s", vlResp.Code, vlResp.Message)
 	}
 
+	if len(vlResp.Output.Embeddings) != len(items) {
+		return nil, fmt.Errorf("vl API returned %d embeddings, expected %d", len(vlResp.Output.Embeddings), len(items))
+	}
+
 	// Re-order by index
 	result := make([][]float32, len(items))
 	for _, e := range vlResp.Output.Embeddings {
-		if e.Index >= 0 && e.Index < len(result) {
-			result[e.Index] = e.Embedding
+		if e.Index < 0 || e.Index >= len(result) {
+			return nil, fmt.Errorf("vl API returned index %d out of range (expected 0..%d)", e.Index, len(result)-1)
+		}
+		result[e.Index] = e.Embedding
+	}
+	// Duplicate indexes would satisfy the count check while leaving nil holes.
+	for i, emb := range result {
+		if len(emb) == 0 {
+			return nil, fmt.Errorf("vl API returned no embedding for input %d", i)
 		}
 	}
 

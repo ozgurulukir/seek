@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -107,5 +108,19 @@ func TestVLClientPureImagePreservesEmptyText(t *testing.T) {
 	}
 	if len(texts) != 0 {
 		t.Errorf("expected 0 text fields sent for pure image, got %v", texts)
+	}
+}
+
+func TestVLClientPartialResponseErrors(t *testing.T) {
+	// The helper's server always answers with a single embedding, so a
+	// two-item batch is a partial response and must error instead of
+	// leaving a nil hole in the batch results.
+	var texts []string
+	c := newTestVLClient(t, &texts)
+
+	if _, err := c.EmbedBatch([]EmbedItem{{Text: "a"}, {Text: "b"}}); err == nil {
+		t.Fatal("expected error for partial VL response")
+	} else if !strings.Contains(err.Error(), "returned 1 embeddings, expected 2") {
+		t.Errorf("error = %q, want count mismatch mention", err.Error())
 	}
 }

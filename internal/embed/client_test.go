@@ -21,6 +21,21 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 	return c
 }
 
+// writeEmbeddings replies with n valid embeddings indexed 0..n-1, so handlers
+// in request-shape tests satisfy the response completeness contract.
+func writeEmbeddings(w http.ResponseWriter, n int) {
+	w.Header().Set("Content-Type", "application/json")
+	data := make([]struct {
+		Embedding []float32 `json:"embedding"`
+		Index     int       `json:"index"`
+	}, n)
+	for i := range data {
+		data[i].Embedding = []float32{float32(i + 1), float32(i + 1)}
+		data[i].Index = i
+	}
+	json.NewEncoder(w).Encode(embeddingResponse{Data: data})
+}
+
 func TestNewClient(t *testing.T) {
 	c := NewClient("https://api.example/v1", "k", "m", 16, TaskPrefix{})
 	if c.baseURL != "https://api.example/v1" {
@@ -92,8 +107,7 @@ func TestEmbedOmitsDimensionsWhenZero(t *testing.T) {
 	var gotBody embeddingRequest
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&gotBody)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(embeddingResponse{})
+		writeEmbeddings(w, 1)
 	})
 	c.dimensions = 0
 
@@ -189,20 +203,61 @@ func TestEmbedQuery(t *testing.T) {
 	}
 }
 
-func TestEmbedQueryNoResult(t *testing.T) {
+func TestEmbedMissingResponseErrors(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		// No data entries for one input — a missing API response must error
+		// instead of leaving a nil hole for downstream vector math.
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(embeddingResponse{})
 	})
 
-	// embed returns a len-1 slice with a nil inner slice when the API returns
-	// no data, so EmbedQuery yields a nil embedding without error.
-	got, err := c.EmbedQuery("hello")
-	if err != nil {
-		t.Fatalf("EmbedQuery: %v", err)
+	if _, err := c.EmbedQuery("hello"); err == nil {
+		t.Fatal("expected error for missing embedding in response")
+	} else if !strings.Contains(err.Error(), "returned 0 embeddings, expected 1") {
+		t.Errorf("error = %q, want count mismatch mention", err.Error())
 	}
-	if got != nil {
-		t.Errorf("embedding = %v, want nil", got)
+}
+
+func TestEmbedPartialResponseErrors(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		// Two inputs but only one embedding back.
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(embeddingResponse{
+			Data: []struct {
+				Embedding []float32 `json:"embedding"`
+				Index     int       `json:"index"`
+			}{
+				{Embedding: []float32{1, 1}, Index: 0},
+			},
+		})
+	})
+
+	if _, err := c.EmbedDocuments([]string{"a", "b"}); err == nil {
+		t.Fatal("expected error for partial embedding response")
+	} else if !strings.Contains(err.Error(), "returned 1 embeddings, expected 2") {
+		t.Errorf("error = %q, want count mismatch mention", err.Error())
+	}
+}
+
+func TestEmbedDuplicateIndexErrors(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		// Correct count, but a duplicate index leaves input 1 unanswered.
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(embeddingResponse{
+			Data: []struct {
+				Embedding []float32 `json:"embedding"`
+				Index     int       `json:"index"`
+			}{
+				{Embedding: []float32{1, 1}, Index: 0},
+				{Embedding: []float32{2, 2}, Index: 0},
+			},
+		})
+	})
+
+	if _, err := c.EmbedDocuments([]string{"a", "b"}); err == nil {
+		t.Fatal("expected error for duplicate embedding index")
+	} else if !strings.Contains(err.Error(), "no embedding for input 1") {
+		t.Errorf("error = %q, want missing-input mention", err.Error())
 	}
 }
 
@@ -260,8 +315,7 @@ func TestBatchEmbedDefaultBatchSize(t *testing.T) {
 		var req embeddingRequest
 		json.NewDecoder(r.Body).Decode(&req)
 		batchSizes = append(batchSizes, len(req.Input))
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(embeddingResponse{})
+		writeEmbeddings(w, len(req.Input))
 	})
 
 	// batchSize <= 0 should fall back to the default (6).
@@ -289,8 +343,7 @@ func TestEmbedDocumentsAppliesDocumentPrefix(t *testing.T) {
 	var gotBody embeddingRequest
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&gotBody)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(embeddingResponse{})
+		writeEmbeddings(w, len(gotBody.Input))
 	})
 	c.taskPrefix = TaskPrefix{Query: "search_query: ", Document: "search_document: "}
 
@@ -307,8 +360,7 @@ func TestEmbedQueryAppliesQueryPrefix(t *testing.T) {
 	var gotBody embeddingRequest
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&gotBody)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(embeddingResponse{})
+		writeEmbeddings(w, len(gotBody.Input))
 	})
 	c.taskPrefix = TaskPrefix{Query: "search_query: ", Document: "search_document: "}
 
@@ -326,8 +378,7 @@ func TestTaskPrefixZeroValueSendsRawText(t *testing.T) {
 		var body embeddingRequest
 		json.NewDecoder(r.Body).Decode(&body)
 		inputs = append(inputs, body.Input)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(embeddingResponse{})
+		writeEmbeddings(w, len(body.Input))
 	})
 
 	if _, err := c.EmbedDocuments([]string{"plain"}); err != nil {
@@ -354,8 +405,7 @@ func TestTaskPrefixIdempotent(t *testing.T) {
 		var body embeddingRequest
 		json.NewDecoder(r.Body).Decode(&body)
 		inputs = append(inputs, body.Input)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(embeddingResponse{})
+		writeEmbeddings(w, len(body.Input))
 	})
 	c.taskPrefix = TaskPrefix{Query: "search_query: ", Document: "search_document: "}
 

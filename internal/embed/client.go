@@ -129,6 +129,10 @@ func (c *Client) embed(texts []string) ([][]float32, error) {
 		return nil, fmt.Errorf("embedding error: %s", embResp.Error.Message)
 	}
 
+	if len(embResp.Data) != len(texts) {
+		return nil, fmt.Errorf("embedding API returned %d embeddings, expected %d", len(embResp.Data), len(texts))
+	}
+
 	// Re-order by index
 	result := make([][]float32, len(texts))
 	for _, d := range embResp.Data {
@@ -136,6 +140,12 @@ func (c *Client) embed(texts []string) ([][]float32, error) {
 			return nil, fmt.Errorf("embedding API returned index %d out of range (expected 0..%d)", d.Index, len(result)-1)
 		}
 		result[d.Index] = d.Embedding
+	}
+	// Duplicate indexes would satisfy the count check while leaving nil holes.
+	for i, emb := range result {
+		if len(emb) == 0 {
+			return nil, fmt.Errorf("embedding API returned no embedding for input %d", i)
+		}
 	}
 
 	return result, nil
