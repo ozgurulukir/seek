@@ -40,13 +40,6 @@ jobs:
             artifact_name: darwin-arm64
             archive_ext: tar.gz
 
-          # macOS Intel (x86_64)
-          - os: darwin
-            arch: amd64
-            runner: macos-13
-            artifact_name: darwin-amd64
-            archive_ext: tar.gz
-
           # Windows x86_64
           - os: windows
             arch: amd64
