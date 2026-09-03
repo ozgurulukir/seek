@@ -169,18 +169,7 @@ func (idx *Indexer) syncConversation(
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-	if existingPaths, err := idx.db.ListDocumentPaths(col.ID); err == nil {
-		removed := 0
-		for path, docID := range existingPaths {
-			if !diskPaths[path] {
-				idx.db.DeleteDocument(docID)
-				removed++
-			}
-		}
-		if removed > 0 {
-			idx.log.Printf("  Removed %d stale conversations\n", removed)
-		}
-	}
+	idx.cleanupOrphans(col.ID, diskPaths, "conversations")
 
 	var indexed, skipped, totalImages, failed int
 
@@ -383,19 +372,7 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-
-	if existingPaths, err := idx.db.ListDocumentPaths(col.ID); err == nil {
-		removed := 0
-		for path, docID := range existingPaths {
-			if !diskPaths[path] {
-				idx.db.DeleteDocument(docID)
-				removed++
-			}
-		}
-		if removed > 0 {
-			idx.log.Printf("  Removed %d stale documents\n", removed)
-		}
-	}
+	idx.cleanupOrphans(col.ID, diskPaths, "documents")
 
 	var indexed, skipped, failed int
 	for _, f := range files {
@@ -415,16 +392,8 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 			continue
 		}
 
-		if err := idx.db.UpsertFTS(docID, f.Title, f.Content); err != nil {
-			idx.log.Printf("  WARN: fts %s: %v\n", f.Path, err)
-		}
-
-		idx.db.DeleteChunksForDocument(docID)
 		maxSize, overlap := idx.chunkSize()
-		chunks := chunk.ChunkMarkdown(f.Content, maxSize, overlap)
-		for _, c := range chunks {
-			idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil)
-		}
+		idx.replaceIndexText(docID, f.Path, f.Title, f.Content, chunk.ChunkMarkdown(f.Content, maxSize, overlap), true)
 		indexed++
 	}
 
@@ -446,18 +415,7 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-	if existingPaths, err := idx.db.ListDocumentPaths(col.ID); err == nil {
-		removed := 0
-		for path, docID := range existingPaths {
-			if !diskPaths[path] {
-				idx.db.DeleteDocument(docID)
-				removed++
-			}
-		}
-		if removed > 0 {
-			idx.log.Printf("  Removed %d stale images\n", removed)
-		}
-	}
+	idx.cleanupOrphans(col.ID, diskPaths, "images")
 
 	var indexed, skipped, failed int
 	for _, f := range files {
@@ -497,18 +455,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-	if existingPaths, err := idx.db.ListDocumentPaths(col.ID); err == nil {
-		removed := 0
-		for path, docID := range existingPaths {
-			if !diskPaths[path] {
-				idx.db.DeleteDocument(docID)
-				removed++
-			}
-		}
-		if removed > 0 {
-			idx.log.Printf("  Removed %d stale PDFs\n", removed)
-		}
-	}
+	idx.cleanupOrphans(col.ID, diskPaths, "PDFs")
 
 	ext, err := idx.extractorFor(col)
 	if err != nil {
@@ -576,11 +523,8 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 			}
 		} else if res.Content != "" {
 			// Text-only result (e.g. xberg backend for PDF): chunk as markdown.
-			idx.db.UpsertFTS(docID, f.Name, res.Content)
 			maxSize, overlap := idx.chunkSize()
-			for _, c := range chunk.ChunkMarkdown(res.Content, maxSize, overlap) {
-				idx.db.InsertChunk(docID, c.Seq, c.Content, nil)
-			}
+			idx.replaceIndexText(docID, f.Path, f.Name, res.Content, chunk.ChunkMarkdown(res.Content, maxSize, overlap), false)
 		}
 
 		indexed++
@@ -618,18 +562,7 @@ func (idx *Indexer) syncDocuments(col *store.Collection) error {
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-	if existingPaths, err := idx.db.ListDocumentPaths(col.ID); err == nil {
-		removed := 0
-		for path, docID := range existingPaths {
-			if !diskPaths[path] {
-				idx.db.DeleteDocument(docID)
-				removed++
-			}
-		}
-		if removed > 0 {
-			idx.log.Printf("  Removed %d stale documents\n", removed)
-		}
-	}
+	idx.cleanupOrphans(col.ID, diskPaths, "documents")
 
 	ext, err := idx.extractorFor(col)
 	if err != nil {
@@ -696,28 +629,58 @@ func (idx *Indexer) syncCode(col *store.Collection) error {
 	return nil
 }
 
+// cleanupOrphans deletes every document of colID whose path is not in
+// livePaths. A nil livePaths deletes all documents (full-reindex path).
+// The returned error comes from ListDocumentPaths; callers that treat
+// cleanup as best-effort may ignore it (removed is 0 then). label is used
+// in the log line "Removed %d stale <label>"; an empty label disables logging.
+func (idx *Indexer) cleanupOrphans(colID int64, livePaths map[string]bool, label string) (int, error) {
+	existingPaths, err := idx.db.ListDocumentPaths(colID)
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for path, docID := range existingPaths {
+		if livePaths[path] {
+			continue
+		}
+		idx.db.DeleteDocument(docID)
+		removed++
+	}
+	if removed > 0 && label != "" {
+		idx.log.Printf("  Removed %d stale %s\n", removed, label)
+	}
+	return removed, nil
+}
+
+// replaceIndexText rewrites the searchable content of a document: upserts the
+// FTS entry, deletes old chunks, and inserts the given chunks (with line spans
+// when withLines is true). FTS and chunk errors are logged, never fatal.
+// label identifies the source in WARN lines (usually the file path).
+func (idx *Indexer) replaceIndexText(docID int64, label, title, text string, chunks []chunk.Chunk, withLines bool) {
+	if err := idx.db.UpsertFTS(docID, title, text); err != nil {
+		idx.log.Printf("  WARN: fts %s: %v\n", label, err)
+	}
+	idx.db.DeleteChunksForDocument(docID)
+	for _, c := range chunks {
+		var err error
+		if withLines {
+			err = idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil)
+		} else {
+			err = idx.db.InsertChunk(docID, c.Seq, c.Content, nil)
+		}
+		if err != nil {
+			idx.log.Printf("  WARN: chunk %s: %v\n", label, err)
+		}
+	}
+}
+
 func (idx *Indexer) cleanupStaleCodeDocuments(colID int64, files []source.CodeFileInfo) {
 	diskPaths := make(map[string]bool, len(files))
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-
-	existingPaths, err := idx.db.ListDocumentPaths(colID)
-	if err != nil {
-		return
-	}
-
-	removed := 0
-	for path, docID := range existingPaths {
-		if !diskPaths[path] {
-			idx.db.DeleteDocument(docID)
-			idx.db.FastFields().DeleteForDocument(docID)
-			removed++
-		}
-	}
-	if removed > 0 {
-		idx.log.Printf("  Removed %d stale documents\n", removed)
-	}
+	idx.cleanupOrphans(colID, diskPaths, "documents")
 }
 
 func (idx *Indexer) indexCodeFile(colID int64, f source.CodeFileInfo) (bool, error) {
@@ -734,18 +697,8 @@ func (idx *Indexer) indexCodeFile(colID int64, f source.CodeFileInfo) (bool, err
 		return false, fmt.Errorf("upsert %s: %w", f.Path, err)
 	}
 
-	if err := idx.db.UpsertFTS(docID, f.Title, f.Content); err != nil {
-		idx.log.Printf("  WARN: fts %s: %v\n", f.Path, err)
-	}
-
-	idx.db.DeleteChunksForDocument(docID)
 	maxSize, overlap := idx.chunkSize()
-	chunks := chunk.ChunkCode(f.Content, f.Language, maxSize, overlap)
-	for _, c := range chunks {
-		if err := idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil); err != nil {
-			idx.log.Printf("  WARN: chunk %s: %v\n", f.Path, err)
-		}
-	}
+	idx.replaceIndexText(docID, f.Path, f.Title, f.Content, chunk.ChunkCode(f.Content, f.Language, maxSize, overlap), true)
 
 	// Fast field metadata
 	_ = idx.db.FastFields().Set(docID, "lang", f.Language)
@@ -853,20 +806,9 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 			continue
 		}
 
-		// FTS: full rewrite (sessions are non-append-only).
-		if err := idx.db.UpsertFTS(docID, title, text); err != nil {
-			idx.log.Printf("  WARN: fts %s: %v\n", docPath, err)
-		}
-
-		// Chunks: delete old + insert new.
-		idx.db.DeleteChunksForDocument(docID)
+		// FTS + chunks: full rewrite (sessions are non-append-only).
 		maxSize, _ := idx.chunkSize()
-		chunks := chunk.ChunkConversation(text, maxSize)
-		for _, c := range chunks {
-			if err := idx.db.InsertChunk(docID, c.Seq, c.Content, nil); err != nil {
-				idx.log.Printf("  WARN: chunk %s: %v\n", docPath, err)
-			}
-		}
+		idx.replaceIndexText(docID, docPath, title, text, chunk.ChunkConversation(text, maxSize), false)
 
 		// Metadata enrichment (§6.13): write known fields to fast_fields.
 		for field, value := range sess.Metadata {
@@ -886,19 +828,7 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 	// timeout, locked DB) would otherwise cause us to delete sessions that are
 	// still present but couldn't be read this cycle.
 	if len(sErrs) == 0 {
-		if existingPaths, err := idx.db.ListDocumentPaths(col.ID); err == nil {
-			removed := 0
-			for path, docID := range existingPaths {
-				if !seenPaths[path] {
-					idx.db.FastFields().DeleteForDocument(docID)
-					idx.db.DeleteDocument(docID)
-					removed++
-				}
-			}
-			if removed > 0 {
-				idx.log.Printf("  Removed %d stale sessions\n", removed)
-			}
-		}
+		idx.cleanupOrphans(col.ID, seenPaths, "sessions")
 	} else {
 		idx.log.Printf("  Skipping orphan cleanup due to %d scan error(s)\n", len(sErrs))
 	}
@@ -914,15 +844,9 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 // reindexParserCollection deletes all documents/chunks/FTS for a parser collection
 // so the next sync is a full re-fetch (§6.6).
 func (idx *Indexer) reindexParserCollection(col *store.Collection) error {
-	existingPaths, err := idx.db.ListDocumentPaths(col.ID)
-	if err != nil {
-		return err
-	}
-	for _, docID := range existingPaths {
-		idx.db.FastFields().DeleteForDocument(docID)
-		idx.db.DeleteDocument(docID)
-	}
-	return nil
+	// nil livePaths → every existing document is stale; empty label → no log.
+	_, err := idx.cleanupOrphans(col.ID, nil, "")
+	return err
 }
 
 // parserMessagesToText converts parserdef messages to the [role]: content format
@@ -973,15 +897,8 @@ func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFil
 		return docStatusFailed
 	}
 
-	if err := idx.db.UpsertFTS(docID, res.Title, res.Content); err != nil {
-		idx.log.Printf("  WARN: fts %s: %v\n", f.Path, err)
-	}
-
-	idx.db.DeleteChunksForDocument(docID)
 	maxSize, overlap := idx.chunkSize()
-	for _, c := range chunk.ChunkMarkdown(res.Content, maxSize, overlap) {
-		idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil)
-	}
+	idx.replaceIndexText(docID, f.Path, res.Title, res.Content, chunk.ChunkMarkdown(res.Content, maxSize, overlap), true)
 
 	return docStatusIndexed
 }

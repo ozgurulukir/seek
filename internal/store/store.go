@@ -1113,26 +1113,90 @@ func (s *Store) SearchVector(queryEmb []float32, limit int, filters *FilterSet) 
 	return s.linearSearchVector(queryEmb, limit, filters)
 }
 
+// chunkRow is the shared chunk projection used by the vector-search paths
+// (HNSW fetch and linear scan). The embedding blob is scanned separately so
+// the same row shape serves both paths.
+type chunkRow struct {
+	ChunkID    int64
+	DocumentID int64
+	Seq        int
+	Content    string
+	ChunkType  ChunkType
+	ImagePath  string
+	StartLine  int
+	EndLine    int
+	Title      string
+	Path       string
+	Collection string
+}
+
+// chunkRowColumns is the SELECT projection matching scanChunkRows. The leading
+// COALESCE placeholder must be bound to ChunkTypeText as the first query arg.
+const chunkRowColumns = `ch.id, ch.document_id, ch.seq, ch.content, ch.content_zstd,
+		COALESCE(ch.chunk_type, ?), COALESCE(ch.image_path, ''),
+		COALESCE(ch.start_line, 0), COALESCE(ch.end_line, 0),
+		d.title, d.path, c.name`
+
+// appendFilterClause pushes filter predicates into a query whose WHERE clause
+// already has at least one condition (joined with AND).
+func appendFilterClause(query string, filters *FilterSet, args []interface{}) (string, []interface{}) {
+	if filters == nil {
+		return query, args
+	}
+	clause, fargs := filters.ToSQL()
+	if clause == "" {
+		return query, args
+	}
+	return query + " AND " + clause, append(args, fargs...)
+}
+
+// scanChunkRows drains rows into chunk rows, transparently decompressing
+// zstd content. When wantEmbedding is true, rows must carry a 13th column
+// with the raw embedding blob, returned positionally in embBlobs.
+func scanChunkRows(rows *sql.Rows, wantEmbedding bool) ([]chunkRow, [][]byte, error) {
+	var out []chunkRow
+	var embBlobs [][]byte
+	for rows.Next() {
+		var (
+			r           chunkRow
+			contentZstd []byte
+			embBlob     []byte
+		)
+		var err error
+		if wantEmbedding {
+			err = rows.Scan(&r.ChunkID, &r.DocumentID, &r.Seq, &r.Content, &contentZstd, &r.ChunkType, &r.ImagePath, &r.StartLine, &r.EndLine, &r.Title, &r.Path, &r.Collection, &embBlob)
+		} else {
+			err = rows.Scan(&r.ChunkID, &r.DocumentID, &r.Seq, &r.Content, &contentZstd, &r.ChunkType, &r.ImagePath, &r.StartLine, &r.EndLine, &r.Title, &r.Path, &r.Collection)
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("scan chunk row: %w", err)
+		}
+		if len(contentZstd) > 0 {
+			r.Content, err = DecompressString(contentZstd)
+			if err != nil {
+				return nil, nil, fmt.Errorf("decompress chunk %d: %w", r.ChunkID, err)
+			}
+		}
+		out = append(out, r)
+		if wantEmbedding {
+			embBlobs = append(embBlobs, embBlob)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterate chunk rows: %w", err)
+	}
+	return out, embBlobs, nil
+}
+
 // linearSearchVector performs a linear scan over all embedded chunks with optional filters.
 func (s *Store) linearSearchVector(queryEmb []float32, limit int, filters *FilterSet) ([]SearchResult, error) {
-	sqlQuery := `SELECT ch.id, ch.document_id, ch.seq, ch.content, ch.content_zstd, ch.embedding,
-		        COALESCE(ch.chunk_type, ?), COALESCE(ch.image_path, ''),
-		        COALESCE(ch.start_line, 0), COALESCE(ch.end_line, 0),
-		        d.title, d.path, c.name
+	sqlQuery := `SELECT ` + chunkRowColumns + `, ch.embedding
 		 FROM chunks ch
 		 JOIN documents d ON d.id = ch.document_id
 		 JOIN collections c ON c.id = d.collection_id
 		 WHERE ch.embedding IS NOT NULL`
-	var args []interface{}
-	args = append(args, ChunkTypeText)
-
-	if filters != nil {
-		clause, fargs := filters.ToSQL()
-		if clause != "" {
-			sqlQuery += " AND " + clause
-			args = append(args, fargs...)
-		}
-	}
+	args := []interface{}{ChunkTypeText}
+	sqlQuery, args = appendFilterClause(sqlQuery, filters, args)
 
 	rows, err := s.db.Query(sqlQuery, args...)
 	if err != nil {
@@ -1140,58 +1204,34 @@ func (s *Store) linearSearchVector(queryEmb []float32, limit int, filters *Filte
 	}
 	defer rows.Close()
 
+	chunkRows, embBlobs, err := scanChunkRows(rows, true)
+	if err != nil {
+		return nil, err
+	}
+
 	type scored struct {
 		SearchResult
 		score float64
 	}
-	var all []scored
-
-	for rows.Next() {
-		var (
-			chunkID     int64
-			docID       int64
-			seq         int
-			content     string
-			contentZstd []byte
-			embBlob     []byte
-			chunkType   ChunkType
-			imagePath   string
-			startLine   int
-			endLine     int
-			title       string
-			path        string
-			collection  string
-		)
-		if err := rows.Scan(&chunkID, &docID, &seq, &content, &contentZstd, &embBlob, &chunkType, &imagePath, &startLine, &endLine, &title, &path, &collection); err != nil {
-			return nil, err
-		}
-		if len(contentZstd) > 0 {
-			content, err = DecompressString(contentZstd)
-			if err != nil {
-				return nil, fmt.Errorf("decompress chunk %d: %w", chunkID, err)
-			}
-		}
-		emb := decodeEmbedding(embBlob)
-		sim := cosineSimilarity(queryEmb, emb)
+	all := make([]scored, 0, len(chunkRows))
+	for i, r := range chunkRows {
+		emb := decodeEmbedding(embBlobs[i])
 		all = append(all, scored{
 			SearchResult: SearchResult{
-				ChunkID:    chunkID,
-				DocumentID: docID,
-				Seq:        seq,
-				Title:      title,
-				Path:       path,
-				Collection: collection,
-				Content:    content,
-				ChunkType:  chunkType,
-				ImagePath:  imagePath,
-				StartLine:  startLine,
-				EndLine:    endLine,
+				ChunkID:    r.ChunkID,
+				DocumentID: r.DocumentID,
+				Seq:        r.Seq,
+				Title:      r.Title,
+				Path:       r.Path,
+				Collection: r.Collection,
+				Content:    r.Content,
+				ChunkType:  r.ChunkType,
+				ImagePath:  r.ImagePath,
+				StartLine:  r.StartLine,
+				EndLine:    r.EndLine,
 			},
-			score: sim,
+			score: cosineSimilarity(queryEmb, emb),
 		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("search vector rows: %w", err)
 	}
 
 	// Sort by similarity descending
@@ -1217,14 +1257,6 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) (
 	if len(results) == 0 {
 		return nil, nil
 	}
-	// Build a lookup map
-	resultMap := make(map[int64]SearchResult)
-	for _, r := range results {
-		resultMap[r.ChunkID] = SearchResult{
-			ChunkID: r.ChunkID,
-			Score:   r.Score,
-		}
-	}
 
 	// Fetch all in one query
 	ids := make([]int64, len(results))
@@ -1241,9 +1273,7 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) (
 	}
 
 	query := fmt.Sprintf(
-		`SELECT ch.id, ch.document_id, ch.seq, ch.content, ch.content_zstd, COALESCE(ch.chunk_type, ?), COALESCE(ch.image_path, ''),
-		        COALESCE(ch.start_line, 0), COALESCE(ch.end_line, 0),
-		        d.title, d.path, c.name
+		`SELECT `+chunkRowColumns+`
 		 FROM chunks ch
 		 JOIN documents d ON d.id = ch.document_id
 		 JOIN collections c ON c.id = d.collection_id
@@ -1253,13 +1283,7 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) (
 	args = append([]interface{}{ChunkTypeText}, args...)
 
 	// Push filters into the SQL query so the DB handles filtering
-	if filters != nil {
-		clause, fargs := filters.ToSQL()
-		if clause != "" {
-			query += " AND " + clause
-			args = append(args, fargs...)
-		}
-	}
+	query, args = appendFilterClause(query, filters, args)
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -1267,54 +1291,37 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) (
 	}
 	defer rows.Close()
 
-	for rows.Next() {
-		var (
-			chunkID     int64
-			docID       int64
-			seq         int
-			content     string
-			contentZstd []byte
-			chunkType   ChunkType
-			imagePath   string
-			startLine   int
-			endLine     int
-			title       string
-			path        string
-			collection  string
-		)
-		if err := rows.Scan(&chunkID, &docID, &seq, &content, &contentZstd, &chunkType, &imagePath, &startLine, &endLine, &title, &path, &collection); err != nil {
-			return nil, fmt.Errorf("fetch search results scan: %w", err)
-		}
-		if len(contentZstd) > 0 {
-			content, err = DecompressString(contentZstd)
-			if err != nil {
-				return nil, fmt.Errorf("fetch search results decompress chunk %d: %w", chunkID, err)
-			}
-		}
-		if r, ok := resultMap[chunkID]; ok {
-			r.DocumentID = docID
-			r.Seq = seq
-			r.Title = title
-			r.Path = path
-			r.Collection = collection
-			r.Content = content
-			r.ChunkType = chunkType
-			r.ImagePath = imagePath
-			r.StartLine = startLine
-			r.EndLine = endLine
-			resultMap[chunkID] = r
-		}
+	chunkRows, _, err := scanChunkRows(rows, false)
+	if err != nil {
+		return nil, fmt.Errorf("fetch search results: %w", err)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("fetch search results rows iteration: %w", err)
+
+	fetched := make(map[int64]chunkRow, len(chunkRows))
+	for _, cr := range chunkRows {
+		fetched[cr.ChunkID] = cr
 	}
 
 	// Preserve HNSW ordering while excluding chunks that failed filters or were deleted
 	out := make([]SearchResult, 0, len(results))
 	for _, r := range results {
-		if res, ok := resultMap[r.ChunkID]; ok && res.DocumentID != 0 {
-			out = append(out, res)
+		cr, ok := fetched[r.ChunkID]
+		if !ok {
+			continue
 		}
+		out = append(out, SearchResult{
+			ChunkID:    r.ChunkID,
+			Score:      r.Score,
+			DocumentID: cr.DocumentID,
+			Seq:        cr.Seq,
+			Title:      cr.Title,
+			Path:       cr.Path,
+			Collection: cr.Collection,
+			Content:    cr.Content,
+			ChunkType:  cr.ChunkType,
+			ImagePath:  cr.ImagePath,
+			StartLine:  cr.StartLine,
+			EndLine:    cr.EndLine,
+		})
 	}
 	return out, nil
 }

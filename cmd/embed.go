@@ -61,18 +61,7 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
 		if err := c.embedWithVL(cfg, db, textChunks, imageChunks); err != nil {
 			return err
 		}
-		if vectorIndex {
-			fmt.Println("Syncing vector index...")
-			var syncErr error
-			if c.Force {
-				syncErr = db.SyncVectorIndex()
-			} else {
-				_, syncErr = db.SyncVectorIndexIncremental()
-			}
-			if syncErr != nil {
-				fmt.Printf("  WARN: vector index sync: %v\n", syncErr)
-			}
-		}
+		c.syncVectorIndex(db, vectorIndex)
 		return nil
 	} else if len(imageChunks) > 0 {
 		fmt.Printf("  WARNING: %d image chunks skipped (model %q does not support multimodal)\n", len(imageChunks), cfg.Config.Embedding.Model)
@@ -100,20 +89,27 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
 	}
 
 	// Sync HNSW index with newly embedded chunks
-	if vectorIndex {
-		fmt.Println("Syncing vector index...")
-		var syncErr error
-		if c.Force {
-			syncErr = db.SyncVectorIndex()
-		} else {
-			_, syncErr = db.SyncVectorIndexIncremental()
-		}
-		if syncErr != nil {
-			fmt.Printf("  WARN: vector index sync: %v\n", syncErr)
-		}
-	}
+	c.syncVectorIndex(db, vectorIndex)
 
 	return nil
+}
+
+// syncVectorIndex refreshes the HNSW index after embedding: full rebuild on
+// --force, incremental otherwise. Sync failures are non-fatal (WARN only).
+func (c *EmbedCmd) syncVectorIndex(db *store.Store, enabled bool) {
+	if !enabled {
+		return
+	}
+	fmt.Println("Syncing vector index...")
+	var syncErr error
+	if c.Force {
+		syncErr = db.SyncVectorIndex()
+	} else {
+		_, syncErr = db.SyncVectorIndexIncremental()
+	}
+	if syncErr != nil {
+		fmt.Printf("  WARN: vector index sync: %v\n", syncErr)
+	}
 }
 
 // embedWithVL uses the VL realtime API for all chunks (unified vector space).

@@ -457,6 +457,17 @@ func ToFTS5WithAnalyzer(q Query, a *Analyzer) (string, bool) {
 	return toFTS5(q, a)
 }
 
+// firstAnalyzed returns the first analyzer-produced term for s, or s itself
+// when no analyzer is configured or analysis yields nothing.
+func firstAnalyzed(a *Analyzer, s string) string {
+	if a != nil {
+		if analyzed := a.AnalyzeForQuery(s); len(analyzed) > 0 {
+			return analyzed[0]
+		}
+	}
+	return s
+}
+
 func toFTS5(q Query, a *Analyzer) (string, bool) {
 	switch v := q.(type) {
 	case *BooleanQuery:
@@ -479,16 +490,7 @@ func toFTS5(q Query, a *Analyzer) (string, bool) {
 	case *PhraseQuery:
 		var phraseTerms []string
 		for _, t := range v.Terms {
-			if a != nil {
-				analyzed := a.AnalyzeForQuery(t)
-				if len(analyzed) > 0 {
-					phraseTerms = append(phraseTerms, analyzed[0])
-				} else {
-					phraseTerms = append(phraseTerms, t)
-				}
-			} else {
-				phraseTerms = append(phraseTerms, t)
-			}
+			phraseTerms = append(phraseTerms, firstAnalyzed(a, t))
 		}
 		return fmt.Sprintf(`"%s"`, strings.Join(phraseTerms, " ")), false
 	case *PrefixQuery:
@@ -514,26 +516,11 @@ func toFTS5(q Query, a *Analyzer) (string, bool) {
 	case *NearQuery:
 		terms := make([]string, len(v.Terms))
 		for i, t := range v.Terms {
-			if a != nil {
-				analyzed := a.AnalyzeForQuery(t)
-				if len(analyzed) > 0 {
-					terms[i] = analyzed[0]
-				} else {
-					terms[i] = t
-				}
-			} else {
-				terms[i] = t
-			}
+			terms[i] = firstAnalyzed(a, t)
 		}
 		return fmt.Sprintf("NEAR(%s, %d)", strings.Join(terms, " "), v.N), false
 	case *TermQuery:
-		if a != nil {
-			analyzed := a.AnalyzeForQuery(v.Value)
-			if len(analyzed) > 0 {
-				return analyzed[0], false
-			}
-		}
-		return v.Value, false
+		return firstAnalyzed(a, v.Value), false
 	default:
 		return "", false
 	}
