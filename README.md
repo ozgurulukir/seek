@@ -32,7 +32,8 @@ irm https://raw.githubusercontent.com/ozgurulukir/seek/main/install.ps1 | iex
 **Linux / macOS:**
 ```bash
 make build
-ln -sf $(pwd)/seek /usr/local/bin/seek
+ln -sf $(pwd)/bin/seek /usr/local/bin/seek
+# or install directly: make install
 ```
 
 **Windows (PowerShell):**
