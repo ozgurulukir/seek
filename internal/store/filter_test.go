@@ -1,12 +1,24 @@
 package store
 
 import (
+	"strings"
 	"testing"
 )
 
+// mustToSQL invokes ToSQL and fails the test on error, so happy-path tests
+// only see clause/args.
+func mustToSQL(t *testing.T, f Filter) (string, []interface{}) {
+	t.Helper()
+	clause, args, err := f.ToSQL()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return clause, args
+}
+
 func TestFilterSetEmpty(t *testing.T) {
 	fs := NewFilterSet()
-	clause, args := fs.ToSQL()
+	clause, args := mustToSQL(t, fs)
 	if clause != "" {
 		t.Errorf("expected empty clause, got: %s", clause)
 	}
@@ -17,7 +29,7 @@ func TestFilterSetEmpty(t *testing.T) {
 
 func TestCollectionFilter(t *testing.T) {
 	f := &CollectionFilter{Name: "notes"}
-	clause, args := f.ToSQL()
+	clause, args := mustToSQL(t, f)
 	if clause == "" {
 		t.Error("expected non-empty clause")
 	}
@@ -28,7 +40,7 @@ func TestCollectionFilter(t *testing.T) {
 
 func TestDocTypeFilter(t *testing.T) {
 	f := &DocTypeFilter{Type: "markdown"}
-	clause, args := f.ToSQL()
+	clause, args := mustToSQL(t, f)
 	if clause == "" {
 		t.Error("expected non-empty clause")
 	}
@@ -39,7 +51,7 @@ func TestDocTypeFilter(t *testing.T) {
 
 func TestDateRangeFilter(t *testing.T) {
 	f := &DateRangeFilter{After: "2024-01-01T00:00:00Z", Before: "2024-12-31T23:59:59Z"}
-	clause, args := f.ToSQL()
+	clause, args := mustToSQL(t, f)
 	if clause == "" {
 		t.Error("expected non-empty clause")
 	}
@@ -50,7 +62,7 @@ func TestDateRangeFilter(t *testing.T) {
 
 func TestDateRangeFilterAfterOnly(t *testing.T) {
 	f := &DateRangeFilter{After: "2024-01-01T00:00:00Z"}
-	clause, args := f.ToSQL()
+	clause, args := mustToSQL(t, f)
 	if clause == "" {
 		t.Error("expected non-empty clause")
 	}
@@ -61,7 +73,7 @@ func TestDateRangeFilterAfterOnly(t *testing.T) {
 
 func TestChunkTypeFilter(t *testing.T) {
 	f := &ChunkTypeFilter{Type: 1}
-	clause, args := f.ToSQL()
+	clause, args := mustToSQL(t, f)
 	if clause == "" {
 		t.Error("expected non-empty clause")
 	}
@@ -72,7 +84,7 @@ func TestChunkTypeFilter(t *testing.T) {
 
 func TestPathFilter(t *testing.T) {
 	f := &PathFilter{Pattern: "docs/*"}
-	clause, args := f.ToSQL()
+	clause, args := mustToSQL(t, f)
 	if clause == "" {
 		t.Error("expected non-empty clause")
 	}
@@ -83,12 +95,28 @@ func TestPathFilter(t *testing.T) {
 
 func TestPathFilterRejectsTraversal(t *testing.T) {
 	f := &PathFilter{Pattern: "../etc/passwd"}
-	clause, args := f.ToSQL()
-	if clause != "" {
-		t.Errorf("expected empty clause for traversal, got: %s", clause)
+	clause, args, err := f.ToSQL()
+	if err == nil {
+		t.Fatal("expected error for traversal pattern, got nil")
 	}
-	if len(args) != 0 {
-		t.Errorf("expected no args for traversal, got: %v", args)
+	if !strings.Contains(err.Error(), "..") {
+		t.Errorf("error should mention traversal, got: %v", err)
+	}
+	if clause != "" || args != nil {
+		t.Errorf("expected empty clause/args on error, got: %q %v", clause, args)
+	}
+}
+
+func TestFilterSetRejectsTraversal(t *testing.T) {
+	fs := NewFilterSet()
+	fs.Add(&CollectionFilter{Name: "notes"})
+	fs.Add(&PathFilter{Pattern: "../etc/passwd"})
+	clause, _, err := fs.ToSQL()
+	if err == nil {
+		t.Fatal("expected FilterSet.ToSQL to propagate path filter error, got nil")
+	}
+	if clause != "" {
+		t.Errorf("expected empty clause on error, got: %q", clause)
 	}
 }
 
@@ -96,7 +124,7 @@ func TestFilterSetComposition(t *testing.T) {
 	fs := NewFilterSet()
 	fs.Add(&CollectionFilter{Name: "notes"})
 	fs.Add(&DocTypeFilter{Type: "markdown"})
-	clause, args := fs.ToSQL()
+	clause, args := mustToSQL(t, fs)
 	if clause == "" {
 		t.Error("expected non-empty clause")
 	}
