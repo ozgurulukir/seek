@@ -311,7 +311,22 @@ func processCodeFile(path, relPath string, info os.FileInfo, pattern string) (*C
 
 // ScanCode scans a directory for source code files.
 func ScanCode(dir, pattern string) ([]CodeFileInfo, error) {
+	files, _, err := ScanCodeWithWarnings(dir, pattern)
+	return files, err
+}
+
+// ScanCodeWithWarnings is like ScanCode but also returns the paths that were
+// skipped due to unreadable entries (permission errors, read failures, etc.).
+// Callers can surface these as WARN lines so partially-indexed collections do
+// not fail silently.
+//
+// Note on .gitignore support: only the repository-root .gitignore at dir is
+// honoured. Nested .gitignore files, negation rules (!pattern), ** globs and
+// leading-slash anchoring are NOT supported; the matcher is a simple
+// filepath.Match + path-prefix approximation. See matchesGitignore.
+func ScanCodeWithWarnings(dir, pattern string) ([]CodeFileInfo, []string, error) {
 	var files []CodeFileInfo
+	var skipped []string
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		absDir = dir
@@ -324,7 +339,8 @@ func ScanCode(dir, pattern string) ([]CodeFileInfo, error) {
 
 	err = filepath.Walk(absDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
-			return nil // skip unreadable paths
+			skipped = append(skipped, path)
+			return nil // skip unreadable paths, but record them
 		}
 
 		relPath, rErr := filepath.Rel(absDir, path)
@@ -346,6 +362,7 @@ func ScanCode(dir, pattern string) ([]CodeFileInfo, error) {
 
 		codeFile, err := processCodeFile(path, relPath, info, pattern)
 		if err != nil {
+			skipped = append(skipped, path)
 			return nil
 		}
 		if codeFile != nil {
@@ -355,5 +372,5 @@ func ScanCode(dir, pattern string) ([]CodeFileInfo, error) {
 		return nil
 	})
 
-	return files, err
+	return files, skipped, err
 }

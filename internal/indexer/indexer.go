@@ -599,9 +599,12 @@ func (idx *Indexer) syncDocuments(col *store.Collection) error {
 // languages, ignores binaries/vendors/lockfiles/.gitignore entries, extracts
 // relative path titles, chunks code structurally, and writes fastfield metadata.
 func (idx *Indexer) syncCode(col *store.Collection) error {
-	files, err := source.ScanCode(col.Path, col.Pattern)
+	files, skippedPaths, err := source.ScanCodeWithWarnings(col.Path, col.Pattern)
 	if err != nil {
 		return err
+	}
+	for _, p := range skippedPaths {
+		idx.log.Printf("  WARN: scan skipped %s (unreadable)\n", p)
 	}
 
 	idx.cleanupStaleCodeDocuments(col.ID, files)
@@ -700,11 +703,20 @@ func (idx *Indexer) indexCodeFile(colID int64, f source.CodeFileInfo) (bool, err
 	maxSize, overlap := idx.chunkSize()
 	idx.replaceIndexText(docID, f.Path, f.Title, f.Content, chunk.ChunkCode(f.Content, f.Language, maxSize, overlap), true)
 
-	// Fast field metadata
-	_ = idx.db.FastFields().Set(docID, "lang", f.Language)
-	_ = idx.db.FastFields().Set(docID, "ext", f.Extension)
-	_ = idx.db.FastFields().Set(docID, "filename", filepath.Base(f.Path))
-	_ = idx.db.FastFields().Set(docID, "rel_path", f.RelativePath)
+	// Fast field metadata. Errors are logged (pattern used elsewhere in the
+	// indexer) rather than silently swallowed so missing fastfields surface
+	// during sync instead of only at --aggs query time.
+	ffSets := []struct{ key, value string }{
+		{"lang", f.Language},
+		{"ext", f.Extension},
+		{"filename", filepath.Base(f.Path)},
+		{"rel_path", f.RelativePath},
+	}
+	for _, ff := range ffSets {
+		if err := idx.db.FastFields().Set(docID, ff.key, ff.value); err != nil {
+			idx.log.Printf("  WARN: fastfield %s=%s %s: %v\n", ff.key, ff.value, f.Path, err)
+		}
+	}
 
 	return false, nil
 }

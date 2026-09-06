@@ -1,12 +1,18 @@
 package chunk
 
 import (
+	"regexp"
 	"strings"
 )
 
 // ChunkCode splits source code content into logical chunks.
 // It prioritizes logical block boundaries (blank lines, top-level definitions)
 // and falls back to line-based sliding windows with overlap for large blocks.
+//
+// The lang parameter selects language-aware top-level-definition split points
+// (e.g. ^func in Go, ^def|^class in Python) so chunks align to symbol
+// boundaries when possible. Unrecognised languages fall back to a generic
+// blank-line + indented-block heuristic.
 func ChunkCode(content string, lang string, maxSize, overlap int) []Chunk {
 	if maxSize <= 0 {
 		maxSize = DefaultMaxChunkSize
@@ -29,8 +35,9 @@ func ChunkCode(content string, lang string, maxSize, overlap int) []Chunk {
 		return []Chunk{{Seq: 0, Content: content, Type: ChunkText, StartLine: 1, EndLine: lineCount}}
 	}
 
-	// Split by blocks (double newlines / logical paragraph separations)
-	rawBlocks := splitCodeBlocks(content)
+	// Split by top-level definitions first when the language is known,
+	// then by blank-line blocks inside each definition.
+	rawBlocks := splitCodeTopLevel(content, lang)
 
 	var chunks []Chunk
 	seq := 0
@@ -99,6 +106,68 @@ func ChunkCode(content string, lang string, maxSize, overlap int) []Chunk {
 	}
 
 	return AssignLineNumbers(content, chunks)
+}
+
+// codeDefPatterns maps language IDs to a regex matching lines that start a
+// top-level definition. Keep patterns anchored to line start (no leading
+// whitespace) so only true top-level forms split.
+var codeDefPatterns = map[string]*regexp.Regexp{
+	"go":         regexp.MustCompile(`^(func|type)\s+`),
+	"python":     regexp.MustCompile(`^(def|class|async\s+def)\s+`),
+	"rust":       regexp.MustCompile(`^(pub(\([^)]+\))?\s+)?(async\s+)?(unsafe\s+)?(fn|struct|enum|impl|trait|type|mod|const|static)\s+`),
+	"javascript": regexp.MustCompile(`^(export\s+)?(async\s+)?(function|class|const|let|var)\s+`),
+	"typescript": regexp.MustCompile(`^(export\s+)?(async\s+)?(function|class|const|let|var|interface|enum|namespace|type)\s+`),
+	"ruby":       regexp.MustCompile(`^(def|class|module)\s+`),
+	"java":       regexp.MustCompile(`^(public|private|protected|abstract|final|static|\s)*[a-zA-Z][a-zA-Z0-9_<>\[\]]*\s+[a-zA-Z_$][a-zA-Z0-9_$]*\s*\(`),
+	"csharp":     regexp.MustCompile(`^(public|private|protected|internal|static|abstract|sealed|partial|async|\s)*[a-zA-Z][a-zA-Z0-9_<>\[\]]*\s+[a-zA-Z_$][a-zA-Z0-9_$]*\s*\(`),
+	"c":          regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_\s\*]*\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\(`),
+	"cpp":        regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_\s\*:<>,]*\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\(`),
+	"php":        regexp.MustCompile(`^(public|private|protected|static|final|abstract|\s)*function\s+`),
+	"swift":      regexp.MustCompile(`^func\s+`),
+	"kotlin":     regexp.MustCompile(`^fun\s+`),
+	"scala":      regexp.MustCompile(`^(def|class|object|trait)\s+`),
+	"lua":        regexp.MustCompile(`^(local\s+)?function\s+`),
+	"haskell":    regexp.MustCompile(`^[a-z_][a-zA-Z0-9_']*\s*::`),
+	"elm":        regexp.MustCompile(`^[a-z_][a-zA-Z0-9_']*\s*:`),
+}
+
+// splitCodeTopLevel attempts a language-aware split at top-level definitions.
+// It returns a slice of blocks: one per definition plus any preamble before
+// the first definition. Unknown languages fall back to splitCodeBlocks so the
+// chunker keeps working even without a pattern.
+func splitCodeTopLevel(content, lang string) []string {
+	pattern, ok := codeDefPatterns[lang]
+	if !ok {
+		return splitCodeBlocks(content)
+	}
+
+	var blocks []string
+	var current strings.Builder
+	seenDef := false
+
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		if pattern.MatchString(line) {
+			// Flush everything before this definition
+			if current.Len() > 0 {
+				blocks = append(blocks, current.String())
+				current.Reset()
+			}
+			seenDef = true
+		}
+		current.WriteString(line)
+		current.WriteString("\n")
+	}
+	if current.Len() > 0 {
+		blocks = append(blocks, current.String())
+	}
+
+	// If no definitions matched, fall back to blank-line blocks so the
+	// downstream packing logic still receives *something* to work with.
+	if !seenDef {
+		return splitCodeBlocks(content)
+	}
+	return blocks
 }
 
 // splitCodeBlocks breaks code on double newlines while normalizing line breaks.
