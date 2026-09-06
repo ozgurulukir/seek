@@ -109,6 +109,7 @@ ocr:
 - **`expandEnv` uses `os.ExpandEnv`** — it substitutes `$VAR` and `${VAR}` anywhere in the value (e.g. `"Bearer ${TOKEN}"`), not just whole-value matches. Set undefined vars are left empty.
 - The indexer logs `WARN:` lines and counts `failed` files per sync; previously these errors were silently dropped. New sync code paths should follow this pattern (count failures, surface them in the summary line).
 - **Cross-platform background service (`cmd/service.go`)** — automatically routes to Windows Task Scheduler (`schtasks.exe`) on Windows, `systemd` user timer (`systemctl --user`) on Linux, and `launchd` plist on macOS. Both `sync` and `embed` commands are run by default.
+- **Agent hooks (`cmd/hooks.go`)** — Claude Code (`~/.claude/settings.json`) and Codex (`~/.codex/hooks.json`) share the *same* JSON hook schema; `hookTarget` is the single source of truth — add new agents to that list, not as parallel code paths. Hooks only run `seek sync` (not `embed`); the binary is resolved via `exec.LookPath` with a PATH-dependent fallback (`"seek"`), never `os.Executable()`.
 
 ## Commands surface (for reference)
 

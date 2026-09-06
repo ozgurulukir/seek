@@ -27,11 +27,13 @@ seek service stop               # stop and remove scheduled task
 Automatically sync conversations as soon as an AI agent finishes:
 
 ```bash
-seek hooks install              # writes Stop hook into ~/.claude/settings.json
-seek hooks uninstall
+seek hooks install              # writes Stop hooks for Claude Code + Codex
+seek hooks install --claude     # only ~/.claude/settings.json
+seek hooks install --codex      # only ~/.codex/hooks.json
+seek hooks uninstall            # (--claude / --codex to select)
 ```
 
-When Claude Code or compatible agents finish a session, `seek sync` runs automatically to parse and index the conversation immediately.
+When Claude Code or Codex finishes a session, `seek sync` runs automatically to parse and index the conversation immediately.
 
 ---
 

@@ -16,9 +16,25 @@ type HooksCmd struct {
 	Uninstall HooksUninstallCmd `cmd:"" help:"Remove seek hooks from AI tools"`
 }
 
-type HooksInstallCmd struct{}
+type HooksInstallCmd struct {
+	Claude bool `help:"Install only the Claude Code hook"`
+	Codex  bool `help:"Install only the Codex hook"`
+}
 
-type HooksUninstallCmd struct{}
+type HooksUninstallCmd struct {
+	Claude bool `help:"Remove only the Claude Code hook"`
+	Codex  bool `help:"Remove only the Codex hook"`
+}
+
+// hookTarget describes an AI tool whose hook configuration uses the
+// Claude-Code-style JSON schema:
+//
+//	{ "hooks": { "<event>": [ { "matcher": "...", "hooks": [ {"type": "command", "command": "..."} ] } ] } }
+type hookTarget struct {
+	name         string // display name, e.g. "Claude Code"
+	settingsPath func() string
+	event        string // hook event, e.g. "Stop"
+}
 
 // claudeSettingsPath returns the path to Claude Code settings.json.
 func claudeSettingsPath() string {
@@ -26,18 +42,56 @@ func claudeSettingsPath() string {
 	return filepath.Join(home, ".claude", "settings.json")
 }
 
+// codexHooksPath returns the path to the Codex hooks.json file.
+func codexHooksPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".codex", "hooks.json")
+}
+
+var hookTargets = []hookTarget{
+	{name: "Claude Code", settingsPath: claudeSettingsPath, event: "Stop"},
+	{name: "Codex", settingsPath: codexHooksPath, event: "Stop"},
+}
+
+// selectedTargets filters hookTargets by the --claude/--codex flags.
+// When neither flag is given, all targets are selected.
+func selectedTargets(claudeOnly, codexOnly bool) []hookTarget {
+	if !claudeOnly && !codexOnly {
+		return hookTargets
+	}
+	var out []hookTarget
+	for _, t := range hookTargets {
+		if claudeOnly && t.name == "Claude Code" {
+			out = append(out, t)
+		}
+		if codexOnly && t.name == "Codex" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 func (c *HooksInstallCmd) Run(cfg *config.AppConfig) error {
-	return installClaudeHook()
+	for _, t := range selectedTargets(c.Claude, c.Codex) {
+		if err := installHook(t); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *HooksUninstallCmd) Run(cfg *config.AppConfig) error {
-	return uninstallClaudeHook()
+	for _, t := range selectedTargets(c.Claude, c.Codex) {
+		if err := uninstallHook(t); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// --- Claude Code hooks ---
+// --- generic Claude-Code-style JSON hooks ---
 
-func readClaudeSettings() (map[string]interface{}, error) {
-	path := claudeSettingsPath()
+func readHookSettings(path string) (map[string]interface{}, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -47,13 +101,12 @@ func readClaudeSettings() (map[string]interface{}, error) {
 	}
 	var settings map[string]interface{}
 	if err := json.Unmarshal(data, &settings); err != nil {
-		return nil, fmt.Errorf("parse settings.json: %w", err)
+		return nil, fmt.Errorf("parse %s: %w", filepath.Base(path), err)
 	}
 	return settings, nil
 }
 
-func writeClaudeSettings(settings map[string]interface{}) error {
-	path := claudeSettingsPath()
+func writeHookSettings(path string, settings map[string]interface{}) error {
 	os.MkdirAll(filepath.Dir(path), config.DefaultDirPerms)
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
@@ -74,16 +127,16 @@ func seekBinaryPath() string {
 	return real
 }
 
-func findSeekHookIndex(settings map[string]interface{}) int {
+func findSeekHookIndex(settings map[string]interface{}, event string) int {
 	hooks, ok := settings["hooks"].(map[string]interface{})
 	if !ok {
 		return -1
 	}
-	stopHooks, ok := hooks["Stop"].([]interface{})
+	eventHooks, ok := hooks[event].([]interface{})
 	if !ok {
 		return -1
 	}
-	for i, entry := range stopHooks {
+	for i, entry := range eventHooks {
 		entryMap, ok := entry.(map[string]interface{})
 		if !ok {
 			continue
@@ -106,14 +159,15 @@ func findSeekHookIndex(settings map[string]interface{}) int {
 	return -1
 }
 
-func installClaudeHook() error {
-	settings, err := readClaudeSettings()
+func installHook(t hookTarget) error {
+	path := t.settingsPath()
+	settings, err := readHookSettings(path)
 	if err != nil {
 		return err
 	}
 
-	if findSeekHookIndex(settings) >= 0 {
-		fmt.Println("Claude Code hook already installed.")
+	if findSeekHookIndex(settings, t.event) >= 0 {
+		fmt.Printf("%s hook already installed.\n", t.name)
 		return nil
 	}
 
@@ -123,9 +177,9 @@ func installClaudeHook() error {
 		settings["hooks"] = hooks
 	}
 
-	stopHooks, ok := hooks["Stop"].([]interface{})
+	eventHooks, ok := hooks[t.event].([]interface{})
 	if !ok {
-		stopHooks = []interface{}{}
+		eventHooks = []interface{}{}
 	}
 
 	newHook := map[string]interface{}{
@@ -138,43 +192,44 @@ func installClaudeHook() error {
 		},
 	}
 
-	stopHooks = append(stopHooks, newHook)
-	hooks["Stop"] = stopHooks
+	eventHooks = append(eventHooks, newHook)
+	hooks[t.event] = eventHooks
 
-	if err := writeClaudeSettings(settings); err != nil {
-		return fmt.Errorf("write settings: %w", err)
+	if err := writeHookSettings(path, settings); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
 
-	fmt.Println("Installed Claude Code Stop hook → seek sync")
+	fmt.Printf("Installed %s %s hook → seek sync\n", t.name, t.event)
 	return nil
 }
 
-func uninstallClaudeHook() error {
-	settings, err := readClaudeSettings()
+func uninstallHook(t hookTarget) error {
+	path := t.settingsPath()
+	settings, err := readHookSettings(path)
 	if err != nil {
 		return err
 	}
 
-	idx := findSeekHookIndex(settings)
+	idx := findSeekHookIndex(settings, t.event)
 	if idx < 0 {
-		fmt.Println("Claude Code hook not installed.")
+		fmt.Printf("%s hook not installed.\n", t.name)
 		return nil
 	}
 
 	hooks := settings["hooks"].(map[string]interface{})
-	stopHooks := hooks["Stop"].([]interface{})
+	eventHooks := hooks[t.event].([]interface{})
 
-	stopHooks = append(stopHooks[:idx], stopHooks[idx+1:]...)
-	if len(stopHooks) == 0 {
-		delete(hooks, "Stop")
+	eventHooks = append(eventHooks[:idx], eventHooks[idx+1:]...)
+	if len(eventHooks) == 0 {
+		delete(hooks, t.event)
 	} else {
-		hooks["Stop"] = stopHooks
+		hooks[t.event] = eventHooks
 	}
 
-	if err := writeClaudeSettings(settings); err != nil {
-		return fmt.Errorf("write settings: %w", err)
+	if err := writeHookSettings(path, settings); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
 
-	fmt.Println("Removed Claude Code Stop hook.")
+	fmt.Printf("Removed %s %s hook.\n", t.name, t.event)
 	return nil
 }
