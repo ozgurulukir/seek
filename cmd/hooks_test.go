@@ -3,7 +3,10 @@ package cmd
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -16,6 +19,12 @@ func newTestTarget(t *testing.T, name string) hookTarget {
 		settingsPath: func() string { return path },
 		event:        "Stop",
 	}
+}
+
+func newCodexTestTarget(t *testing.T) hookTarget {
+	tgt := newTestTarget(t, "Codex")
+	tgt.codexOutput = true
+	return tgt
 }
 
 func readTestSettings(t *testing.T, path string) map[string]interface{} {
@@ -71,6 +80,55 @@ func TestInstallHook_Idempotent(t *testing.T) {
 	stop := hooks["Stop"].([]interface{})
 	if len(stop) != 1 {
 		t.Fatalf("expected 1 Stop entry after duplicate install, got %d", len(stop))
+	}
+}
+
+func TestCodexHookReturnsJSONAfterSync(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("covered by platform-specific command generation")
+	}
+
+	command := hookCommand(hookTarget{codexOutput: true}, "false")
+	output, err := exec.Command("sh", "-c", command).Output()
+	if err != nil {
+		t.Fatalf("run Codex hook wrapper: %v", err)
+	}
+	if !json.Valid(output) {
+		t.Fatalf("Codex hook output is not JSON: %q", output)
+	}
+	if string(output) != "{}\n" {
+		t.Errorf("Codex hook output = %q, want empty JSON object", output)
+	}
+}
+
+func TestInstallHook_UpgradesLegacyCodexCommand(t *testing.T) {
+	tgt := newCodexTestTarget(t)
+	legacy := map[string]interface{}{
+		"hooks": map[string]interface{}{
+			"Stop": []interface{}{map[string]interface{}{
+				"matcher": "",
+				"hooks":   []interface{}{map[string]interface{}{"type": "command", "command": "seek sync"}},
+			}},
+		},
+	}
+	data, _ := json.Marshal(legacy)
+	if err := os.WriteFile(tgt.settingsPath(), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installHook(tgt); err != nil {
+		t.Fatalf("installHook: %v", err)
+	}
+
+	settings := readTestSettings(t, tgt.settingsPath())
+	hooks := settings["hooks"].(map[string]interface{})
+	stop := hooks["Stop"].([]interface{})
+	if len(stop) != 1 {
+		t.Fatalf("legacy hook should be upgraded in place, got %d entries", len(stop))
+	}
+	command := stop[0].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})["command"].(string)
+	if command == "seek sync" || !strings.Contains(command, "seek sync") {
+		t.Errorf("Codex hook command = %q, want JSON wrapper around seek sync", command)
 	}
 }
 

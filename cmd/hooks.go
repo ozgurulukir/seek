@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -34,6 +36,7 @@ type hookTarget struct {
 	name         string // display name, e.g. "Claude Code"
 	settingsPath func() string
 	event        string // hook event, e.g. "Stop"
+	codexOutput  bool   // Codex requires command hooks to write JSON to stdout.
 }
 
 // claudeSettingsPath returns the path to Claude Code settings.json.
@@ -50,7 +53,7 @@ func codexHooksPath() string {
 
 var hookTargets = []hookTarget{
 	{name: "Claude Code", settingsPath: claudeSettingsPath, event: "Stop"},
-	{name: "Codex", settingsPath: codexHooksPath, event: "Stop"},
+	{name: "Codex", settingsPath: codexHooksPath, event: "Stop", codexOutput: true},
 }
 
 // selectedTargets filters hookTargets by the --claude/--codex flags.
@@ -127,6 +130,20 @@ func seekBinaryPath() string {
 	return real
 }
 
+// hookCommand returns the hook command for a target. Codex parses command-hook
+// stdout as JSON, while seek sync writes human-readable progress output. Keep
+// that output out of stdout and always return an empty JSON object instead.
+func hookCommand(t hookTarget, binary string) string {
+	if !t.codexOutput {
+		return binary + " sync"
+	}
+
+	if runtime.GOOS == "windows" {
+		return `cmd /C "` + binary + ` sync >NUL 2>&1 & echo {}"`
+	}
+	return "sh -c " + strconv.Quote(binary+" sync >/dev/null 2>&1; printf '{}\\n'")
+}
+
 func findSeekHookIndex(settings map[string]interface{}, event string) int {
 	hooks, ok := settings["hooks"].(map[string]interface{})
 	if !ok {
@@ -166,7 +183,15 @@ func installHook(t hookTarget) error {
 		return err
 	}
 
-	if findSeekHookIndex(settings, t.event) >= 0 {
+	command := hookCommand(t, seekBinaryPath())
+	if idx := findSeekHookIndex(settings, t.event); idx >= 0 {
+		if t.codexOutput && replaceSeekHookCommand(settings, t.event, idx, command) {
+			if err := writeHookSettings(path, settings); err != nil {
+				return fmt.Errorf("write %s: %w", filepath.Base(path), err)
+			}
+			fmt.Printf("Updated %s %s hook to return JSON.\n", t.name, t.event)
+			return nil
+		}
 		fmt.Printf("%s hook already installed.\n", t.name)
 		return nil
 	}
@@ -187,7 +212,7 @@ func installHook(t hookTarget) error {
 		"hooks": []interface{}{
 			map[string]interface{}{
 				"type":    "command",
-				"command": seekBinaryPath() + " sync",
+				"command": command,
 			},
 		},
 	}
@@ -201,6 +226,35 @@ func installHook(t hookTarget) error {
 
 	fmt.Printf("Installed %s %s hook → seek sync\n", t.name, t.event)
 	return nil
+}
+
+// replaceSeekHookCommand upgrades a seek hook in place without disturbing
+// other commands in the same event entry.
+func replaceSeekHookCommand(settings map[string]interface{}, event string, idx int, command string) bool {
+	hooks := settings["hooks"].(map[string]interface{})
+	eventHooks := hooks[event].([]interface{})
+	entry, ok := eventHooks[idx].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	hookList, ok := entry["hooks"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, h := range hookList {
+		hook, ok := h.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if current, _ := hook["command"].(string); strings.Contains(current, "seek sync") {
+			if current == command {
+				return false
+			}
+			hook["command"] = command
+			return true
+		}
+	}
+	return false
 }
 
 func uninstallHook(t hookTarget) error {

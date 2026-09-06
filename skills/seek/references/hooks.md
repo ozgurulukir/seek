@@ -22,7 +22,7 @@ seek hooks uninstall --codex
 | Agent | Config file | Event |
 |-------|-------------|-------|
 | Claude Code | `~/.claude/settings.json` | `Stop` |
-| Codex | `~/.codex/hooks.json` | `Stop` |
+| Codex | `~/.codex/hooks.json` | `Stop` (wraps `seek sync` and returns `{}` JSON) |
 
 Both agents use the same Claude-Code-style JSON hook schema:
 
@@ -114,6 +114,6 @@ cat ~/.codex/hooks.json
 
 ## Idempotency
 
-- `seek hooks install` checks if the hook already exists first (per agent). If found, it prints "<agent> hook already installed." and exits without modification.
+- `seek hooks install` checks if the hook already exists first (per agent). If found, it prints "<agent> hook already installed." and exits without modification. An older direct Codex `seek sync` hook is upgraded in place to its JSON-output wrapper.
 - `seek hooks uninstall` only removes entries containing `"seek sync"`. Other hooks in the config files are preserved.
 - If the `Stop` list becomes empty after uninstall, the event key is removed from the file.

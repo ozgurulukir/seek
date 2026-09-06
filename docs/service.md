@@ -33,6 +33,10 @@ seek hooks install --codex      # only ~/.codex/hooks.json
 seek hooks uninstall            # (--claude / --codex to select)
 ```
 
+Codex hooks suppress `seek sync`'s progress output and return `{}` so that
+Codex receives the JSON its hook runner expects. Re-running the install command
+upgrades an older direct `seek sync` Codex hook in place.
+
 When Claude Code or Codex finishes a session, `seek sync` runs automatically to parse and index the conversation immediately.
 
 ---
