@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": "echo inspect"}
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "sh -c '/usr/local/bin/seek sync >/dev/null 2>&1; printf {}'"}
+        ]
+      }
+    ]
+  }
+}

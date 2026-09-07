@@ -3,19 +3,22 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 
+	"github.com/google/renameio"
 	"github.com/ozgurulukir/seek/internal/config"
 )
 
 type HooksCmd struct {
 	Install   HooksInstallCmd   `cmd:"" help:"Install seek hooks into AI tools"`
 	Uninstall HooksUninstallCmd `cmd:"" help:"Remove seek hooks from AI tools"`
+	Sync      HooksSyncCmd      `cmd:"" hidden:""`
 }
 
 type HooksInstallCmd struct {
@@ -28,15 +31,21 @@ type HooksUninstallCmd struct {
 	Codex  bool `help:"Remove only the Codex hook"`
 }
 
+// HooksSyncCmd is the machine-readable hook entry point. It intentionally
+// suppresses sync progress and errors: Codex requires valid JSON on stdout.
+type HooksSyncCmd struct{}
+
 // hookTarget describes an AI tool whose hook configuration uses the
 // Claude-Code-style JSON schema:
 //
 //	{ "hooks": { "<event>": [ { "matcher": "...", "hooks": [ {"type": "command", "command": "..."} ] } ] } }
 type hookTarget struct {
-	name         string // display name, e.g. "Claude Code"
-	settingsPath func() string
-	event        string // hook event, e.g. "Stop"
-	codexOutput  bool   // Codex requires command hooks to write JSON to stdout.
+	name          string // display name, e.g. "Claude Code"
+	settingsPath  func() string
+	event         string // hook event, e.g. "Stop"
+	codexOutput   bool   // Codex requires command hooks to write JSON to stdout.
+	timeout       int    // Optional command timeout in seconds.
+	statusMessage string // Optional command status shown by the hook runner.
 }
 
 // claudeSettingsPath returns the path to Claude Code settings.json.
@@ -52,7 +61,7 @@ func codexHooksPath() string {
 }
 
 var hookTargets = []hookTarget{
-	{name: "Claude Code", settingsPath: claudeSettingsPath, event: "Stop"},
+	{name: "Claude Code", settingsPath: claudeSettingsPath, event: "Stop", timeout: 60, statusMessage: "Syncing seek index..."},
 	{name: "Codex", settingsPath: codexHooksPath, event: "Stop", codexOutput: true},
 }
 
@@ -92,6 +101,23 @@ func (c *HooksUninstallCmd) Run(cfg *config.AppConfig) error {
 	return nil
 }
 
+func (c *HooksSyncCmd) Run(cfg *config.AppConfig) error {
+	return runHooksSync(func() error {
+		command := exec.Command(seekBinaryPath(), "sync")
+		command.Stdout = io.Discard
+		command.Stderr = io.Discard
+		return command.Run()
+	}, os.Stdout)
+}
+
+type syncRunner func() error
+
+func runHooksSync(sync syncRunner, output io.Writer) error {
+	_ = sync()
+	_, err := io.WriteString(output, "{}\n")
+	return err
+}
+
 // --- generic Claude-Code-style JSON hooks ---
 
 func readHookSettings(path string) (map[string]interface{}, error) {
@@ -110,12 +136,14 @@ func readHookSettings(path string) (map[string]interface{}, error) {
 }
 
 func writeHookSettings(path string, settings map[string]interface{}) error {
-	os.MkdirAll(filepath.Dir(path), config.DefaultDirPerms)
+	if err := os.MkdirAll(filepath.Dir(path), config.DefaultDirPerms); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, config.DefaultFilePerms)
+	return renameio.WriteFile(path, data, config.DefaultFilePerms)
 }
 
 func seekBinaryPath() string {
@@ -130,18 +158,24 @@ func seekBinaryPath() string {
 	return real
 }
 
-// hookCommand returns the hook command for a target. Codex parses command-hook
-// stdout as JSON, while seek sync writes human-readable progress output. Keep
-// that output out of stdout and always return an empty JSON object instead.
+// hookCommand returns the hook command for a target. Codex uses the internal
+// JSON-only hook entry point, avoiding platform-specific shell wrappers.
 func hookCommand(t hookTarget, binary string) string {
-	if !t.codexOutput {
-		return binary + " sync"
+	if t.codexOutput {
+		return commandLine(binary, "hooks", "sync")
 	}
+	return commandLine(binary, "sync")
+}
 
-	if runtime.GOOS == "windows" {
-		return `cmd /C "` + binary + ` sync >NUL 2>&1 & echo {}"`
+func commandLine(binary string, args ...string) string {
+	return commandLineForOS(runtime.GOOS, binary, args...)
+}
+
+func commandLineForOS(goos, binary string, args ...string) string {
+	if goos == "windows" {
+		return `"` + strings.ReplaceAll(binary, `"`, `\"`) + `" ` + strings.Join(args, " ")
 	}
-	return "sh -c " + strconv.Quote(binary+" sync >/dev/null 2>&1; printf '{}\\n'")
+	return shellQuote(binary) + " " + strings.Join(args, " ")
 }
 
 func findSeekHookIndex(settings map[string]interface{}, event string) int {
@@ -168,12 +202,56 @@ func findSeekHookIndex(settings map[string]interface{}, event string) int {
 				continue
 			}
 			cmd, _ := hMap["command"].(string)
-			if strings.Contains(cmd, "seek sync") {
+			if isSeekHookCommand(cmd) {
 				return i
 			}
 		}
 	}
 	return -1
+}
+
+var (
+	// directSeekHookCommandPattern accepts only a complete direct invocation of
+	// the seek executable, including quoted POSIX and Windows paths.
+	directSeekHookCommandPattern = regexp.MustCompile(`(?i)^(?:'[^']*[\\/]seek(?:\.exe)?'|"[^"]*[\\/]seek(?:\.exe)?"|(?:[^\s]+[\\/])?seek(?:\.exe)?)\s+(?:hooks\s+)?sync\s*$`)
+)
+
+func isSeekHookCommand(command string) bool {
+	return directSeekHookCommandPattern.MatchString(command) || isLegacyCodexWrapper(command)
+}
+
+func isLegacyCodexWrapper(command string) bool {
+	const prefix = "sh -c "
+	if !strings.HasPrefix(command, prefix) {
+		return false
+	}
+	body := strings.TrimPrefix(command, prefix)
+	if len(body) < 2 || (body[0] != '\'' && body[0] != '"') || body[len(body)-1] != body[0] {
+		return false
+	}
+	body = body[1 : len(body)-1]
+	syncPart, outputPart, ok := strings.Cut(body, "; printf ")
+	if !ok {
+		return false
+	}
+	const syncSuffix = " sync >/dev/null 2>&1"
+	if !strings.HasSuffix(syncPart, syncSuffix) || !isSeekExecutable(strings.TrimSuffix(syncPart, syncSuffix)) {
+		return false
+	}
+	outputPart = strings.Trim(outputPart, "'\"")
+	if outputPart == "{}" {
+		return true
+	}
+	return strings.HasPrefix(outputPart, "{}") && strings.Trim(outputPart[2:], `\`) == "n"
+}
+
+func isSeekExecutable(value string) bool {
+	value = strings.Trim(value, "'\"")
+	value = strings.ReplaceAll(value, `\`, "/")
+	if slash := strings.LastIndex(value, "/"); slash >= 0 {
+		value = value[slash+1:]
+	}
+	return strings.EqualFold(value, "seek") || strings.EqualFold(value, "seek.exe")
 }
 
 func installHook(t hookTarget) error {
@@ -185,11 +263,11 @@ func installHook(t hookTarget) error {
 
 	command := hookCommand(t, seekBinaryPath())
 	if idx := findSeekHookIndex(settings, t.event); idx >= 0 {
-		if t.codexOutput && replaceSeekHookCommand(settings, t.event, idx, command) {
+		if replaceSeekHookCommand(settings, t.event, idx, command, t) {
 			if err := writeHookSettings(path, settings); err != nil {
 				return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 			}
-			fmt.Printf("Updated %s %s hook to return JSON.\n", t.name, t.event)
+			fmt.Printf("Updated %s %s hook.\n", t.name, t.event)
 			return nil
 		}
 		fmt.Printf("%s hook already installed.\n", t.name)
@@ -207,13 +285,21 @@ func installHook(t hookTarget) error {
 		eventHooks = []interface{}{}
 	}
 
+	commandHook := map[string]interface{}{
+		"type":    "command",
+		"command": command,
+	}
+	if t.timeout > 0 {
+		commandHook["timeout"] = t.timeout
+	}
+	if t.statusMessage != "" {
+		commandHook["statusMessage"] = t.statusMessage
+	}
+
 	newHook := map[string]interface{}{
 		"matcher": "",
 		"hooks": []interface{}{
-			map[string]interface{}{
-				"type":    "command",
-				"command": command,
-			},
+			commandHook,
 		},
 	}
 
@@ -224,13 +310,13 @@ func installHook(t hookTarget) error {
 		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
 
-	fmt.Printf("Installed %s %s hook → seek sync\n", t.name, t.event)
+	fmt.Printf("Installed %s %s hook → %s\n", t.name, t.event, command)
 	return nil
 }
 
 // replaceSeekHookCommand upgrades a seek hook in place without disturbing
 // other commands in the same event entry.
-func replaceSeekHookCommand(settings map[string]interface{}, event string, idx int, command string) bool {
+func replaceSeekHookCommand(settings map[string]interface{}, event string, idx int, command string, target hookTarget) bool {
 	hooks := settings["hooks"].(map[string]interface{})
 	eventHooks := hooks[event].([]interface{})
 	entry, ok := eventHooks[idx].(map[string]interface{})
@@ -246,12 +332,26 @@ func replaceSeekHookCommand(settings map[string]interface{}, event string, idx i
 		if !ok {
 			continue
 		}
-		if current, _ := hook["command"].(string); strings.Contains(current, "seek sync") {
+		if current, _ := hook["command"].(string); isSeekHookCommand(current) {
+			changed := false
 			if current == command {
-				return false
+				// Keep the existing command when it already has the desired form.
+			} else {
+				hook["command"] = command
+				changed = true
 			}
-			hook["command"] = command
-			return true
+			if target.timeout > 0 {
+				currentTimeout, ok := hook["timeout"].(float64)
+				if !ok || int(currentTimeout) != target.timeout {
+					hook["timeout"] = target.timeout
+					changed = true
+				}
+			}
+			if target.statusMessage != "" && hook["statusMessage"] != target.statusMessage {
+				hook["statusMessage"] = target.statusMessage
+				changed = true
+			}
+			return changed
 		}
 	}
 	return false
@@ -272,8 +372,25 @@ func uninstallHook(t hookTarget) error {
 
 	hooks := settings["hooks"].(map[string]interface{})
 	eventHooks := hooks[t.event].([]interface{})
+	entry := eventHooks[idx].(map[string]interface{})
+	hookList := entry["hooks"].([]interface{})
+	for hookIdx, hook := range hookList {
+		hookMap, ok := hook.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		command, _ := hookMap["command"].(string)
+		if isSeekHookCommand(command) {
+			hookList = append(hookList[:hookIdx], hookList[hookIdx+1:]...)
+			break
+		}
+	}
 
-	eventHooks = append(eventHooks[:idx], eventHooks[idx+1:]...)
+	if len(hookList) == 0 {
+		eventHooks = append(eventHooks[:idx], eventHooks[idx+1:]...)
+	} else {
+		entry["hooks"] = hookList
+	}
 	if len(eventHooks) == 0 {
 		delete(hooks, t.event)
 	} else {

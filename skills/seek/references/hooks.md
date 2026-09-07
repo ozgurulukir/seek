@@ -21,8 +21,8 @@ seek hooks uninstall --codex
 
 | Agent | Config file | Event |
 |-------|-------------|-------|
-| Claude Code | `~/.claude/settings.json` | `Stop` |
-| Codex | `~/.codex/hooks.json` | `Stop` (wraps `seek sync` and returns `{}` JSON) |
+| Claude Code | `~/.claude/settings.json` | `Stop` (`seek sync`, 60-second timeout, progress status) |
+| Codex | `~/.codex/hooks.json` | `Stop` (`seek hooks sync`, which returns `{}` JSON) |
 
 Both agents use the same Claude-Code-style JSON hook schema:
 
@@ -32,12 +32,12 @@ Both agents use the same Claude-Code-style JSON hook schema:
 
 The installed hook:
 1. Triggers on the `Stop` event (when a Claude Code / Codex conversation ends)
-2. Runs `seek sync` (incremental sync across all collections)
+2. Runs `seek sync` for Claude Code or JSON-only `seek hooks sync` for Codex
 3. Any new conversations are immediately available for search
 
 ## What Gets Modified
 
-**Install adds** to `hooks.Stop` array in `settings.json`:
+**Claude Code install** adds direct `seek sync` to `~/.claude/settings.json`:
 ```json
 {
   "hooks": {
@@ -47,7 +47,9 @@ The installed hook:
         "hooks": [
           {
             "type": "command",
-            "command": "/path/to/seek sync"
+            "command": "/path/to/seek sync",
+            "timeout": 60,
+            "statusMessage": "Syncing seek index..."
           }
         ]
       }
@@ -56,7 +58,11 @@ The installed hook:
 }
 ```
 
-**Uninstall removes** only the seek-specific entry (identified by `"seek sync"` in the command). Other hooks are preserved.
+**Codex install** writes the same event shape to `~/.codex/hooks.json`, but its
+command is `/path/to/seek hooks sync` so stdout is always valid JSON.
+
+**Uninstall removes** only the Seek command from its matching hook entry. Other
+commands and hooks are preserved.
 
 ## Binary Resolution
 
@@ -114,6 +120,6 @@ cat ~/.codex/hooks.json
 
 ## Idempotency
 
-- `seek hooks install` checks if the hook already exists first (per agent). If found, it prints "<agent> hook already installed." and exits without modification. An older direct Codex `seek sync` hook is upgraded in place to its JSON-output wrapper.
-- `seek hooks uninstall` only removes entries containing `"seek sync"`. Other hooks in the config files are preserved.
+- `seek hooks install` checks if the hook already exists first (per agent). If found, it prints "<agent> hook already installed." and exits without modification. Older direct and shell-wrapped Codex hooks are upgraded in place to `seek hooks sync`.
+- `seek hooks uninstall` removes only the Seek command from its matching hook entry. Other commands and hooks in the config files are preserved.
 - If the `Stop` list becomes empty after uninstall, the event key is removed from the file.

@@ -33,9 +33,12 @@ seek hooks install --codex      # only ~/.codex/hooks.json
 seek hooks uninstall            # (--claude / --codex to select)
 ```
 
-Codex hooks suppress `seek sync`'s progress output and return `{}` so that
-Codex receives the JSON its hook runner expects. Re-running the install command
-upgrades an older direct `seek sync` Codex hook in place.
+Codex hooks invoke the JSON-only `seek hooks sync` entry point, which suppresses
+`seek sync` progress output and returns `{}`. Re-running the install command
+upgrades older direct and shell-wrapped Codex hooks in place.
+
+Claude Code continues to run `seek sync` directly, with a 60-second timeout and
+the status message `Syncing seek index...` while it runs.
 
 When Claude Code or Codex finishes a session, `seek sync` runs automatically to parse and index the conversation immediately.
 
