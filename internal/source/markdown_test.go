@@ -19,9 +19,12 @@ func TestScanMarkdown(t *testing.T) {
 	mustWriteContent(t, filepath.Join(dir, "document.pdf"), "fake pdf")
 	mustWriteContent(t, filepath.Join(dir, "source.go"), "package main\n")
 
-	files, err := ScanMarkdown(dir, "")
+	files, issues, err := ScanMarkdown(dir, "")
 	if err != nil {
 		t.Fatalf("ScanMarkdown failed: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("ScanMarkdown issues: %v", issues)
 	}
 
 	if len(files) != 3 {
@@ -61,9 +64,12 @@ func TestScanMarkdown_Pattern(t *testing.T) {
 	mustWriteContent(t, filepath.Join(dir, "log-2024.md"), "# Log 2024\n")
 	mustWriteContent(t, filepath.Join(dir, "notes.txt"), "text file\n")
 
-	files, err := ScanMarkdown(dir, "log-*.md")
+	files, issues, err := ScanMarkdown(dir, "log-*.md")
 	if err != nil {
 		t.Fatalf("ScanMarkdown failed: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("ScanMarkdown issues: %v", issues)
 	}
 
 	if len(files) != 2 {
@@ -83,13 +89,26 @@ func TestScanMarkdown_Empty(t *testing.T) {
 
 	mustWriteContent(t, filepath.Join(dir, "source.go"), "package main\n")
 
-	files, err := ScanMarkdown(dir, "")
+	files, issues, err := ScanMarkdown(dir, "")
 	if err != nil {
 		t.Fatalf("ScanMarkdown failed: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("ScanMarkdown issues: %v", issues)
 	}
 
 	if len(files) != 0 {
 		t.Fatalf("ScanMarkdown returned %d files, want 0", len(files))
+	}
+}
+
+func TestScanMarkdownReportsWalkError(t *testing.T) {
+	files, issues, err := ScanMarkdown(filepath.Join(t.TempDir(), "missing"), "")
+	if err != nil {
+		t.Fatalf("ScanMarkdown: %v", err)
+	}
+	if len(files) != 0 || len(issues) != 1 {
+		t.Fatalf("files=%d issues=%d, want 0 files and 1 issue", len(files), len(issues))
 	}
 }
 

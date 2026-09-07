@@ -15,7 +15,17 @@ const (
 
 	TitleMaxLen        = 100
 	ImageContextMaxLen = 500
+
+	markdownMaxFileSize = 50 * 1024 * 1024
+	documentMaxFileSize = 500 * 1024 * 1024
 )
+
+// ScanIssue identifies an I/O failure encountered while scanning a collection.
+// The scan continues so healthy files can still be indexed.
+type ScanIssue struct {
+	Path string
+	Err  error
+}
 
 // ConversationImage represents an image extracted from a conversation.
 type ConversationImage struct {

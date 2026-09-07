@@ -2,7 +2,7 @@ package source
 
 import (
 	"crypto/sha256"
-	"fmt"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,16 +18,18 @@ type FileInfo struct {
 }
 
 // ScanMarkdown scans a directory for markdown files matching the pattern.
-func ScanMarkdown(dir, pattern string) ([]FileInfo, error) {
+func ScanMarkdown(dir, pattern string) ([]FileInfo, []ScanIssue, error) {
 	if pattern == "" {
 		pattern = "**/*.md"
 	}
 
 	var files []FileInfo
+	var issues []ScanIssue
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // skip errors
+			issues = append(issues, ScanIssue{Path: path, Err: err})
+			return nil
 		}
 		if info.IsDir() {
 			return nil
@@ -48,12 +50,13 @@ func ScanMarkdown(dir, pattern string) ([]FileInfo, error) {
 		}
 
 		// Skip files larger than 50MB to avoid memory pressure.
-		if info.Size() > 50*1024*1024 {
+		if info.Size() > markdownMaxFileSize {
 			return nil
 		}
 
 		data, err := os.ReadFile(path)
 		if err != nil {
+			issues = append(issues, ScanIssue{Path: path, Err: err})
 			return nil
 		}
 		content := string(data)
@@ -65,7 +68,7 @@ func ScanMarkdown(dir, pattern string) ([]FileInfo, error) {
 			Path:        path,
 			Title:       title,
 			Content:     content,
-			ContentHash: fmt.Sprintf("%x", hash),
+			ContentHash: hex.EncodeToString(hash[:]),
 			Mtime:       float64(info.ModTime().UnixNano()) / 1e9,
 			LineCount:   strings.Count(content, "\n") + 1,
 		})
@@ -73,7 +76,7 @@ func ScanMarkdown(dir, pattern string) ([]FileInfo, error) {
 		return nil
 	})
 
-	return files, err
+	return files, issues, err
 }
 
 func extractMarkdownTitle(content, path string) string {

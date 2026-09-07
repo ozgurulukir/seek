@@ -130,21 +130,21 @@ func (idx *Indexer) WithLogger(l Logger) *Indexer {
 
 func (idx *Indexer) SyncCollection(col *store.Collection) error {
 	switch col.Type {
-	case "markdown":
+	case store.CollectionTypeMarkdown:
 		return idx.syncMarkdown(col)
-	case "claude":
+	case store.CollectionTypeClaude:
 		return idx.syncClaude(col)
-	case "codex":
+	case store.CollectionTypeCodex:
 		return idx.syncCodex(col)
-	case "images":
+	case store.CollectionTypeImages:
 		return idx.syncImage(col)
-	case "pdf":
+	case store.CollectionTypePDF:
 		return idx.syncPdf(col)
-	case "documents":
+	case store.CollectionTypeDocuments:
 		return idx.syncDocuments(col)
-	case "code":
+	case store.CollectionTypeCode:
 		return idx.syncCode(col)
-	case "parser":
+	case store.CollectionTypeParser:
 		return idx.syncParserDef(col)
 	default:
 		return fmt.Errorf("unknown collection type: %s", col.Type)
@@ -363,7 +363,7 @@ func (idx *Indexer) syncCodex(col *store.Collection) error {
 }
 
 func (idx *Indexer) syncMarkdown(col *store.Collection) error {
-	files, err := source.ScanMarkdown(col.Path, col.Pattern)
+	files, scanIssues, err := source.ScanMarkdown(col.Path, col.Pattern)
 	if err != nil {
 		return err
 	}
@@ -372,9 +372,16 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-	idx.cleanupOrphans(col.ID, diskPaths, "documents")
+	if len(scanIssues) == 0 {
+		idx.cleanupOrphans(col.ID, diskPaths, "documents")
+	} else {
+		for _, issue := range scanIssues {
+			idx.log.Printf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
+		}
+	}
 
 	var indexed, skipped, failed int
+	failed += len(scanIssues)
 	for _, f := range files {
 		existing, err := idx.db.GetDocument(col.ID, f.Path)
 		if err == nil && existing.ContentHash == f.ContentHash {
@@ -553,7 +560,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 // upsert → FTS → markdown-chunk → insert. xberg returns markdown, which chunks
 // well and preserves structure (headings, tables, lists).
 func (idx *Indexer) syncDocuments(col *store.Collection) error {
-	files, err := source.ScanDocuments(col.Path)
+	files, scanIssues, err := source.ScanDocuments(col.Path)
 	if err != nil {
 		return err
 	}
@@ -562,7 +569,13 @@ func (idx *Indexer) syncDocuments(col *store.Collection) error {
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-	idx.cleanupOrphans(col.ID, diskPaths, "documents")
+	if len(scanIssues) == 0 {
+		idx.cleanupOrphans(col.ID, diskPaths, "documents")
+	} else {
+		for _, issue := range scanIssues {
+			idx.log.Printf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
+		}
+	}
 
 	ext, err := idx.extractorFor(col)
 	if err != nil {
@@ -570,6 +583,7 @@ func (idx *Indexer) syncDocuments(col *store.Collection) error {
 	}
 
 	var indexed, skipped, failed, unsupported int
+	failed += len(scanIssues)
 	for _, f := range files {
 		status := idx.syncDocumentFile(col, f, ext)
 		switch status {

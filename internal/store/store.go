@@ -1486,7 +1486,7 @@ func cosineSimilarity(a, b []float32) float64 {
 	}
 	sim := vek32.CosineSimilarity(a, b)
 	// NaN on zero-magnitude inputs; guard to keep prior behavior.
-	if sim != sim {
+	if math.IsNaN(float64(sim)) {
 		return 0
 	}
 	return float64(sim)

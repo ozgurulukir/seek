@@ -2,7 +2,7 @@ package source
 
 import (
 	"crypto/sha256"
-	"fmt"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,10 +56,15 @@ var documentExtensions = map[string]bool{
 // not extract text — that is the extractor backend's job (see internal/extractor).
 // Like ScanImages/ScanPdfs, it hashes file contents so the indexer can skip
 // unchanged files.
-func ScanDocuments(dir string) ([]DocumentFile, error) {
+func ScanDocuments(dir string) ([]DocumentFile, []ScanIssue, error) {
 	var files []DocumentFile
+	var issues []ScanIssue
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil {
+			issues = append(issues, ScanIssue{Path: path, Err: err})
+			return nil
+		}
+		if info.IsDir() {
 			return nil
 		}
 
@@ -69,13 +74,14 @@ func ScanDocuments(dir string) ([]DocumentFile, error) {
 		}
 
 		// Skip files larger than 500MB to avoid memory pressure.
-		if info.Size() > 500*1024*1024 {
+		if info.Size() > documentMaxFileSize {
 			return nil
 		}
 
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil // skip unreadable files; matches ScanImages behavior
+			issues = append(issues, ScanIssue{Path: path, Err: err})
+			return nil
 		}
 		hash := sha256.Sum256(data)
 
@@ -85,10 +91,10 @@ func ScanDocuments(dir string) ([]DocumentFile, error) {
 		files = append(files, DocumentFile{
 			Path:        path,
 			Name:        name,
-			ContentHash: fmt.Sprintf("%x", hash),
+			ContentHash: hex.EncodeToString(hash[:]),
 			Mtime:       float64(info.ModTime().UnixNano()) / 1e9,
 		})
 		return nil
 	})
-	return files, err
+	return files, issues, err
 }

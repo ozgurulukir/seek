@@ -2,7 +2,7 @@ package source
 
 import (
 	"crypto/sha256"
-	"fmt"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +43,7 @@ func ScanPdfs(dir string) ([]PdfFile, error) {
 		files = append(files, PdfFile{
 			Path:        path,
 			Name:        name,
-			ContentHash: fmt.Sprintf("%x", hash),
+			ContentHash: hex.EncodeToString(hash[:]),
 			Mtime:       float64(info.ModTime().UnixNano()) / 1e9,
 		})
 		return nil

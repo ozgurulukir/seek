@@ -25,9 +25,12 @@ func TestScanDocuments(t *testing.T) {
 	// Nested directory — should be walked.
 	mustWrite(t, filepath.Join(dir, "sub", "deep.docx"))
 
-	files, err := ScanDocuments(dir)
+	files, issues, err := ScanDocuments(dir)
 	if err != nil {
 		t.Fatalf("ScanDocuments: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("ScanDocuments issues: %v", issues)
 	}
 	if got, want := len(files), 8; got != want {
 		t.Fatalf("ScanDocuments = %d files, want %d", got, want)
@@ -56,9 +59,12 @@ func TestScanDocuments_CaseInsensitive(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "upper.DOCX"))
 	mustWrite(t, filepath.Join(dir, "mixed.Docx"))
 
-	files, err := ScanDocuments(dir)
+	files, issues, err := ScanDocuments(dir)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("ScanDocuments issues: %v", issues)
 	}
 	if len(files) != 2 {
 		t.Fatalf("ScanDocuments = %d, want 2 (case-insensitive ext)", len(files))
@@ -66,12 +72,25 @@ func TestScanDocuments_CaseInsensitive(t *testing.T) {
 }
 
 func TestScanDocuments_EmptyDir(t *testing.T) {
-	files, err := ScanDocuments(t.TempDir())
+	files, issues, err := ScanDocuments(t.TempDir())
 	if err != nil {
 		t.Fatalf("ScanDocuments empty dir: %v", err)
 	}
+	if len(issues) != 0 {
+		t.Fatalf("ScanDocuments issues: %v", issues)
+	}
 	if len(files) != 0 {
 		t.Errorf("ScanDocuments empty dir = %d files, want 0", len(files))
+	}
+}
+
+func TestScanDocumentsReportsWalkError(t *testing.T) {
+	files, issues, err := ScanDocuments(filepath.Join(t.TempDir(), "missing"))
+	if err != nil {
+		t.Fatalf("ScanDocuments: %v", err)
+	}
+	if len(files) != 0 || len(issues) != 1 {
+		t.Fatalf("files=%d issues=%d, want 0 files and 1 issue", len(files), len(issues))
 	}
 }
 

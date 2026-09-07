@@ -3,7 +3,7 @@ package source
 import (
 	"bytes"
 	"crypto/sha256"
-	"fmt"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -301,7 +301,7 @@ func processCodeFile(path, relPath string, info os.FileInfo, pattern string) (*C
 		RelativePath: normRel,
 		Title:        normRel,
 		Content:      content,
-		ContentHash:  fmt.Sprintf("%x", hash),
+		ContentHash:  hex.EncodeToString(hash[:]),
 		Mtime:        float64(info.ModTime().UnixNano()) / 1e9,
 		LineCount:    strings.Count(content, "\n") + 1,
 		Language:     lang,
