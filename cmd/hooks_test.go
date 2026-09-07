@@ -2,12 +2,16 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ozgurulukir/seek/internal/config"
 )
 
 func newTestTarget(t *testing.T, name string) hookTarget {
@@ -22,9 +26,7 @@ func newTestTarget(t *testing.T, name string) hookTarget {
 }
 
 func newCodexTestTarget(t *testing.T) hookTarget {
-	tgt := newTestTarget(t, "Codex")
-	tgt.codexOutput = true
-	return tgt
+	return newTestTarget(t, "Codex")
 }
 
 func newClaudeFixtureTarget(t *testing.T) hookTarget {
@@ -32,9 +34,10 @@ func newClaudeFixtureTarget(t *testing.T) hookTarget {
 	path := filepath.Join(dir, ".claude", "settings.json")
 	return hookTarget{
 		name:          "Claude Code",
+		agent:         "claude",
 		settingsPath:  func() string { return path },
 		event:         "Stop",
-		timeout:       60,
+		timeout:       600,
 		statusMessage: "Syncing seek index...",
 	}
 }
@@ -44,9 +47,9 @@ func newCodexFixtureTarget(t *testing.T) hookTarget {
 	path := filepath.Join(dir, ".codex", "hooks.json")
 	return hookTarget{
 		name:         "Codex",
+		agent:        "codex",
 		settingsPath: func() string { return path },
 		event:        "Stop",
-		codexOutput:  true,
 	}
 }
 
@@ -110,14 +113,14 @@ func TestInstallHook_ClaudeFixtureIncludesStatusAndTimeout(t *testing.T) {
 
 	settings := readTestSettings(t, tgt.settingsPath())
 	command := settings["hooks"].(map[string]interface{})["Stop"].([]interface{})[0].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})
-	if got := command["timeout"]; got != float64(60) {
-		t.Errorf("timeout = %v, want 60", got)
+	if got := command["timeout"]; got != float64(600) {
+		t.Errorf("timeout = %v, want 600", got)
 	}
 	if got := command["statusMessage"]; got != "Syncing seek index..." {
 		t.Errorf("statusMessage = %v", got)
 	}
-	if got := command["command"].(string); !strings.HasSuffix(got, " sync") || strings.Contains(got, " hooks sync") {
-		t.Errorf("Claude command = %q, want direct seek sync", got)
+	if got := command["command"].(string); !strings.Contains(got, " hooks sync --agent claude") {
+		t.Errorf("Claude command = %q, want agent-scoped seek hooks sync", got)
 	}
 }
 
@@ -131,8 +134,8 @@ func TestInstallHook_UpgradesExistingClaudeFixture(t *testing.T) {
 
 	settings := readTestSettings(t, tgt.settingsPath())
 	command := settings["hooks"].(map[string]interface{})["Stop"].([]interface{})[0].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})
-	if got := command["timeout"]; got != float64(60) {
-		t.Errorf("timeout = %v, want 60", got)
+	if got := command["timeout"]; got != float64(600) {
+		t.Errorf("timeout = %v, want 600", got)
 	}
 	if got := command["statusMessage"]; got != "Syncing seek index..." {
 		t.Errorf("statusMessage = %v", got)
@@ -189,6 +192,8 @@ func TestSeekHookCommandMatchesQuotedPaths(t *testing.T) {
 		"'/Applications/Seek Tools/seek' hooks sync",
 		`"C:\Program Files\Seek\seek.exe" sync`,
 		`"C:\Program Files\Seek\seek.exe" hooks sync`,
+		`"C:\Program Files\Seek\seek.exe" hooks sync --agent codex --embed`,
+		`"C:\Program Files\Seek\seek.exe" hooks context --agent codex`,
 		`sh -c "/Applications/Seek Tools/seek sync >/dev/null 2>&1; printf '{}\\n'"`,
 	} {
 		if !isSeekHookCommand(command) {
@@ -212,6 +217,162 @@ func TestInstallHook_Idempotent(t *testing.T) {
 	stop := hooks["Stop"].([]interface{})
 	if len(stop) != 1 {
 		t.Fatalf("expected 1 Stop entry after duplicate install, got %d", len(stop))
+	}
+}
+
+func TestInstallHook_PreservesEmbedOnRepair(t *testing.T) {
+	tgt := newClaudeFixtureTarget(t)
+	tgt.embed = true
+	if err := installHook(tgt); err != nil {
+		t.Fatalf("install embedded hook: %v", err)
+	}
+	tgt.embed = false
+	if err := installHook(tgt); err != nil {
+		t.Fatalf("repair hook: %v", err)
+	}
+	settings := readTestSettings(t, tgt.settingsPath())
+	command := settings["hooks"].(map[string]interface{})["Stop"].([]interface{})[0].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})["command"].(string)
+	if !strings.Contains(command, "--embed") {
+		t.Errorf("repair removed --embed from %q", command)
+	}
+}
+
+func TestTargetHookDoesNotAcceptLegacyCommand(t *testing.T) {
+	target := newCodexFixtureTarget(t)
+	settings := map[string]interface{}{
+		"hooks": map[string]interface{}{
+			"Stop": []interface{}{map[string]interface{}{
+				"hooks": []interface{}{map[string]interface{}{"command": "seek sync"}},
+			}},
+		},
+	}
+	if findSeekHookIndex(settings, target.event) < 0 {
+		t.Fatal("legacy hook must remain discoverable for upgrade")
+	}
+	if findTargetSeekHookIndex(settings, target) >= 0 {
+		t.Fatal("legacy hook must not be reported as a current target hook")
+	}
+}
+
+func TestAcquireHookLockDoesNotReclaimOldLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks", "codex.lock")
+	lock, err := acquireHookLock(context.Background(), path)
+	if err != nil {
+		t.Fatalf("acquire first lock: %v", err)
+	}
+	old := time.Now().Add(-24 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatalf("age lock: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := acquireHookLock(ctx, path); err == nil {
+		t.Fatal("active old lock was acquired")
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatalf("release lock: %v", err)
+	}
+	if replacement, err := acquireHookLock(context.Background(), path); err != nil {
+		t.Fatalf("acquire released lock: %v", err)
+	} else if err := replacement.Close(); err != nil {
+		t.Fatalf("release replacement lock: %v", err)
+	}
+}
+
+func TestHookSyncLockIsSharedAcrossAgents(t *testing.T) {
+	cfg := &config.AppConfig{CacheDir: t.TempDir()}
+	if got, want := hookSyncLockPath(cfg), filepath.Join(cfg.CacheDir, "hooks", "sync.lock"); got != want {
+		t.Errorf("lock path = %q, want %q", got, want)
+	}
+}
+
+func TestHookCommandBinary(t *testing.T) {
+	target := newClaudeFixtureTarget(t)
+	settings := map[string]interface{}{
+		"hooks": map[string]interface{}{
+			"Stop": []interface{}{map[string]interface{}{
+				"hooks": []interface{}{map[string]interface{}{"command": `"C:\Program Files\Seek\seek.exe" hooks sync --agent claude`}},
+			}},
+		},
+	}
+	if got, ok := hookCommandBinary(settings, target); !ok || got != `C:\Program Files\Seek\seek.exe` {
+		t.Errorf("hookCommandBinary = (%q, %t)", got, ok)
+	}
+}
+
+func TestHookPrompt(t *testing.T) {
+	if got := hookPrompt([]byte(`{"prompt":"find this"}`)); got != "find this" {
+		t.Errorf("prompt = %q", got)
+	}
+	if got := hookPrompt([]byte(`not json`)); got != "" {
+		t.Errorf("invalid prompt = %q, want empty", got)
+	}
+}
+
+func TestHookSearchArgsScopesAgent(t *testing.T) {
+	args := hookSearchArgs("claude", "find this")
+	if got, want := strings.Join(args, " "), "search find this --lex -l 3 --doc-type claude"; got != want {
+		t.Errorf("search args = %q, want %q", got, want)
+	}
+}
+
+func TestHookContextResponseUsesSpecificOutputEnvelope(t *testing.T) {
+	response := hookContextResponse("relevant context")
+	if response["additionalContext"] != "relevant context" {
+		t.Errorf("top-level context = %#v", response["additionalContext"])
+	}
+	specific, ok := response["hookSpecificOutput"].(map[string]string)
+	if !ok || specific["hookEventName"] != "UserPromptSubmit" || specific["additionalContext"] != "relevant context" {
+		t.Errorf("hook-specific response = %#v", response["hookSpecificOutput"])
+	}
+}
+
+func TestHookRuntimeBinaryPreservesAbsoluteArgv0(t *testing.T) {
+	if got := hookRuntimeBinaryFor(`/opt/seek/bin/seek`, "seek"); got != `/opt/seek/bin/seek` {
+		t.Errorf("runtime binary = %q", got)
+	}
+	if got := hookRuntimeBinaryFor("seek", "/opt/seek/bin/seek"); got != "/opt/seek/bin/seek" {
+		t.Errorf("PATH fallback binary = %q", got)
+	}
+}
+
+func TestWithHookLockEnvReplacesExistingValue(t *testing.T) {
+	env := withHookLockEnv([]string{"PATH=/bin", hookLockEnv + "=0"})
+	count := 0
+	for _, value := range env {
+		if strings.HasPrefix(value, hookLockEnv+"=") {
+			count++
+			if value != hookLockEnv+"=1" {
+				t.Errorf("lock env = %q", value)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("lock env entries = %d, want 1", count)
+	}
+}
+
+func TestRecordHookSkip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claude.json")
+	completed := time.Now().Add(-time.Minute).Round(0)
+	if err := writeHookState(path, hookState{Agent: "claude", CompletedAt: completed}); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	recordHookSkip(path, hookState{Agent: "claude", CompletedAt: completed}, "debounced")
+	state, ok := readHookState(path)
+	if !ok || state.SkippedReason != "debounced" || !state.LastAttemptAt.After(completed) {
+		t.Errorf("skip state = %#v, ok=%t", state, ok)
+	}
+}
+
+func TestLimitedWriterCapsRetainedOutput(t *testing.T) {
+	var output bytes.Buffer
+	writer := &limitedWriter{writer: &output, remaining: 3}
+	if n, err := writer.Write([]byte("abcdef")); err != nil || n != 6 {
+		t.Fatalf("Write = (%d, %v), want (6, nil)", n, err)
+	}
+	if got := output.String(); got != "abc" {
+		t.Errorf("output = %q, want %q", got, "abc")
 	}
 }
 
@@ -424,11 +585,11 @@ func TestSelectedTargets(t *testing.T) {
 		t.Errorf("no flags: got %d targets, want %d", len(all), len(hookTargets))
 	}
 	claudeOnly := selectedTargets(true, false)
-	if len(claudeOnly) != 1 || claudeOnly[0].name != "Claude Code" {
+	if len(claudeOnly) != 2 || claudeOnly[0].name != "Claude Code" || claudeOnly[1].event != "UserPromptSubmit" {
 		t.Errorf("--claude: got %v", claudeOnly)
 	}
 	codexOnly := selectedTargets(false, true)
-	if len(codexOnly) != 1 || codexOnly[0].name != "Codex" {
+	if len(codexOnly) != 2 || codexOnly[0].name != "Codex" || codexOnly[1].event != "UserPromptSubmit" {
 		t.Errorf("--codex: got %v", codexOnly)
 	}
 }

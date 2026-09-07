@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -10,12 +12,26 @@ import (
 )
 
 type EmbedCmd struct {
-	Force    bool `short:"f" help:"Force re-embed all chunks"`
-	Batch    bool `short:"b" default:"true" help:"Use batch API (50% cheaper, async) — text-only models"`
-	Realtime bool `short:"r" help:"Use realtime API (synchronous, immediate)"`
+	Type     string `help:"Embed only chunks from collections of this type"`
+	Force    bool   `short:"f" help:"Force re-embed all chunks"`
+	Batch    bool   `short:"b" default:"true" help:"Use batch API (50% cheaper, async) — text-only models"`
+	Realtime bool   `short:"r" help:"Use realtime API (synchronous, immediate)"`
+	NoLock   bool   `hidden:""`
 }
 
 func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
+	if c.NoLock && os.Getenv(hookLockEnv) != "1" {
+		return fmt.Errorf("--no-lock is reserved for internal hook execution")
+	}
+	if !c.NoLock {
+		ctx, cancel := context.WithTimeout(context.Background(), hookLockWaitTimeout)
+		defer cancel()
+		lock, err := acquireHookLock(ctx, hookSyncLockPath(cfg))
+		if err != nil {
+			return fmt.Errorf("acquire writer lock: %w", err)
+		}
+		defer lock.Close()
+	}
 	db, err := store.Open(cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
@@ -34,7 +50,12 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
 	}
 
 	// Get chunks that need embedding
-	chunks, err := db.GetChunksWithoutEmbedding(c.Force)
+	var chunks []store.Chunk
+	if c.Type == "" {
+		chunks, err = db.GetChunksWithoutEmbedding(c.Force)
+	} else {
+		chunks, err = db.GetChunksWithoutEmbeddingForCollectionType(store.CollectionType(c.Type), c.Force)
+	}
 	if err != nil {
 		return fmt.Errorf("get chunks: %w", err)
 	}

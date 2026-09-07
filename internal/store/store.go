@@ -1411,11 +1411,34 @@ func (s *Store) UpdateChunkEmbedding(chunkID int64, embedding []float32) error {
 // GetChunksWithoutEmbedding returns chunks that don't have embeddings yet.
 // If force is true, returns all chunks.
 func (s *Store) GetChunksWithoutEmbedding(force bool) ([]Chunk, error) {
-	query := `SELECT id, document_id, seq, content, content_zstd, COALESCE(chunk_type, ?), COALESCE(image_path, '') FROM chunks WHERE embedding IS NULL`
-	if force {
-		query = `SELECT id, document_id, seq, content, content_zstd, COALESCE(chunk_type, ?), COALESCE(image_path, '') FROM chunks`
+	return s.getChunksWithoutEmbedding(force, "", false)
+}
+
+// GetChunksWithoutEmbeddingForCollectionType returns chunks from collections
+// of typ whose embeddings are missing (or all chunks when force is true).
+func (s *Store) GetChunksWithoutEmbeddingForCollectionType(typ CollectionType, force bool) ([]Chunk, error) {
+	return s.getChunksWithoutEmbedding(force, typ, true)
+}
+
+func (s *Store) getChunksWithoutEmbedding(force bool, typ CollectionType, filterType bool) ([]Chunk, error) {
+	query := `SELECT chunks.id, chunks.document_id, chunks.seq, chunks.content, chunks.content_zstd, COALESCE(chunks.chunk_type, ?), COALESCE(chunks.image_path, '') FROM chunks`
+	args := []interface{}{ChunkTypeText}
+	if filterType {
+		query += " JOIN documents d ON d.id = chunks.document_id JOIN collections c ON c.id = d.collection_id"
 	}
-	rows, err := s.db.Query(query, ChunkTypeText)
+	if !force {
+		query += " WHERE chunks.embedding IS NULL"
+	}
+	if filterType {
+		if force {
+			query += " WHERE"
+		} else {
+			query += " AND"
+		}
+		query += " c.type = ?"
+		args = append(args, typ)
+	}
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

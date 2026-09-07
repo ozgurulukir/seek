@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -12,6 +13,14 @@ type RmCmd struct {
 }
 
 func (c *RmCmd) Run(cfg *config.AppConfig) error {
+	ctx, cancel := context.WithTimeout(context.Background(), hookLockWaitTimeout)
+	defer cancel()
+	lock, err := acquireHookLock(ctx, hookSyncLockPath(cfg))
+	if err != nil {
+		return fmt.Errorf("acquire writer lock: %w", err)
+	}
+	defer lock.Close()
+
 	db, err := store.Open(cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)

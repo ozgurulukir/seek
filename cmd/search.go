@@ -71,11 +71,6 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 		vi, err := store.NewVectorIndex(cfg)
 		if err == nil {
 			db.SetVectorIndex(vi)
-			defer func() {
-				if err := vi.Save(cfg.Config.VectorIndex.HNSW.PersistPath); err != nil {
-					fmt.Fprintf(os.Stderr, "  WARN: failed to persist vector index: %v\n", err)
-				}
-			}()
 		}
 	}
 

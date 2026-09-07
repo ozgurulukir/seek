@@ -1,12 +1,15 @@
 # AI Agent Hooks (Claude Code & Codex)
 
-Hooks automatically run `seek sync` every time an AI coding agent finishes a conversation (`Stop` event). This keeps your conversation history indexed in near real-time.
+Hooks keep each agent's conversation collection fresh when that agent finishes a conversation (`Stop`), and can add relevant local context before a prompt is submitted (`UserPromptSubmit`).
 
 ## Commands
 
 ```bash
 # Install hooks for all supported agents (Claude Code + Codex)
 seek hooks install
+
+# Also keep semantic search current (uses the configured embedding provider)
+seek hooks install --embed
 
 # Install for only one agent
 seek hooks install --claude
@@ -15,14 +18,16 @@ seek hooks install --codex
 # Uninstall (same flag selection)
 seek hooks uninstall
 seek hooks uninstall --codex
+seek hooks status
+seek hooks doctor
 ```
 
 ## How It Works
 
 | Agent | Config file | Event |
 |-------|-------------|-------|
-| Claude Code | `~/.claude/settings.json` | `Stop` (`seek sync`, 60-second timeout, progress status) |
-| Codex | `~/.codex/hooks.json` | `Stop` (`seek hooks sync`, which returns `{}` JSON) |
+| Claude Code | `~/.claude/settings.json` | `Stop` + `UserPromptSubmit` |
+| Codex | `~/.codex/hooks.json` | `Stop` + `UserPromptSubmit` |
 
 Both agents use the same Claude-Code-style JSON hook schema:
 
@@ -30,14 +35,15 @@ Both agents use the same Claude-Code-style JSON hook schema:
 { "hooks": { "Stop": [ { "matcher": "", "hooks": [ { "type": "command", "command": "..." } ] } ] } }
 ```
 
-The installed hook:
-1. Triggers on the `Stop` event (when a Claude Code / Codex conversation ends)
-2. Runs `seek sync` for Claude Code or JSON-only `seek hooks sync` for Codex
-3. Any new conversations are immediately available for search
+The installed hooks:
+1. On `Stop`, run `seek hooks sync --agent <agent>` for only that agent's collections.
+2. Debounce repeated stops for 15 seconds and record the last outcome; inspect it with `seek hooks status`.
+3. On `UserPromptSubmit`, search the local index and provide capped relevant context to the agent.
+4. With `seek hooks install --embed`, run a realtime embedding refresh for the same agent collection after sync.
 
 ## What Gets Modified
 
-**Claude Code install** adds direct `seek sync` to `~/.claude/settings.json`:
+**Claude Code install** adds agent-scoped hook commands to `~/.claude/settings.json`:
 ```json
 {
   "hooks": {
@@ -47,8 +53,8 @@ The installed hook:
         "hooks": [
           {
             "type": "command",
-            "command": "/path/to/seek sync",
-            "timeout": 60,
+            "command": "/path/to/seek hooks sync --agent claude",
+            "timeout": 600,
             "statusMessage": "Syncing seek index..."
           }
         ]
@@ -58,8 +64,9 @@ The installed hook:
 }
 ```
 
-**Codex install** writes the same event shape to `~/.codex/hooks.json`, but its
-command is `/path/to/seek hooks sync` so stdout is always valid JSON.
+**Codex install** writes the same event shape to `~/.codex/hooks.json`. Its commands
+use `seek hooks sync --agent codex` and `seek hooks context --agent codex`; the wrapper
+always writes valid JSON so Codex can consume the hook response safely.
 
 **Uninstall removes** only the Seek command from its matching hook entry. Other
 commands and hooks are preserved.
@@ -84,7 +91,7 @@ The path is stored as the resolved absolute path (evaluating symlinks) so the ho
 **Recommended setup: both!**
 - Use **hooks** for immediate indexing after Claude Code / Codex conversations
 - Use **service** for:
-  - Periodic `embed` (hooks only run `sync`)
+  - Periodic embedding, unless hooks were installed with `--embed`
   - Catch-up sync for code/markdown collections modified outside agents
   - Agents without hook support (opencode, copilot-cli, zed — use the service for those)
 
@@ -93,15 +100,15 @@ The path is stored as the resolved absolute path (evaluating symlinks) so the ho
 **Hook not running?**
 
 ```bash
-# Verify hook is installed
-cat ~/.claude/settings.json | grep -A10 "seek sync"
-cat ~/.codex/hooks.json | grep -A10 "seek sync"
+# Verify configuration and the last hook outcome
+seek hooks doctor
+seek hooks status
 
 # Check that seek is in PATH for the agent environment
 which seek
 
-# Try manually running what the hook runs
-seek sync
+# Try manually running the Claude hook action
+seek hooks sync --agent claude
 ```
 
 **Hook was installed but isn't there anymore?**
@@ -120,6 +127,6 @@ cat ~/.codex/hooks.json
 
 ## Idempotency
 
-- `seek hooks install` checks if the hook already exists first (per agent). If found, it prints "<agent> hook already installed." and exits without modification. Older direct and shell-wrapped Codex hooks are upgraded in place to `seek hooks sync`.
+- `seek hooks install` leaves a current hook unchanged, but upgrades older direct, shell-wrapped, or unscoped hooks in place to agent-scoped `seek hooks sync --agent <agent>` commands.
 - `seek hooks uninstall` removes only the Seek command from its matching hook entry. Other commands and hooks in the config files are preserved.
 - If the `Stop` list becomes empty after uninstall, the event key is removed from the file.

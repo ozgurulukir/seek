@@ -37,6 +37,50 @@ func insertVecDoc(t *testing.T, s *Store, title string, embs [][]float32) {
 	}
 }
 
+func TestGetChunksWithoutEmbeddingForCollectionType(t *testing.T) {
+	s := newTestStore(t)
+	claude, err := s.CreateCollection("claude", CollectionTypeClaude, "/tmp", "")
+	if err != nil {
+		t.Fatalf("CreateCollection claude: %v", err)
+	}
+	codex, err := s.CreateCollection("codex", CollectionTypeCodex, "/tmp", "")
+	if err != nil {
+		t.Fatalf("CreateCollection codex: %v", err)
+	}
+	claudeDoc, err := s.UpsertDocument(claude.ID, "/tmp/claude.jsonl", "Claude", "claude", 1, 1)
+	if err != nil {
+		t.Fatalf("UpsertDocument claude: %v", err)
+	}
+	codexDoc, err := s.UpsertDocument(codex.ID, "/tmp/codex.jsonl", "Codex", "codex", 1, 1)
+	if err != nil {
+		t.Fatalf("UpsertDocument codex: %v", err)
+	}
+	if err := s.InsertChunk(claudeDoc, 0, "claude missing", nil); err != nil {
+		t.Fatalf("InsertChunk claude missing: %v", err)
+	}
+	if err := s.InsertChunk(claudeDoc, 1, "claude embedded", []float32{1}); err != nil {
+		t.Fatalf("InsertChunk claude embedded: %v", err)
+	}
+	if err := s.InsertChunk(codexDoc, 0, "codex missing", nil); err != nil {
+		t.Fatalf("InsertChunk codex missing: %v", err)
+	}
+
+	missing, err := s.GetChunksWithoutEmbeddingForCollectionType(CollectionTypeClaude, false)
+	if err != nil {
+		t.Fatalf("GetChunksWithoutEmbeddingForCollectionType missing: %v", err)
+	}
+	if len(missing) != 1 || missing[0].DocumentID != claudeDoc {
+		t.Errorf("missing chunks = %#v, want only Claude missing chunk", missing)
+	}
+	all, err := s.GetChunksWithoutEmbeddingForCollectionType(CollectionTypeClaude, true)
+	if err != nil {
+		t.Fatalf("GetChunksWithoutEmbeddingForCollectionType force: %v", err)
+	}
+	if len(all) != 2 {
+		t.Errorf("force chunks = %d, want 2 Claude chunks", len(all))
+	}
+}
+
 // cosineSimilarity edge cases must keep returning 0 (not panic / NaN),
 // matching prior hand-rolled behavior after switching to vek32.
 func TestCosineSimilarityEdgeCases(t *testing.T) {
