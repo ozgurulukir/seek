@@ -212,7 +212,6 @@ func (c *HooksContextCmd) Run(cfg *config.AppConfig) error {
 
 func hookContextResponse(contextText string) map[string]interface{} {
 	return map[string]interface{}{
-		"additionalContext": contextText,
 		"hookSpecificOutput": map[string]string{
 			"hookEventName":     "UserPromptSubmit",
 			"additionalContext": contextText,

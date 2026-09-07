@@ -318,8 +318,8 @@ func TestHookSearchArgsScopesAgent(t *testing.T) {
 
 func TestHookContextResponseUsesSpecificOutputEnvelope(t *testing.T) {
 	response := hookContextResponse("relevant context")
-	if response["additionalContext"] != "relevant context" {
-		t.Errorf("top-level context = %#v", response["additionalContext"])
+	if _, ok := response["additionalContext"]; ok {
+		t.Fatalf("unexpected top-level additionalContext: %#v", response["additionalContext"])
 	}
 	specific, ok := response["hookSpecificOutput"].(map[string]string)
 	if !ok || specific["hookEventName"] != "UserPromptSubmit" || specific["additionalContext"] != "relevant context" {
