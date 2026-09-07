@@ -1,11 +1,37 @@
 package source
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestParseCodexFileLargeJSONLLine(t *testing.T) {
+	content := strings.Repeat("x", 2*1024*1024)
+	line, err := json.Marshal(map[string]any{
+		"type": "response_item",
+		"payload": map[string]any{
+			"role": "user",
+			"content": []map[string]string{{
+				"type": "input_text",
+				"text": content,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal JSONL line: %v", err)
+	}
+
+	msgs, _, err := ParseCodexFile(writeTempFile(t, string(line)), 0)
+	if err != nil {
+		t.Fatalf("ParseCodexFile: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Content != content {
+		t.Fatalf("unexpected parsed messages: %d", len(msgs))
+	}
+}
 
 func TestParseCodexFileUserInputText(t *testing.T) {
 	lines := []string{

@@ -1,8 +1,10 @@
 package parserdef
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +29,37 @@ func writeJSONLFile(t *testing.T, dir, name string, lines []string) string {
 	mtime := time.Now().Add(-1 * time.Second)
 	os.Chtimes(path, mtime, mtime)
 	return path
+}
+
+func TestScanJSONLFileLargeMessageLine(t *testing.T) {
+	dir := t.TempDir()
+	line, err := json.Marshal(map[string]any{
+		"type": "user",
+		"message": map[string]string{
+			"role":    "user",
+			"content": strings.Repeat("x", 2*1024*1024),
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal JSONL line: %v", err)
+	}
+	path := writeJSONLFile(t, dir, "large.jsonl", []string{string(line)})
+	ver := &VersionSpec{
+		Sessions: SessionsSpec{IDFromFilename: true},
+		Messages: MessagesSpec{
+			LineFilter:  []string{"user"},
+			RoleField:   "message.role",
+			ContentPath: "message.content",
+		},
+	}
+
+	row, err := scanJSONLFile(path, ver)
+	if err != nil {
+		t.Fatalf("scanJSONLFile: %v", err)
+	}
+	if len(row.messages) != 1 {
+		t.Fatalf("messages = %d, want 1", len(row.messages))
+	}
 }
 
 // ---- Claude-style JSONL tests (asymmetric content, text blocks) ----

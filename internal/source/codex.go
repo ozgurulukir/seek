@@ -1,13 +1,14 @@
 package source
 
 import (
-	"bufio"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ozgurulukir/seek/internal/jsonl"
 )
 
 type CodexMessage struct {
@@ -80,8 +81,7 @@ func ParseCodexFile(path string, fromLine int) ([]CodexMessage, string, error) {
 	var messages []CodexMessage
 	var sessionID string
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	scanner := jsonl.NewScanner(f)
 	lineNum := 0
 
 	for scanner.Scan() {
@@ -254,8 +254,7 @@ func ParseCodexFileWithImages(path string, fromLine int) ([]CodexMessage, string
 	var images []ConversationImage
 	var sessionID string
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 10*1024*1024), 10*1024*1024) // 10MB buffer for images
+	scanner := jsonl.NewScanner(f)
 	lineNum := 0
 	imgIdx := 0
 
@@ -365,8 +364,7 @@ func loadSessionIndex(home string) map[string]string {
 	defer f.Close()
 
 	names := make(map[string]string)
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	scanner := jsonl.NewScanner(f)
 	for scanner.Scan() {
 		var entry struct {
 			ID         string `json:"id"`

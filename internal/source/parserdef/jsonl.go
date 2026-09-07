@@ -1,13 +1,14 @@
 package parserdef
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ozgurulukir/seek/internal/jsonl"
 )
 
 // --- JSONL driver ---
@@ -132,8 +133,7 @@ func scanJSONLFile(filePath string, ver *VersionSpec) (*jsonlSessionRow, error) 
 		row.id = strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
 	}
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB buffer
+	scanner := jsonl.NewScanner(f)
 
 	filterSet := make(map[string]bool)
 	for _, t := range ver.Messages.LineFilter {

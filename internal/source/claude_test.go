@@ -189,6 +189,40 @@ func TestParseClaudeFileNonexistent(t *testing.T) {
 	}
 }
 
+func TestCountLinesLargeJSONLLine(t *testing.T) {
+	path := writeTempFile(t, strings.Repeat("x", 2*1024*1024)+"\n")
+
+	count, err := CountLines(path)
+	if err != nil {
+		t.Fatalf("CountLines: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+}
+
+func TestParseClaudeFileLargeJSONLLine(t *testing.T) {
+	content := strings.Repeat("x", 2*1024*1024)
+	line, err := json.Marshal(map[string]any{
+		"type": "user",
+		"message": map[string]string{
+			"role":    "user",
+			"content": content,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal JSONL line: %v", err)
+	}
+
+	msgs, err := ParseClaudeFile(writeTempFile(t, string(line)), 0)
+	if err != nil {
+		t.Fatalf("ParseClaudeFile: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Content != content {
+		t.Fatalf("unexpected parsed messages: %d", len(msgs))
+	}
+}
+
 func TestParseClaudeLineUserString(t *testing.T) {
 	line := `{"type":"user","message":{"role":"user","content":"hello"}}`
 	msg, ok := parseClaudeLine(line)

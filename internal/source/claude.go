@@ -1,13 +1,14 @@
 package source
 
 import (
-	"bufio"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ozgurulukir/seek/internal/jsonl"
 )
 
 // ClaudeMessage represents a parsed message from a Claude Code conversation.
@@ -68,8 +69,7 @@ func ParseClaudeFile(path string, fromLine int) ([]ClaudeMessage, error) {
 	defer f.Close()
 
 	var messages []ClaudeMessage
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB buffer
+	scanner := jsonl.NewScanner(f)
 	lineNum := 0
 
 	for scanner.Scan() {
@@ -101,8 +101,7 @@ func ParseClaudeFileWithImages(path string, fromLine int, convID string) ([]Clau
 
 	var messages []ClaudeMessage
 	var images []ConversationImage
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 10*1024*1024), 10*1024*1024) // 10MB buffer for images
+	scanner := jsonl.NewScanner(f)
 	lineNum := 0
 	imgIdx := 0
 
@@ -351,8 +350,7 @@ func CountLines(path string) (int, error) {
 	defer f.Close()
 
 	count := 0
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	scanner := jsonl.NewScanner(f)
 	for scanner.Scan() {
 		count++
 	}
