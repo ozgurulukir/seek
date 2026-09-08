@@ -26,7 +26,8 @@ func doctorFixture(t *testing.T) (*config.AppConfig, string) {
 	}
 	cfgPath := filepath.Join(cfgDir, "config.yaml")
 	dbPath := filepath.Join(cacheDir, "index.db")
-	for _, file := range []string{cfgPath, dbPath, dbPath + "-wal"} {
+	hnswPath := filepath.Join(cacheDir, "hnsw.index")
+	for _, file := range []string{cfgPath, dbPath, dbPath + "-wal", hnswPath} {
 		if err := os.WriteFile(file, []byte("data"), 0644); err != nil { // loose on purpose
 			t.Fatal(err)
 		}
@@ -45,10 +46,36 @@ func TestDoctor_CheckPermissionsFindsLoose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("checkPermissions: %v", err)
 	}
-	// 5 loose paths: 2 dirs + config.yaml + db + wal (fixture creates all;
-	// privatePaths also lists the -shm sidecar, absent in this fixture).
-	if len(loose) != 5 {
-		t.Fatalf("got %d loose paths (%v), want 5", len(loose), loose)
+	// 6 loose paths: 2 dirs + config.yaml + db + wal + hnsw.index (fixture
+	// creates all; the -shm sidecar is also listed but absent in this
+	// fixture, so it is skipped as missing).
+	if len(loose) != 6 {
+		t.Fatalf("got %d loose paths (%v), want 6", len(loose), loose)
+	}
+}
+
+func TestDoctor_HNSWPersistPathHonored(t *testing.T) {
+	cfg, _ := doctorFixture(t)
+	// Relocate the HNSW index; checkPermissions must follow the configured
+	// path, not the default under cache_dir.
+	custom := filepath.Join(t.TempDir(), "elsewhere.index")
+	if err := os.WriteFile(custom, []byte("v"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Config.VectorIndex.HNSW.PersistPath = custom
+
+	loose, err := checkPermissions(cfg)
+	if err != nil {
+		t.Fatalf("checkPermissions: %v", err)
+	}
+	found := false
+	for _, p := range loose {
+		if p.path == custom {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("custom hnsw persist_path %q not audited; got %v", custom, loose)
 	}
 }
 
@@ -63,8 +90,8 @@ func TestDoctor_FixPermissionsTightens(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("fixPermissions errors: %v", errs)
 	}
-	if len(fixed) != 5 {
-		t.Fatalf("fixed %d paths, want 5", len(fixed))
+	if len(fixed) != 6 {
+		t.Fatalf("fixed %d paths, want 6", len(fixed))
 	}
 
 	for _, path := range []string{
@@ -79,7 +106,7 @@ func TestDoctor_FixPermissionsTightens(t *testing.T) {
 			t.Errorf("%s perm = %04o, want %04o", path, uint32(got), uint32(config.DefaultPrivateDirPerms))
 		}
 	}
-	for _, path := range []string{cfg.DBPath, cfg.DBPath + "-wal"} {
+	for _, path := range []string{cfg.DBPath, cfg.DBPath + "-wal", filepath.Join(cfg.CacheDir, "hnsw.index")} {
 		fi, err := os.Stat(path)
 		if err != nil {
 			t.Fatal(err)

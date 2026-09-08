@@ -96,9 +96,13 @@ func (c *UninstallCmd) Run(cfg *config.AppConfig) error {
 
 	fmt.Println("Would remove:")
 	for _, a := range arts {
-		exists := a.path == windowsTask || a.path != "" // service tasks have no file path on Windows
-		if _, err := os.Stat(a.path); err != nil && runtime.GOOS != "windows" {
-			exists = false
+		// Windows: the service artifact is a Task Scheduler task with no file
+		// path, so stat it never; everything else is a real file/dir.
+		exists := true
+		if runtime.GOOS != "windows" || a.class != "service" {
+			if _, err := os.Stat(a.path); err != nil {
+				exists = false
+			}
 		}
 		note := a.extra
 		if !exists {

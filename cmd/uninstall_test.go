@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -120,4 +121,18 @@ func indexOf(haystack, needle string) int {
 		}
 	}
 	return -1
+}
+
+func TestUninstall_DryRunMarksNotPresent(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+	cfg := &config.AppConfig{CacheDir: filepath.Join(tmpHome, ".cache", "missing")}
+	cmd := &UninstallCmd{DryRun: true}
+	// No panic; missing cache dir is listed with [not present] on non-Windows.
+	if runtime.GOOS != "windows" {
+		if err := cmd.Run(cfg); err != nil {
+			t.Fatalf("dry run on missing dirs: %v", err)
+		}
+	}
 }
