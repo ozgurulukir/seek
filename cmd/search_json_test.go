@@ -36,18 +36,19 @@ func TestSearchJSON_Schema(t *testing.T) {
 		Query   string `json:"query"`
 		Total   int    `json:"total"`
 		Results []struct {
-			ChunkID    int64   `json:"chunk_id"`
-			DocumentID int64   `json:"document_id"`
-			Seq        int     `json:"seq"`
-			Title      string  `json:"title"`
-			Path       string  `json:"path"`
-			Collection string  `json:"collection"`
-			Content    string  `json:"content"`
-			Score      float64 `json:"score"`
-			ChunkType  int     `json:"chunk_type"`
-			StartLine  int     `json:"start_line"`
-			EndLine    int     `json:"end_line"`
-			ImagePath  string  `json:"image_path"`
+			ChunkID     int64   `json:"chunk_id"`
+			DocumentID  int64   `json:"document_id"`
+			Seq         int     `json:"seq"`
+			Title       string  `json:"title"`
+			Path        string  `json:"path"`
+			Collection  string  `json:"collection"`
+			Content     string  `json:"content"`
+			ContentKind string  `json:"content_kind"`
+			Score       float64 `json:"score"`
+			ChunkType   int     `json:"chunk_type"`
+			StartLine   int     `json:"start_line"`
+			EndLine     int     `json:"end_line"`
+			ImagePath   string  `json:"image_path"`
 		} `json:"results"`
 		Aggs map[string][]struct {
 			Key   string `json:"key"`
@@ -66,6 +67,9 @@ func TestSearchJSON_Schema(t *testing.T) {
 	}
 	if r.Score != 0.9876 || r.ChunkType != 0 {
 		t.Errorf("score/type wrong: %+v", r)
+	}
+	if r.ContentKind != "full" {
+		t.Errorf("chunk-level result should be content_kind=full, got %q", r.ContentKind)
 	}
 	if parsed.Aggs["doc_type:terms"][0].Key != "markdown" || parsed.Aggs["doc_type:terms"][0].Count != 2 {
 		t.Errorf("aggs wrong: %+v", parsed.Aggs)
@@ -88,5 +92,14 @@ func TestEnrichJSONContent_StripsMarkers(t *testing.T) {
 	enrichJSONContent(nil, results)
 	if results[0].Content != "match inside" {
 		t.Errorf("markers not stripped: %q", results[0].Content)
+	}
+}
+
+func TestContentKind(t *testing.T) {
+	if got := contentKind(store.SearchResult{ChunkID: 42}); got != "full" {
+		t.Errorf("chunk-level = %q, want full", got)
+	}
+	if got := contentKind(store.SearchResult{ChunkID: 0}); got != "snippet" {
+		t.Errorf("document-level = %q, want snippet", got)
 	}
 }

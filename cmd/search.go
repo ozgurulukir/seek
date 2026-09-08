@@ -242,11 +242,18 @@ func (c *SearchCmd) computeAggregations(ctx context.Context, engine *search.Engi
 // enrichJSONContent replaces FTS highlight snippets with the full chunk
 // content for JSON output. Best-effort: a missing chunk keeps its snippet
 // (with the >>>/<<< markers stripped). db may be nil in tests.
+//
+// Only vector-origin results carry a real chunk ID — BM25 and hybrid results
+// are document-level (ChunkID 0) and keep their FTS snippet; buildJSONOutput
+// exposes that distinction via content_kind ("full" vs "snippet").
 func enrichJSONContent(db *store.Store, results []store.SearchResult) {
 	for i := range results {
 		if results[i].ChunkID <= 0 {
 			results[i].Content = strings.ReplaceAll(results[i].Content, ">>>", "")
 			results[i].Content = strings.ReplaceAll(results[i].Content, "<<<", "")
+			continue
+		}
+		if db == nil {
 			continue
 		}
 		if content, err := db.GetChunkContent(results[i].ChunkID); err == nil {
@@ -255,21 +262,32 @@ func enrichJSONContent(db *store.Store, results []store.SearchResult) {
 	}
 }
 
+// contentKind classifies the Content field for JSON consumers: enriched
+// results carry the complete chunk text, document-level BM25/hybrid results
+// an FTS excerpt.
+func contentKind(r store.SearchResult) string {
+	if r.ChunkID > 0 {
+		return "full"
+	}
+	return "snippet"
+}
+
 // jsonSearchResult mirrors store.SearchResult with explicit, stable JSON
 // field names for agent consumption.
 type jsonSearchResult struct {
-	ChunkID    int64   `json:"chunk_id"`
-	DocumentID int64   `json:"document_id"`
-	Seq        int     `json:"seq"`
-	Title      string  `json:"title"`
-	Path       string  `json:"path"`
-	Collection string  `json:"collection"`
-	Content    string  `json:"content"`
-	Score      float64 `json:"score"`
-	ChunkType  int     `json:"chunk_type"`
-	ImagePath  string  `json:"image_path,omitempty"`
-	StartLine  int     `json:"start_line"`
-	EndLine    int     `json:"end_line"`
+	ChunkID     int64   `json:"chunk_id"`
+	DocumentID  int64   `json:"document_id"`
+	Seq         int     `json:"seq"`
+	Title       string  `json:"title"`
+	Path        string  `json:"path"`
+	Collection  string  `json:"collection"`
+	Content     string  `json:"content"`
+	ContentKind string  `json:"content_kind"`
+	Score       float64 `json:"score"`
+	ChunkType   int     `json:"chunk_type"`
+	ImagePath   string  `json:"image_path,omitempty"`
+	StartLine   int     `json:"start_line"`
+	EndLine     int     `json:"end_line"`
 }
 
 // jsonSearchOutput is the top-level --json envelope.
@@ -302,18 +320,19 @@ func buildJSONOutput(c *SearchCmd, results []store.SearchResult, aggs map[string
 	}
 	for _, r := range results {
 		out.Results = append(out.Results, jsonSearchResult{
-			ChunkID:    r.ChunkID,
-			DocumentID: r.DocumentID,
-			Seq:        r.Seq,
-			Title:      r.Title,
-			Path:       r.Path,
-			Collection: r.Collection,
-			Content:    r.Content,
-			Score:      r.Score,
-			ChunkType:  int(r.ChunkType),
-			ImagePath:  r.ImagePath,
-			StartLine:  r.StartLine,
-			EndLine:    r.EndLine,
+			ChunkID:     r.ChunkID,
+			DocumentID:  r.DocumentID,
+			Seq:         r.Seq,
+			Title:       r.Title,
+			Path:        r.Path,
+			Collection:  r.Collection,
+			Content:     r.Content,
+			ContentKind: contentKind(r),
+			Score:       r.Score,
+			ChunkType:   int(r.ChunkType),
+			ImagePath:   r.ImagePath,
+			StartLine:   r.StartLine,
+			EndLine:     r.EndLine,
 		})
 	}
 	if aggs != nil {

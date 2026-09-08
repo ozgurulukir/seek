@@ -143,7 +143,8 @@ seek embed [-f] [-r]               # generate embeddings (batch or realtime)
 
 # Search & Navigation
 seek search "<query>"              # hybrid search (BM25 + Vector + Re-ranking)
-seek search "<query>" --json       # machine-readable JSON (agent/scripting surface)
+seek search "<query>" --json       # machine-readable JSON (agent/scripting surface);
+                                   # content_kind: full=whole chunk, snippet=FTS excerpt
 seek search "<query>" --lex        # BM25 keyword search only
 seek search "<query>" --vec        # Vector semantic search only
 seek search "<query>" -C 1         # expand surrounding chunk context
