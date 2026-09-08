@@ -1,14 +1,15 @@
 # seek
 
-> **Personal hybrid search engine (BM25 + Vector + Re-ranking) for source code, markdown notes, and AI agent conversations with 100% local/offline support.**
+> **Personal hybrid search engine (BM25 + Vector + Re-ranking) for source code, markdown notes, and AI agent conversations — with a 100% local/offline mode.**
 
 `seek` gives humans and AI agents instant, unified recall across your entire workspace:
 - 🔍 **Hybrid Fusion Search:** SQLite FTS5 (BM25) + HNSW Vector Search + RRF (Reciprocal Rank Fusion)
 - 💻 **Source Code & Notes:** 35+ programming languages (`.gitignore`-aware), Markdown, PDFs, and rich documents
-- 🤖 **AI Agent Memory:** Claude Code, Codex, Opencode, and Copilot CLI sessions (including multimodal screenshots)
+- 🤖 **AI Agent Memory:** Claude Code, Codex, Opencode, Copilot CLI, and Hermes Agent sessions (including multimodal screenshots)
 - 🎯 **Precision Source Addressing:** Precise 1-based line ranges (`file.go:L25-L68`) with surrounding context expansion (`-C 1`)
-- ⚡ **100% Local / Offline Support:** Zero cloud keys required; optionally supercharged with local Ollama (`nomic-embed-text`) and FlashRank (`ms-marco-TinyBERT`)
+- ⚡ **Full Local/Offline Mode:** Zero cloud keys required for keyword search; local Ollama (`nomic-embed-text`) + FlashRank (`ms-marco-TinyBERT`) cover semantic search and reranking on your machine
 - 🧠 **Cross-Encoder Re-ranking:** Config-driven reranking via FlashRank, BGE-Reranker, Cohere, or Jina
+- 🔒 **Honest privacy model:** keyword search and all index data are local (index DB `0600`, dirs `0700`); if you configure cloud embedding/rerank/OCR, those providers receive your text/images — `seek doctor` shows exactly what goes where, and `privacy.offline_only: true` blocks every external call
 
 ---
 
@@ -70,7 +71,7 @@ cp -r skills/seek/* ~/.agents/skills/seek/
 
 ## ⚡ Quickstart
 
-### Option A — 100% Offline & Keyword Only (No API Key)
+### Option A — Offline & Keyword Only (No API Key, No Network)
 ```bash
 # Add collections
 seek add ~/notes --name mynotes            # markdown
@@ -82,7 +83,19 @@ seek sync                                  # fast incremental index
 seek search "ECONNREFUSED port 3000" --lex
 ```
 
+This option performs zero network calls: indexing, keyword search, and all
+data stay on your machine. (Scanned-PDF OCR is the one opt-in exception —
+it is disabled unless you enable `ocr:` and is always blocked by
+`privacy.offline_only: true`.)
+
 ### Option B — Hybrid Search (Cloud OpenAI / DashScope)
+
+⚠️ **External data flow:** in this mode chunk text, queries, and (if enabled)
+images are sent to the configured embedding/rerank/OCR endpoints. Nothing is
+sent to seek's authors — there is no telemetry — but the providers you
+configure do receive your data. `seek doctor` lists every active endpoint and
+data type; `privacy.offline_only: true` in config.yaml refuses all of it.
+
 ```bash
 seek auth login                            # configure base_url / api_key / model
 seek embed                                 # generate vectors for indexed chunks
