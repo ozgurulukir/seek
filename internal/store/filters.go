@@ -9,6 +9,7 @@ import (
 // Search filter types. Extracted from store.go as part of the god-object
 // decomposition — a mechanical move, no changes.
 
+// Filter is a search filter that can be converted to a SQL WHERE clause.
 type Filter interface {
 	ToSQL() (clause string, args []interface{}, err error)
 }
