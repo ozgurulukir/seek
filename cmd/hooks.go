@@ -560,7 +560,9 @@ var (
 	// bare 'seek' — the quoted bare form is what install writes when
 	// exec.LookPath("seek") cannot resolve the binary (e.g. CI), so install,
 	// upgrade and uninstall must all still find their own hook entry.
-	directSeekHookCommandPattern = regexp.MustCompile(`(?i)^(?:'[^']*(?:[\\/])?seek(?:\.exe)?'|"[^"]*(?:[\\/])?seek(?:\.exe)?"|(?:[^\s]+[\\/])?seek(?:\.exe)?)\s+(?:hooks\s+)?(?:sync|context)(?:\s+--(?:agent\s+\S+|embed))*\s*$`)
+	// Quoted forms must end in a path separator + "seek" (or be exactly the
+	// bare binary name) so lookalikes like 'myseek' never match.
+	directSeekHookCommandPattern = regexp.MustCompile(`(?i)^(?:'(?:(?:[^'/\\]*[\\/]+)*seek(?:\.exe)?)'|"(?:(?:[^"\\]*[\\/]+)*seek(?:\.exe)?)"|(?:[^\s]+[\\/])?seek(?:\.exe)?)\s+(?:hooks\s+)?(?:sync|context)(?:\s+--(?:agent\s+\S+|embed))*\s*$`)
 )
 
 func isSeekHookCommand(command string) bool {

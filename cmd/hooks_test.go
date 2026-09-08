@@ -593,3 +593,41 @@ func TestSelectedTargets(t *testing.T) {
 		t.Errorf("--codex: got %v", codexOnly)
 	}
 }
+
+func TestIsSeekHookCommand_MatcherMatrix(t *testing.T) {
+	mustMatch := []string{
+		// bare, and the quoted bare form install writes when LookPath fails (CI)
+		"seek hooks sync",
+		"seek sync",
+		"seek.exe hooks sync",
+		"'seek' hooks sync",
+		`"seek" hooks sync`,
+		"'seek' context --agent claude",
+		// absolute POSIX and Windows paths
+		"'/home/u/go/bin/seek' hooks sync",
+		"'/opt/seek' sync",
+		`"C:\\tools\\seek.exe" hooks sync`,
+	}
+	mustNotMatch := []string{
+		// lookalike binaries must never match: uninstall deletes by this matcher
+		"'myseek' hooks sync",
+		`"myseek" hooks sync`,
+		"myseek hooks sync",
+		"'seekery' hooks sync",
+		"seek-other hooks sync",
+		"'other' hooks sync",
+		// wrong/incomplete invocations
+		"/x/seek extra thing",
+		"'seek' hooks",
+	}
+	for _, c := range mustMatch {
+		if !isSeekHookCommand(c) {
+			t.Errorf("isSeekHookCommand(%q) = false, want true", c)
+		}
+	}
+	for _, c := range mustNotMatch {
+		if isSeekHookCommand(c) {
+			t.Errorf("isSeekHookCommand(%q) = true, want false", c)
+		}
+	}
+}
