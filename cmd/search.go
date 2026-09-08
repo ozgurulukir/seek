@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -45,6 +46,7 @@ type SearchCmd struct {
 	AnalyzeLang     string `help:"Language for analysis (en, tr); defaults to search.analyze_lang in config, then en"`
 	Autocomplete    bool   `help:"Show autocomplete suggestions for the query prefix"`
 	AutocompleteMax int    `help:"Max autocomplete suggestions" default:"10"`
+	JSON            bool   `help:"Emit machine-readable JSON instead of human-formatted output"`
 }
 
 func (c *SearchCmd) Run(cfg *config.AppConfig) error {
@@ -100,6 +102,18 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 	results, err := c.executeSearch(ctx, engine, embedClient, vlClient, opts)
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
+	}
+
+	// JSON mode: machine-readable output for agents; no pretty printing, no
+	// context expansion. Content is emitted in full (the FTS snippet carries
+	// >>> markers and 40-token truncation; agents decide how much to read).
+	if c.JSON {
+		enrichJSONContent(db, results)
+		aggs, err := c.computeAggregations(ctx, engine, filters)
+		if err != nil {
+			return fmt.Errorf("aggregations: %w", err)
+		}
+		return c.printResultsJSON(results, aggs)
 	}
 
 	// Run aggregations if requested
@@ -216,6 +230,105 @@ func (c *SearchCmd) printAggregations(ctx context.Context, engine *search.Engine
 	return nil
 }
 
+// computeAggregations runs the requested aggregations without printing, for
+// the JSON output path. Empty spec list returns nil (no aggregations block).
+func (c *SearchCmd) computeAggregations(ctx context.Context, engine *search.Engine, filters *store.FilterSet) (map[string][]search.Bucket, error) {
+	if len(c.Aggs) == 0 {
+		return nil, nil
+	}
+	return engine.RunAggregations(ctx, c.Aggs, filters)
+}
+
+// enrichJSONContent replaces FTS highlight snippets with the full chunk
+// content for JSON output. Best-effort: a missing chunk keeps its snippet
+// (with the >>>/<<< markers stripped). db may be nil in tests.
+func enrichJSONContent(db *store.Store, results []store.SearchResult) {
+	for i := range results {
+		if results[i].ChunkID <= 0 {
+			results[i].Content = strings.ReplaceAll(results[i].Content, ">>>", "")
+			results[i].Content = strings.ReplaceAll(results[i].Content, "<<<", "")
+			continue
+		}
+		if content, err := db.GetChunkContent(results[i].ChunkID); err == nil {
+			results[i].Content = content
+		}
+	}
+}
+
+// jsonSearchResult mirrors store.SearchResult with explicit, stable JSON
+// field names for agent consumption.
+type jsonSearchResult struct {
+	ChunkID    int64   `json:"chunk_id"`
+	DocumentID int64   `json:"document_id"`
+	Seq        int     `json:"seq"`
+	Title      string  `json:"title"`
+	Path       string  `json:"path"`
+	Collection string  `json:"collection"`
+	Content    string  `json:"content"`
+	Score      float64 `json:"score"`
+	ChunkType  int     `json:"chunk_type"`
+	ImagePath  string  `json:"image_path,omitempty"`
+	StartLine  int     `json:"start_line"`
+	EndLine    int     `json:"end_line"`
+}
+
+// jsonSearchOutput is the top-level --json envelope.
+type jsonSearchOutput struct {
+	Query   string                     `json:"query"`
+	Total   int                        `json:"total"`
+	Results []jsonSearchResult         `json:"results"`
+	Aggs    map[string][]jsonAggBucket `json:"aggs,omitempty"`
+}
+
+type jsonAggBucket struct {
+	Key   string `json:"key"`
+	Count int    `json:"count"`
+}
+
+func (c *SearchCmd) printResultsJSON(results []store.SearchResult, aggs map[string][]search.Bucket) error {
+	out := buildJSONOutput(c, results, aggs)
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
+}
+
+// buildJSONOutput maps search results and aggregations into the stable JSON
+// envelope; separated from printing so it is directly testable.
+func buildJSONOutput(c *SearchCmd, results []store.SearchResult, aggs map[string][]search.Bucket) *jsonSearchOutput {
+	out := jsonSearchOutput{
+		Query:   c.Query,
+		Total:   len(results),
+		Results: make([]jsonSearchResult, 0, len(results)),
+	}
+	for _, r := range results {
+		out.Results = append(out.Results, jsonSearchResult{
+			ChunkID:    r.ChunkID,
+			DocumentID: r.DocumentID,
+			Seq:        r.Seq,
+			Title:      r.Title,
+			Path:       r.Path,
+			Collection: r.Collection,
+			Content:    r.Content,
+			Score:      r.Score,
+			ChunkType:  int(r.ChunkType),
+			ImagePath:  r.ImagePath,
+			StartLine:  r.StartLine,
+			EndLine:    r.EndLine,
+		})
+	}
+	if aggs != nil {
+		out.Aggs = make(map[string][]jsonAggBucket, len(aggs))
+		for spec, buckets := range aggs {
+			jb := make([]jsonAggBucket, 0, len(buckets))
+			for _, b := range buckets {
+				jb = append(jb, jsonAggBucket{Key: b.Key, Count: b.Count})
+			}
+			out.Aggs[spec] = jb
+		}
+	}
+	return &out
+}
+
 func (c *SearchCmd) expandContext(db *store.Store, results []store.SearchResult) {
 	if c.Context <= 0 {
 		return
@@ -328,6 +441,15 @@ func (c *SearchCmd) runAutocomplete(cfg *config.AppConfig) error {
 		if err != nil {
 			return fmt.Errorf("autocomplete: %w", err)
 		}
+	}
+
+	if c.JSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(&struct {
+			Query       string   `json:"query"`
+			Suggestions []string `json:"suggestions"`
+		}{Query: c.Query, Suggestions: results})
 	}
 
 	if len(results) == 0 {
