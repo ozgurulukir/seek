@@ -187,4 +187,5 @@ compression:
 
 ## 📄 License
 
-MIT
+MIT — see [LICENSE](LICENSE). Security policy and reporting:
+[SECURITY.md](SECURITY.md).
