@@ -207,7 +207,19 @@ type Config struct {
 	VectorIndex  VectorIndexConfig `yaml:"vector_index,omitempty"`
 	Compression  CompressionConfig `yaml:"compression,omitempty"`
 	Extractor    ExtractorConfig   `yaml:"extractor,omitempty"`
+	Privacy      PrivacyConfig     `yaml:"privacy,omitempty"`
 }
+
+// PrivacyConfig controls what seek may send to external providers.
+type PrivacyConfig struct {
+	// OfflineOnly refuses every network call to embedding, rerank, and OCR
+	// providers (fail fast, before any data leaves the machine). Keyword
+	// search stays fully local regardless.
+	OfflineOnly bool `yaml:"offline_only,omitempty"`
+}
+
+// OfflineOnly reports whether external provider calls are forbidden.
+func (c *Config) OfflineOnly() bool { return c.Privacy.OfflineOnly }
 
 type AppConfig struct {
 	Config   Config

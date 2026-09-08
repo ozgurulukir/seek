@@ -80,6 +80,8 @@ func fixPermissions(paths []privatePath) ([]string, []error) {
 }
 
 func (c *DoctorCmd) Run(cfg *config.AppConfig) error {
+	c.reportPrivacy(cfg)
+
 	loose, err := checkPermissions(cfg)
 	if err != nil {
 		return err
@@ -117,4 +119,33 @@ func (c *DoctorCmd) Run(cfg *config.AppConfig) error {
 	}
 	fmt.Println("\npermissions repaired: private data is now owner-only")
 	return nil
+}
+
+// reportPrivacy prints which external endpoints receive which data types —
+// the disclosure surface for seek's one network egress path (Jerry review
+// #6b: keyword search is local; embedding/rerank/OCR are not, by default).
+func (c *DoctorCmd) reportPrivacy(cfg *config.AppConfig) {
+	fmt.Println("privacy / data egress:")
+	if cfg.Config.OfflineOnly() {
+		fmt.Println("  offline_only: true — embedding, rerank, and OCR network calls are blocked")
+	} else {
+		fmt.Println("  offline_only: false — external providers may receive data:")
+	}
+	ec := cfg.Config.Embedding
+	if ec.BaseURL != "" && ec.Model != "" {
+		fmt.Printf("  embedding: %s (%s)  <- document/query text, images (multimodal)\n", ec.BaseURL, ec.Model)
+	}
+	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.BaseURL != "" {
+		fmt.Printf("  rerank:    %s (%s)  <- query + result text\n", cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.Model)
+	}
+	if cfg.Config.OCR.Enabled && cfg.Config.OCR.BaseURL != "" {
+		fmt.Printf("  ocr:       %s (%s)  <- scanned PDF page images\n", cfg.Config.OCR.BaseURL, cfg.Config.OCR.Model)
+	}
+	if cfg.Config.OfflineOnly() {
+		return
+	}
+	if ec.BaseURL == "" {
+		fmt.Println("  (no embedding endpoint configured)")
+	}
+	fmt.Println("  keyword (BM25/FTS) search is fully local; no telemetry is sent anywhere")
 }

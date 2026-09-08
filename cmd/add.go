@@ -437,6 +437,9 @@ func (c *AddCmd) newIndexer(cfg *config.AppConfig, db *store.Store) *indexer.Ind
 }
 
 func newEmbedClient(cfg *config.AppConfig) *embed.Client {
+	if cfg.Config.OfflineOnly() {
+		return embed.NewOfflineClient(cfg.Config.Embedding.Model)
+	}
 	key, err := cfg.RequireEmbeddingKey()
 	if err != nil {
 		return nil
@@ -452,6 +455,9 @@ func newEmbedClient(cfg *config.AppConfig) *embed.Client {
 }
 
 func newVLClient(cfg *config.AppConfig) *embed.VLClient {
+	if cfg.Config.OfflineOnly() {
+		return nil // offline: never build a multimodal network client
+	}
 	key, err := cfg.RequireEmbeddingKey()
 	if err != nil {
 		return nil

@@ -138,7 +138,7 @@ func (c *SearchCmd) buildEngine(db *store.Store, cfg *config.AppConfig) (*search
 	}
 	engine.WithLogger(searchLogger{})
 
-	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.APIKey != "" {
+	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.APIKey != "" && !cfg.Config.OfflineOnly() {
 		reranker := embed.NewRerankClient(cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.APIKey, cfg.Config.Rerank.Model)
 		engine.WithReranker(reranker)
 	}

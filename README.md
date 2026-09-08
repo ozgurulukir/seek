@@ -187,6 +187,11 @@ vector_index:
 compression:
   algorithm: zstd           # "zstd" (default) or "none"
   level: 3
+
+privacy:
+  offline_only: true        # refuse ALL embedding/rerank/OCR network calls;
+                            # keyword search stays fully local either way
+                            # (see: seek doctor → privacy / data egress)
 ```
 
 ---

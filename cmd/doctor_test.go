@@ -155,3 +155,15 @@ func TestDoctor_RunReportsLooseWithoutFix(t *testing.T) {
 		t.Error("permissions were changed without --fix-permissions")
 	}
 }
+
+func TestDoctor_PrivacyReportOffline(t *testing.T) {
+	cfg, _ := doctorFixture(t)
+	cfg.Config.Privacy.OfflineOnly = true
+	cfg.Config.Embedding.BaseURL = "https://api.example.com/v1"
+	cfg.Config.Embedding.Model = "m"
+	// Doctor must run cleanly in offline mode and not create any client.
+	cmd := &DoctorCmd{FixPermissions: true}
+	if err := cmd.Run(cfg); err != nil {
+		t.Fatalf("DoctorCmd.Run offline: %v", err)
+	}
+}

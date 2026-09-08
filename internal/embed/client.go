@@ -50,9 +50,25 @@ type Client struct {
 	dimensions int
 	taskPrefix TaskPrefix
 	http       *http.Client
+	// offline marks a client that must not perform any network call
+	// (search.privacy.offline_only). Requests fail fast, before any chunk,
+	// query, or image text leaves the machine.
+	offline bool
 }
 
+// NewClient builds a client for any OpenAI-compatible embeddings endpoint.
+// Set offline to refuse all network calls (config privacy.offline_only).
 func NewClient(baseURL, apiKey, model string, dimensions int, taskPrefix TaskPrefix) *Client {
+	return newClient(baseURL, apiKey, model, dimensions, taskPrefix, false)
+}
+
+// NewOfflineClient returns a client whose every request fails immediately
+// with a clear error — used when privacy.offline_only is set.
+func NewOfflineClient(model string) *Client {
+	return newClient("", "", model, 0, TaskPrefix{}, true)
+}
+
+func newClient(baseURL, apiKey, model string, dimensions int, taskPrefix TaskPrefix, offline bool) *Client {
 	return &Client{
 		baseURL:    baseURL,
 		apiKey:     apiKey,
@@ -60,6 +76,7 @@ func NewClient(baseURL, apiKey, model string, dimensions int, taskPrefix TaskPre
 		dimensions: dimensions,
 		taskPrefix: taskPrefix,
 		http:       &http.Client{Timeout: config.DefaultEmbeddingTimeout},
+		offline:    offline,
 	}
 }
 
@@ -86,6 +103,9 @@ type embeddingResponse struct {
 // embed sends the raw texts to the embeddings endpoint without any
 // task-prefix transformation. Public methods layer prefixes on top.
 func (c *Client) embed(texts []string) ([][]float32, error) {
+	if c.offline {
+		return nil, fmt.Errorf("offline_only is enabled: refusing to send %d text(s) to %q", len(texts), c.model)
+	}
 	req := embeddingRequest{
 		Model: c.model,
 		Input: texts,
