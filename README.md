@@ -223,5 +223,7 @@ privacy:
 
 ## 📄 License
 
-MIT — see [LICENSE](LICENSE). Security policy and reporting:
+MIT — see [LICENSE](LICENSE). This project is a fork of
+[ethan-huo/seek](https://github.com/ethan-huo/seek); the upstream copyright is
+retained in LICENSE. Security policy and reporting:
 [SECURITY.md](SECURITY.md).
