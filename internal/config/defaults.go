@@ -25,6 +25,14 @@ const (
 	// DefaultFilePerms is the default permission for created files.
 	DefaultFilePerms = 0644
 
+	// DefaultPrivateDirPerms is the permission for directories holding private
+	// data (seek's config dir, cache/index dir): owner-only access. The index
+	// contains the searchable text of every note, conversation, and code file.
+	DefaultPrivateDirPerms = 0700
+	// DefaultPrivateFilePerms is the permission for private data files (the
+	// SQLite index, config.yaml, state files): owner read/write only.
+	DefaultPrivateFilePerms = 0600
+
 	// DefaultTextSnippetLen is the length for text results in search.
 	DefaultTextSnippetLen = 200
 	// DefaultImageSnippetLen is the length for image context results in search.

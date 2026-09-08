@@ -13,6 +13,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/viterin/vek/vek32"
 )
 
@@ -229,6 +230,13 @@ type SearchResult struct {
 }
 
 func Open(dbPath string) (*Store, error) {
+	// The index holds the searchable text of the user's notes, conversations,
+	// and code — a private file. Databases created by older seek versions are
+	// 0644 (umask-dependent); tighten on every open (idempotent, no-op when
+	// already 0600). Best effort: a read-only mount must not break startup.
+	if fi, err := os.Stat(dbPath); err == nil && !fi.IsDir() {
+		_ = os.Chmod(dbPath, config.DefaultPrivateFilePerms)
+	}
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)

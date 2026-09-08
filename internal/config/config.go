@@ -225,6 +225,14 @@ func cacheDir() string {
 	return filepath.Join(home, ".cache", "seek")
 }
 
+// ConfigDir returns the seek configuration directory
+// (~/.config/seek by default). Exported for doctor/repair tooling.
+func ConfigDir() string { return configDir() }
+
+// CacheDir returns the seek cache directory (~/.cache/seek by default).
+// Exported for doctor/repair tooling.
+func CacheDir() string { return cacheDir() }
+
 func defaultAppConfig(cacheD string) *AppConfig {
 	return &AppConfig{
 		CacheDir: cacheD,
@@ -322,8 +330,11 @@ func applyFallbacks(cfg *Config) {
 func Load() (*AppConfig, error) {
 	cfgDir := configDir()
 	cacheD := cacheDir()
-	os.MkdirAll(cfgDir, DefaultDirPerms)
-	os.MkdirAll(cacheD, DefaultDirPerms)
+	// Private data lives here (config, index) — owner-only directories. Note
+	// MkdirAll applies perm only to newly created components; existing dirs
+	// keep their mode (seek doctor --fix-permissions tightens old installs).
+	os.MkdirAll(cfgDir, DefaultPrivateDirPerms)
+	os.MkdirAll(cacheD, DefaultPrivateDirPerms)
 
 	ac := defaultAppConfig(cacheD)
 
@@ -353,14 +364,15 @@ func (ac *AppConfig) ConfigPath() string {
 
 func Save(cfg Config) error {
 	dir := configDir()
-	os.MkdirAll(dir, DefaultDirPerms)
+	// Private data: owner-only directory (see Load for existing-dir caveat).
+	os.MkdirAll(dir, DefaultPrivateDirPerms)
 
 	data, err := yaml.Marshal(&cfg)
 	if err != nil {
 		return err
 	}
 
-	return renameio.WriteFile(filepath.Join(dir, "config.yaml"), data, 0600)
+	return renameio.WriteFile(filepath.Join(dir, "config.yaml"), data, DefaultPrivateFilePerms)
 }
 
 // expandEnv resolves $VAR and ${VAR} references anywhere in a string.

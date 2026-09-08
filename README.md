@@ -129,6 +129,7 @@ seek status                        # view collections, document & chunk counts
 seek auth login | status           # configure / inspect embedding & rerank providers
 seek service start | stop | status # manage periodic OS background sync service
 seek hooks install | uninstall     # install automatic conversation sync hooks
+seek doctor [--fix-permissions]    # audit & repair private data permissions (0700/0600)
 seek analyze "<text>" --lang en|tr # tokenize and stem text
 seek parsers list                  # view parser schemas and detection status
 ```

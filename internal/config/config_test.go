@@ -279,3 +279,44 @@ chunk:
 		t.Errorf("Chunk.Overlap = %d, want 250", appCfg.Config.Chunk.Overlap)
 	}
 }
+
+func TestLoad_CreatesPrivateDirs(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	for _, dir := range []string{
+		filepath.Join(tmpHome, ".config", "seek"),
+		filepath.Join(tmpHome, ".cache", "seek"),
+	} {
+		fi, err := os.Stat(dir)
+		if err != nil {
+			t.Fatalf("stat %s: %v", dir, err)
+		}
+		if got := fi.Mode().Perm(); got != DefaultPrivateDirPerms {
+			t.Errorf("%s perm = %04o, want %04o (owner-only private data)", dir, uint32(got), uint32(DefaultPrivateDirPerms))
+		}
+	}
+}
+
+func TestSave_ConfigFilePrivatePerms(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
+	cfg := Config{}
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save(): %v", err)
+	}
+	path := filepath.Join(tmpHome, ".config", "seek", "config.yaml")
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := fi.Mode().Perm(); got != DefaultPrivateFilePerms {
+		t.Errorf("config.yaml perm = %04o, want %04o", uint32(got), uint32(DefaultPrivateFilePerms))
+	}
+}
