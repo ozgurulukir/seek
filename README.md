@@ -21,6 +21,20 @@
 curl -fsSL https://raw.githubusercontent.com/ozgurulukir/seek/main/install.sh | bash
 ```
 
+The installer is fail-closed: the release checksum file is mandatory (missing
+or mismatched checksums abort), archive contents are validated before
+extraction (no symlinks or path traversal), and the installed binary is
+smoke-tested — a broken install is rolled back to your previous binary
+instead of being reported as success. To verify the download yourself before
+running (download–hash–verify–run):
+
+```bash
+curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.2.9/seek_v0.2.9_linux-amd64.tar.gz
+curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.2.9/SHA256SUMS.txt
+grep seek_v0.2.9_linux-amd64.tar.gz SHA256SUMS.txt | sha256sum -c -
+tar -xzf seek_v0.2.9_linux-amd64.tar.gz && ./seek --version
+```
+
 **Windows (PowerShell):**
 ```powershell
 irm https://raw.githubusercontent.com/ozgurulukir/seek/main/install.ps1 | iex

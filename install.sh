@@ -2,6 +2,20 @@
 # seek installer script for Linux and macOS
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/ozgurulukir/seek/main/install.sh | sh
+#
+# Fail-closed guarantees:
+#   - checksum file is mandatory; a missing/unverifiable checksum aborts
+#   - archive contents are validated (paths, symlinks, single binary) before
+#     anything is extracted
+#   - the installed binary is smoke-tested; failure restores the previous
+#     binary and aborts — the installer never reports success for a broken
+#     install
+#
+# Environment overrides:
+#   SEEK_VERSION=vX.Y.Z     install a specific release
+#   SEEK_DOWNLOAD_BASE=URL  alternate release root (e.g. an internal mirror;
+#                           release assets live directly under this URL)
+#   INSTALL_DIR=/path       installation directory
 
 set -e
 
@@ -73,6 +87,9 @@ check_tools() {
   if ! command -v tar >/dev/null 2>&1; then
     abort "tar is required to extract seek."
   fi
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    abort "sha256sum or shasum is required to verify the download. Install one and retry — checksums are mandatory."
+  fi
 }
 
 download_file() {
@@ -112,21 +129,54 @@ resolve_version() {
   fi
 }
 
-# --- Checksum Verification ---
+# --- Checksum Verification (mandatory, fail-closed) ---
 verify_checksum() {
   archive_file="$1"
   checksum_file="$2"
   archive_name="$(basename "$archive_file")"
 
   if command -v sha256sum >/dev/null 2>&1; then
-    (cd "$(dirname "$archive_file")" && grep "  ${archive_name}\$" "$(basename "$checksum_file")" 2>/dev/null | sha256sum -c - >/dev/null 2>&1) || \
-    (cd "$(dirname "$archive_file")" && grep "${archive_name}" "$(basename "$checksum_file")" 2>/dev/null | sha256sum -c - >/dev/null 2>&1)
+    (cd "$(dirname "$archive_file")" && grep "  ${archive_name}\$" "$(basename "$checksum_file")" | sha256sum -c - >/dev/null)
   elif command -v shasum >/dev/null 2>&1; then
-    (cd "$(dirname "$archive_file")" && grep "${archive_name}" "$(basename "$checksum_file")" 2>/dev/null | shasum -a 256 -c - >/dev/null 2>&1)
-  else
-    warn "Neither sha256sum nor shasum found; skipping checksum verification."
-    return 0
+    (cd "$(dirname "$archive_file")" && grep "  ${archive_name}\$" "$(basename "$checksum_file")" | shasum -a 256 -c - >/dev/null)
   fi
+}
+
+# --- Archive Pre-Validation (before extraction) ---
+# Rejects absolute paths, path traversal, symlinks, hardlinks, devices, and
+# archives that do not contain exactly one regular file named "seek".
+validate_archive() {
+  archive_file="$1"
+
+  if ! tar -tzf "$archive_file" > "${TMP_DIR}/.entries" 2>/dev/null; then
+    abort "Downloaded file is not a valid gzip tar archive."
+  fi
+
+  if ! tar -tvzf "$archive_file" > "${TMP_DIR}/.listing" 2>/dev/null; then
+    abort "Cannot inspect archive contents."
+  fi
+
+  if grep -qE '^l' "${TMP_DIR}/.listing"; then
+    abort "Archive contains symlinks; refusing to extract."
+  fi
+  if grep -qE '^h' "${TMP_DIR}/.listing"; then
+    abort "Archive contains hardlinks; refusing to extract."
+  fi
+  # Non-file, non-directory entry types (block/char devices, fifos, sockets)
+  if grep -qvE '^[-d]' "${TMP_DIR}/.listing"; then
+    abort "Archive contains unexpected entry types; refusing to extract."
+  fi
+
+  if grep -E '(^/|(^|/)\.\.(/|$))' "${TMP_DIR}/.entries" >/dev/null; then
+    abort "Archive contains absolute or traversal paths; refusing to extract."
+  fi
+
+  bin_entries=$(grep -E '(^|/)seek$' "${TMP_DIR}/.entries" | grep -v '/$' || true)
+  bin_count=$(printf '%s' "$bin_entries" | grep -c . || true)
+  if [ "$bin_count" -ne 1 ]; then
+    abort "Expected exactly one 'seek' binary in the archive, found ${bin_count:-0}."
+  fi
+  BIN_REL="$bin_entries"
 }
 
 # --- Installation Directory ---
@@ -152,8 +202,13 @@ main() {
   determine_install_dir
 
   ARCHIVE_NAME="seek_${VERSION}_${OS}-${ARCH}.tar.gz"
-  DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE_NAME}"
-  CHECKSUM_URL="https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS.txt"
+  if [ -n "$SEEK_DOWNLOAD_BASE" ]; then
+    DL_BASE="${SEEK_DOWNLOAD_BASE%/}"
+  else
+    DL_BASE="https://github.com/${REPO}/releases/download/${VERSION}"
+  fi
+  DOWNLOAD_URL="${DL_BASE}/${ARCHIVE_NAME}"
+  CHECKSUM_URL="${DL_BASE}/SHA256SUMS.txt"
 
   info "Installing seek ${VERSION} (${OS}/${ARCH})..."
 
@@ -162,32 +217,65 @@ main() {
 
   info "Downloading ${DOWNLOAD_URL}..."
   download_file "$DOWNLOAD_URL" "${TMP_DIR}/${ARCHIVE_NAME}"
-  download_file "$CHECKSUM_URL" "${TMP_DIR}/SHA256SUMS.txt" || true
-
-  if [ -f "${TMP_DIR}/SHA256SUMS.txt" ]; then
-    info "Verifying checksum..."
-    if ! verify_checksum "${TMP_DIR}/${ARCHIVE_NAME}" "${TMP_DIR}/SHA256SUMS.txt"; then
-      abort "SHA256 checksum verification failed! Aborting."
-    fi
-    success "Checksum verified."
+  info "Downloading ${CHECKSUM_URL}..."
+  # Fail-closed: no checksum file means no install.
+  if ! download_file "$CHECKSUM_URL" "${TMP_DIR}/SHA256SUMS.txt"; then
+    abort "Could not download SHA256SUMS.txt. Refusing to install without checksum verification."
   fi
+
+  info "Verifying checksum..."
+  if ! verify_checksum "${TMP_DIR}/${ARCHIVE_NAME}" "${TMP_DIR}/SHA256SUMS.txt"; then
+    abort "SHA256 checksum verification failed! Aborting."
+  fi
+  success "Checksum verified."
+
+  info "Validating archive contents..."
+  validate_archive "${TMP_DIR}/${ARCHIVE_NAME}"
+  success "Archive validated (no symlinks/traversal, single binary)."
 
   info "Extracting..."
   tar -xzf "${TMP_DIR}/${ARCHIVE_NAME}" -C "$TMP_DIR"
 
-  # Find the seek binary inside the extracted tree
-  BIN_PATH=$(find "$TMP_DIR" -name "$BINARY_NAME" -type f | head -n 1)
-  if [ -z "$BIN_PATH" ] || [ ! -f "$BIN_PATH" ]; then
-    abort "Could not find '${BINARY_NAME}' binary in downloaded archive."
+  BIN_PATH="${TMP_DIR}/${BIN_REL}"
+  if [ ! -f "$BIN_PATH" ]; then
+    abort "Binary disappeared after extraction: ${BIN_REL}"
+  fi
+
+  # Keep the previous binary for rollback until the new one passes a smoke test.
+  TARGET_BIN="${TARGET_DIR}/${BINARY_NAME}"
+  BACKUP_BIN="${TARGET_BIN}.bak.$$"
+  if [ -e "$TARGET_BIN" ]; then
+    if ! cp "$TARGET_BIN" "$BACKUP_BIN"; then
+      abort "Could not back up existing binary at ${TARGET_BIN}."
+    fi
   fi
 
   chmod +x "$BIN_PATH"
-  mv "$BIN_PATH" "${TARGET_DIR}/${BINARY_NAME}"
-  success "Installed seek to ${TARGET_DIR}/${BINARY_NAME}"
+  if ! mv "$BIN_PATH" "$TARGET_BIN"; then
+    rm -f "$BACKUP_BIN"
+    abort "Could not move binary into ${TARGET_DIR}."
+  fi
 
-  # Verify executable
-  INSTALLED_VER=$("${TARGET_DIR}/${BINARY_NAME}" --version 2>/dev/null || echo "$VERSION")
-  printf "\n${GREEN}${BOLD}seek ${INSTALLED_VER} installed successfully!${RESET}\n\n"
+  # Smoke test: the binary must actually run. A wrong/absent version string is
+  # a warning; a binary that cannot execute is a hard failure with rollback.
+  if INSTALLED_VER=$("$TARGET_BIN" --version 2>/dev/null); then
+    case "$INSTALLED_VER" in
+      *"$VERSION"*) : ;;
+      *) warn "Installed binary reports '${INSTALLED_VER}' but ${VERSION} was requested." ;;
+    esac
+    rm -f "$BACKUP_BIN"
+  else
+    if [ -e "$BACKUP_BIN" ]; then
+      if mv "$BACKUP_BIN" "$TARGET_BIN"; then
+        warn "Previous binary restored."
+      fi
+    else
+      rm -f "$TARGET_BIN"
+    fi
+    abort "Installed binary failed to run (--version); installation rolled back. The release artifact is broken — report it at https://github.com/${REPO}/issues"
+  fi
+
+  success "Installed seek to ${TARGET_BIN}"
 
   # PATH check and guidance
   case ":$PATH:" in
