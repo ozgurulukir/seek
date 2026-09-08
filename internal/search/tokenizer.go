@@ -81,12 +81,36 @@ func NewAnalyzer(lang string, enableStopWords, enableStemmer bool) *Analyzer {
 			a.stemmer = func(s string) string {
 				env := snowballstem.NewEnv(s)
 				turkish.Stem(env)
-				return env.AssignTo()
+				return guardedTurkishStem(s, env.AssignTo())
 			}
 		}
 	}
 
 	return a
+}
+
+// guardedTurkishStem protects against the Turkish snowball stemmer corrupting
+// non-Turkish ASCII tokens (e.g. "config" -> "configi", "launchd" -> "launchdu",
+// "service" -> "servi\u00e7"). Those bogus stems add letters or alter the ending
+// such that the result is neither a prefix of the token nor shorter, and a "*"
+// prefix query on them therefore never matches the original word — silently
+// zeroing search results (FTS5 queries are implicit AND).
+//
+// A stem is accepted only when it is still usable as a search prefix of the
+// token (the normal suffix-stripping case) or when it is strictly shorter
+// (genuine Turkish root reconstruction, e.g. "kitabı" -> "kitap"). Anything
+// else — same length but rewritten, or longer than the input — is discarded in
+// favour of the original token, mirroring how the English stemmer never grows
+// words. Returns the original token when the stem is unusable.
+func guardedTurkishStem(token, stem string) string {
+	if stem == "" {
+		return token
+	}
+	prefix := len(stem) <= len(token) && token[:len(stem)] == stem
+	if prefix || len(stem) < len(token) {
+		return stem
+	}
+	return token
 }
 
 // Analyze processes text through the analyzer pipeline:

@@ -124,6 +124,9 @@ type SearchConfig struct {
 	// QueryMode is the default query parsing mode: "raw" (FTS5 MATCH passthrough)
 	// or "parsed" (structured query parser). Invalid parsed queries fall back to raw.
 	QueryMode string `yaml:"query_mode,omitempty"`
+	// AnalyzeLang is the default analysis/stemming language ("en" or "tr"),
+	// applied when --analyze-lang is not passed on the CLI.
+	AnalyzeLang string `yaml:"analyze_lang,omitempty"`
 	// DefaultLimit is the default max results when not specified via CLI.
 	DefaultLimit int `yaml:"default_limit,omitempty"`
 	// RRFK is the RRF (Reciprocal Rank Fusion) constant.
@@ -234,6 +237,7 @@ func defaultAppConfig(cacheD string) *AppConfig {
 			},
 			Search: SearchConfig{
 				QueryMode:    DefaultQueryMode,
+				AnalyzeLang:  DefaultAnalyzeLang,
 				DefaultLimit: DefaultSearchLimit,
 				RRFK:         DefaultRRFK,
 			},

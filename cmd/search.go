@@ -42,7 +42,7 @@ type SearchCmd struct {
 
 	// Analysis
 	Analyze         bool   `help:"Analyze query text (tokenize, stem) and exit"`
-	AnalyzeLang     string `help:"Language for analysis (en, tr)" default:"en"`
+	AnalyzeLang     string `help:"Language for analysis (en, tr); defaults to search.analyze_lang in config, then en"`
 	Autocomplete    bool   `help:"Show autocomplete suggestions for the query prefix"`
 	AutocompleteMax int    `help:"Max autocomplete suggestions" default:"10"`
 }
@@ -52,7 +52,7 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 
 	// Handle analyze mode
 	if c.Analyze {
-		return c.runAnalyze()
+		return c.runAnalyze(cfg)
 	}
 
 	// Handle autocomplete mode
@@ -83,7 +83,7 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 	// Build analyzer if tokenization is enabled
 	var analyzer *search.Analyzer
 	if c.QueryMode != "raw" && cfg.Config.Search.QueryMode != "raw" {
-		analyzer = search.NewAnalyzer(c.AnalyzeLang, true, true)
+		analyzer = search.NewAnalyzer(effectiveAnalyzeLang(c.AnalyzeLang, cfg), true, true)
 	}
 
 	opts := search.Options{
@@ -276,11 +276,25 @@ func (c *SearchCmd) printResults(results []store.SearchResult) {
 }
 
 // runAnalyze handles the --analyze flag: tokenizes and stems the query text.
-func (c *SearchCmd) runAnalyze() error {
-	analyzer := search.NewAnalyzer(c.AnalyzeLang, true, true)
+func (c *SearchCmd) runAnalyze(cfg *config.AppConfig) error {
+	lang := effectiveAnalyzeLang(c.AnalyzeLang, cfg)
+	analyzer := search.NewAnalyzer(lang, true, true)
 	tokens := analyzer.Analyze(c.Query)
-	fmt.Printf("Analyzed (%s): %v\n", c.AnalyzeLang, tokens)
+	fmt.Printf("Analyzed (%s): %v\n", lang, tokens)
 	return nil
+}
+
+// effectiveAnalyzeLang resolves the analysis language: an explicit language
+// flag wins, then search.analyze_lang from config, then the built-in default
+// ("en"). Shared by `seek search --analyze` and `seek analyze`.
+func effectiveAnalyzeLang(flagLang string, cfg *config.AppConfig) string {
+	if flagLang != "" {
+		return flagLang
+	}
+	if cfg.Config.Search.AnalyzeLang != "" {
+		return cfg.Config.Search.AnalyzeLang
+	}
+	return config.DefaultAnalyzeLang
 }
 
 // runAutocomplete handles the --autocomplete flag: shows prefix completions.

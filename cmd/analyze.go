@@ -9,12 +9,13 @@ import (
 
 type AnalyzeCmd struct {
 	Text string `arg:"" help:"Text to analyze"`
-	Lang string `short:"l" default:"en" help:"Language (en, tr)"`
+	Lang string `short:"l" help:"Language (en, tr); defaults to search.analyze_lang in config, then en"`
 }
 
 func (c *AnalyzeCmd) Run(cfg *config.AppConfig) error {
-	analyzer := search.NewAnalyzer(c.Lang, true, true)
+	lang := effectiveAnalyzeLang(c.Lang, cfg)
+	analyzer := search.NewAnalyzer(lang, true, true)
 	tokens := analyzer.Analyze(c.Text)
-	fmt.Printf("Analyzed (%s): %v\n", c.Lang, tokens)
+	fmt.Printf("Analyzed (%s): %v\n", lang, tokens)
 	return nil
 }

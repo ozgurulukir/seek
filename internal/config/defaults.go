@@ -58,6 +58,8 @@ const (
 	DefaultQueryMode = "parsed"
 	// DefaultSearchLimit is the default search result limit.
 	DefaultSearchLimit = 20
+	// DefaultAnalyzeLang is the default query analysis language (English).
+	DefaultAnalyzeLang = "en"
 	// DefaultRRFK is the default RRF constant.
 	DefaultRRFK = 60
 

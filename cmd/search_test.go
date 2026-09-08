@@ -46,6 +46,51 @@ func TestSearchCmd_Analyze(t *testing.T) {
 	}
 }
 
+func TestSearchCmd_AnalyzeLangFromConfig(t *testing.T) {
+	// With no --analyze-lang flag, search.analyze_lang from config must drive
+	// analysis (Jerry's rec: the language should be configurable without a CLI flag).
+	cfg := &config.AppConfig{}
+	cfg.Config.Search.AnalyzeLang = "tr"
+
+	searchCmd := &cmd.SearchCmd{
+		Query:   "kitaplar",
+		Analyze: true, // AnalyzeLang left empty -> resolved from config
+	}
+
+	out := captureStdout(t, func() {
+		if err := searchCmd.Run(cfg); err != nil {
+			t.Errorf("SearchCmd.Run analyze mode failed: %v", err)
+		}
+	})
+	if !strings.Contains(out, "Analyzed (tr)") {
+		t.Errorf("expected analyzer language resolved from config to be tr, got: %s", out)
+	}
+	if !strings.Contains(out, "kitap") {
+		t.Errorf("expected Turkish stemming of kitaplar -> kitap, got: %s", out)
+	}
+}
+
+func TestSearchCmd_AnalyzeLangFlagOverridesConfig(t *testing.T) {
+	// An explicit --analyze-lang must win over config.
+	cfg := &config.AppConfig{}
+	cfg.Config.Search.AnalyzeLang = "tr"
+
+	searchCmd := &cmd.SearchCmd{
+		Query:       "running searches",
+		Analyze:     true,
+		AnalyzeLang: "en",
+	}
+
+	out := captureStdout(t, func() {
+		if err := searchCmd.Run(cfg); err != nil {
+			t.Errorf("SearchCmd.Run analyze mode failed: %v", err)
+		}
+	})
+	if !strings.Contains(out, "Analyzed (en)") {
+		t.Errorf("expected explicit --analyze-lang en to override config tr, got: %s", out)
+	}
+}
+
 func TestSearchCmd_Execution(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")

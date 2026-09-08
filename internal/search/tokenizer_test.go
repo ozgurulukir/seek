@@ -63,6 +63,59 @@ func TestAnalyzerTurkishStemming(t *testing.T) {
 	}
 }
 
+func TestAnalyzerTurkishDoesNotCorruptASCII(t *testing.T) {
+	// The Turkish snowball stemmer must not mangle non-Turkish ASCII tokens
+	// (e.g. "config" -> "configi", "launchd" -> "launchdu"). Such bogus stems
+	// produce FTS5 prefixes that never match the original word, silently
+	// zeroing results. The guard must keep these tokens intact.
+	a := NewAnalyzer("tr", true, true)
+	tests := []struct {
+		input   string
+		stemmed string // Analyze output (single token)
+		query   string // AnalyzeForQuery output (prefix-expanded)
+	}{
+		{"launchd", "launchd", "launchd"},
+		{"read", "read", "read"},
+		{"config", "config", "config"},
+		{"build", "build", "build"},
+		{"service", "service", "service"},
+		{"sqlite", "sqli", "sqli*"}, // harmless: sqli is a prefix of sqlite
+		{"token", "toke", "toke*"},  // harmless: toke is a prefix of token
+	}
+
+	for _, tt := range tests {
+		got := a.Analyze(tt.input)
+		if len(got) != 1 || got[0] != tt.stemmed {
+			t.Errorf("Analyze(%q) = %v, want [%q]", tt.input, got, tt.stemmed)
+		}
+		gotQ := a.AnalyzeForQuery(tt.input)
+		if len(gotQ) != 1 || gotQ[0] != tt.query {
+			t.Errorf("AnalyzeForQuery(%q) = %v, want [%q]", tt.input, gotQ, tt.query)
+		}
+	}
+}
+
+func TestAnalyzerTurkishVoicingPreserved(t *testing.T) {
+	// Genuine Turkish root reconstruction (p->b voicing: kitabı -> kitap) must
+	// still stem, even though the stem is not a prefix of the token.
+	a := NewAnalyzer("tr", true, true)
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"kitabı", "kitap"},
+		{"kitapta", "kitap"},
+		{"faturayı", "fatura"},
+	}
+
+	for _, tt := range tests {
+		got := a.Analyze(tt.input)
+		if len(got) != 1 || got[0] != tt.expected {
+			t.Errorf("Analyze(%q) = %v, want [%q]", tt.input, got, tt.expected)
+		}
+	}
+}
+
 func TestAnalyzerStopWords(t *testing.T) {
 	a := NewAnalyzer("en", true, true)
 	got := a.Analyze("the quick brown fox jumps over the lazy dog")

@@ -43,6 +43,9 @@ func TestDefaultAppConfig(t *testing.T) {
 	if ac.Config.Search.QueryMode != DefaultQueryMode {
 		t.Errorf("Search.QueryMode = %q, want %q", ac.Config.Search.QueryMode, DefaultQueryMode)
 	}
+	if ac.Config.Search.AnalyzeLang != DefaultAnalyzeLang {
+		t.Errorf("Search.AnalyzeLang = %q, want %q", ac.Config.Search.AnalyzeLang, DefaultAnalyzeLang)
+	}
 	if ac.Config.VectorIndex.HNSW.M != DefaultHNSWM {
 		t.Errorf("HNSW.M = %d, want %d", ac.Config.VectorIndex.HNSW.M, DefaultHNSWM)
 	}
