@@ -556,8 +556,11 @@ func findHookIndex(settings map[string]interface{}, event string, matches func(s
 
 var (
 	// directSeekHookCommandPattern accepts only a complete direct invocation of
-	// the seek executable, including quoted POSIX and Windows paths.
-	directSeekHookCommandPattern = regexp.MustCompile(`(?i)^(?:'[^']*[\\/]seek(?:\.exe)?'|"[^"]*[\\/]seek(?:\.exe)?"|(?:[^\s]+[\\/])?seek(?:\.exe)?)\s+(?:hooks\s+)?(?:sync|context)(?:\s+--(?:agent\s+\S+|embed))*\s*$`)
+	// the seek executable: quoted POSIX/Windows paths, bare "seek", and quoted
+	// bare 'seek' — the quoted bare form is what install writes when
+	// exec.LookPath("seek") cannot resolve the binary (e.g. CI), so install,
+	// upgrade and uninstall must all still find their own hook entry.
+	directSeekHookCommandPattern = regexp.MustCompile(`(?i)^(?:'[^']*(?:[\\/])?seek(?:\.exe)?'|"[^"]*(?:[\\/])?seek(?:\.exe)?"|(?:[^\s]+[\\/])?seek(?:\.exe)?)\s+(?:hooks\s+)?(?:sync|context)(?:\s+--(?:agent\s+\S+|embed))*\s*$`)
 )
 
 func isSeekHookCommand(command string) bool {

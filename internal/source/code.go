@@ -232,7 +232,14 @@ func matchesGitignore(relPath string, patterns []string) bool {
 	return false
 }
 
-func shouldSkipDir(info os.FileInfo, relPath string, gitignorePatterns []string) bool {
+// shouldSkipDir reports whether a directory inside a code collection should be
+// pruned during the walk. isRoot must be true for the collection root itself —
+// the user explicitly pointed seek at that directory, so name-based rules
+// (hidden directories, ignore-listed names) do not apply to it.
+func shouldSkipDir(info os.FileInfo, relPath string, gitignorePatterns []string, isRoot bool) bool {
+	if isRoot {
+		return false
+	}
 	baseName := info.Name()
 	if IsIgnoredDirectory(baseName) || (len(baseName) > 1 && strings.HasPrefix(baseName, ".") && baseName != ".") {
 		return true
@@ -348,9 +355,11 @@ func ScanCodeWithWarnings(dir, pattern string) ([]CodeFileInfo, []string, error)
 			relPath = path
 		}
 
-		// Check directory exclusion
+		// Check directory exclusion. The collection root itself is exempt:
+		// `seek add ~/.hermes --code` must index the dot-directory the user
+		// explicitly named, while hidden dirs *under* it are still skipped.
 		if info.IsDir() {
-			if shouldSkipDir(info, relPath, gitignorePatterns) {
+			if shouldSkipDir(info, relPath, gitignorePatterns, path == absDir) {
 				return filepath.SkipDir
 			}
 			return nil

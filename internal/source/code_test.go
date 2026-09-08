@@ -3,6 +3,7 @@ package source_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/source"
@@ -239,5 +240,40 @@ func TestScanCode_GitignoreNegationNotHonored(t *testing.T) {
 	// Both *.go files are excluded even though important.go is negated.
 	if len(files) != 0 {
 		t.Logf("negation now supported; positive rule matched %d file(s)", len(files))
+	}
+}
+
+func TestScanCode_HiddenRootIsIndexed(t *testing.T) {
+	// `seek add ~/.hermes --code` names a hidden directory as the collection
+	// root. The hidden-dir skip must apply to entries *under* the root, not to
+	// the root itself — otherwise the user gets "0 indexed" with no error.
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, ".hermes")
+	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".hidden"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile := func(path, content string) {
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(filepath.Join(root, "a.py"), "def a(): pass\n")
+	writeFile(filepath.Join(root, "scripts", "b.py"), "def b(): pass\n")
+	writeFile(filepath.Join(root, ".hidden", "c.py"), "def c(): pass\n")
+
+	files, err := source.ScanCode(root, "**/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("hidden root = %d files, want 2 (a.py, scripts/b.py); .hidden/c.py must stay skipped", len(files))
+	}
+	for _, f := range files {
+		if strings.Contains(f.Path, ".hidden") {
+			t.Errorf("file inside hidden subdir was indexed: %s", f.Path)
+		}
 	}
 }
