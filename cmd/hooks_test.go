@@ -631,3 +631,47 @@ func TestIsSeekHookCommand_MatcherMatrix(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteHookSettings_BackupAndPerms(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+
+	// Fresh write: no backup, file created 0600.
+	settings := map[string]interface{}{"hooks": map[string]interface{}{}}
+	if err := writeHookSettings(path, settings); err != nil {
+		t.Fatalf("fresh write: %v", err)
+	}
+	entries, _ := filepath.Glob(path + ".bak-*")
+	if len(entries) != 0 {
+		t.Errorf("backup created on first write: %v", entries)
+	}
+	if fi, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	} else if got := fi.Mode().Perm(); got != 0600 {
+		t.Errorf("new settings perm = %04o, want 0600", uint32(got))
+	}
+
+	// Existing 0644 file: must be backed up once, and its 0644 mode preserved
+	// (repair must never widen OR silently tighten the user's chosen mode).
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeHookSettings(path, map[string]interface{}{"a": 1}); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	baks, _ := filepath.Glob(path + ".bak-*")
+	if len(baks) != 1 {
+		t.Fatalf("got %d backups, want 1 (dedup per run): %v", len(baks), baks)
+	}
+	data, err := os.ReadFile(baks[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"hooks"`) {
+		t.Errorf("backup does not contain the pre-rewrite content: %q", data)
+	}
+	if fi, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	} else if got := fi.Mode().Perm(); got != 0644 {
+		t.Errorf("existing settings perm = %04o, want preserved 0644", uint32(got))
+	}
+}

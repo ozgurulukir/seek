@@ -389,7 +389,8 @@ func writeHookState(path string, state hookState) error {
 	if err != nil {
 		return err
 	}
-	return renameio.WriteFile(path, data, config.DefaultFilePerms)
+	// hookState carries agent/session context — private to the user.
+	return renameio.WriteFile(path, data, config.DefaultPrivateFilePerms)
 }
 
 func acquireHookLock(ctx context.Context, path string) (*hookLock, error) {
@@ -450,14 +451,52 @@ func readHookSettings(path string) (map[string]interface{}, error) {
 }
 
 func writeHookSettings(path string, settings map[string]interface{}) error {
-	if err := os.MkdirAll(filepath.Dir(path), config.DefaultDirPerms); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), config.DefaultPrivateDirPerms); err != nil {
 		return err
 	}
+	// Surgical safety (Jerry review #7): these files are shared with the agent
+	// runtime — a bad rewrite or permission widening can break the user's
+	// setup. Keep a one-per-run timestamped backup and never widen the mode:
+	// an existing file keeps its permissions, a new one is written 0600.
+	if err := backupHookSettings(path); err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
-	return renameio.WriteFile(path, data, config.DefaultFilePerms)
+	perm := os.FileMode(config.DefaultPrivateFilePerms)
+	if fi, err := os.Stat(path); err == nil {
+		perm = fi.Mode().Perm()
+	}
+	return renameio.WriteFile(path, data, perm)
+}
+
+// hookSettingsBackedUp dedupes backups within a single seek run: one snapshot
+// per settings file is enough for rollback, and hook repair touches the same
+// file several times. A path is only marked after a real backup was taken —
+// an absent file is not, so the first rewrite of a newly created file still
+// gets its snapshot.
+var hookSettingsBackedUp = map[string]bool{}
+
+func backupHookSettings(path string) error {
+	if hookSettingsBackedUp[path] {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // first write; nothing exists to snapshot yet
+		}
+		return err
+	}
+	backup := path + ".bak-" + time.Now().Format("20060102-150405")
+	if err := os.WriteFile(backup, data, config.DefaultPrivateFilePerms); err != nil {
+		return err
+	}
+	hookSettingsBackedUp[path] = true
+	return nil
 }
 
 func seekBinaryPath() string {
