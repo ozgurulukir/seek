@@ -203,7 +203,9 @@ compression:
   level: 3
 
 privacy:
-  offline_only: true        # refuse ALL embedding/rerank/OCR network calls;
+  offline_only: true        # refuse ALL embedding/rerank/OCR/xberg network
+                            # calls (xberg extraction sends document contents
+                            # to its service, even on localhost);
                             # keyword search stays fully local either way
                             # (see: seek doctor → privacy / data egress)
 ```

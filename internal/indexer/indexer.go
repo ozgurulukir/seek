@@ -112,6 +112,20 @@ func NewExtractor(cfg *config.AppConfig, backend string) (extractor.Extractor, e
 	case "", "builtin":
 		return builtin.New(ocr, cfg.CacheDir), nil
 	case "xberg":
+		// The xberg backend extracts rich documents by POSTing their contents
+		// to the xberg HTTP service — external data flow even when that
+		// service runs on localhost. privacy.offline_only forbids every
+		// network call, so refuse the backend outright rather than silently
+		// shipping document text over the wire (review finding: the offline
+		// guarantee previously did not cover this path).
+		if cfg.Config.OfflineOnly() {
+			return nil, fmt.Errorf("offline_only is enabled: the xberg extractor sends document contents to %q; use --backend builtin (or disable offline_only)", func() string {
+				if u := cfg.Config.Extractor.XbergBaseURL; u != "" {
+					return u
+				}
+				return config.DefaultXbergBaseURL
+			}())
+		}
 		return xberg.NewWithHealthCheck(cfg.Config.Extractor, cfg.CacheDir)
 	default:
 		return nil, fmt.Errorf("unknown extractor backend %q (want builtin or xberg)", backend)

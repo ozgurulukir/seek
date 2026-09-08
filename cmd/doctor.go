@@ -30,8 +30,13 @@ type privatePath struct {
 // is included: the config file/dir and the cache dir with the SQLite index
 // (plus WAL/SHM sidecars, which hold the same content while live). db_path
 // and cache_dir may be relocated via config, so the effective paths come from
-// the loaded config, not just the defaults.
+// the loaded config, not just the defaults. The HNSW vector index is covered
+// too: its persist_path is configurable and defaults under cache_dir.
 func privatePaths(cfg *config.AppConfig) []privatePath {
+	hnswPath := cfg.Config.VectorIndex.HNSW.PersistPath
+	if hnswPath == "" {
+		hnswPath = filepath.Join(cfg.CacheDir, "hnsw.index")
+	}
 	paths := []privatePath{
 		{config.ConfigDir(), true, config.DefaultPrivateDirPerms},
 		{filepath.Join(config.ConfigDir(), "config.yaml"), false, config.DefaultPrivateFilePerms},
@@ -39,6 +44,7 @@ func privatePaths(cfg *config.AppConfig) []privatePath {
 		{cfg.DBPath, false, config.DefaultPrivateFilePerms},
 		{cfg.DBPath + "-wal", false, config.DefaultPrivateFilePerms},
 		{cfg.DBPath + "-shm", false, config.DefaultPrivateFilePerms},
+		{hnswPath, false, config.DefaultPrivateFilePerms},
 	}
 	return paths
 }
@@ -127,7 +133,7 @@ func (c *DoctorCmd) Run(cfg *config.AppConfig) error {
 func (c *DoctorCmd) reportPrivacy(cfg *config.AppConfig) {
 	fmt.Println("privacy / data egress:")
 	if cfg.Config.OfflineOnly() {
-		fmt.Println("  offline_only: true — embedding, rerank, and OCR network calls are blocked")
+		fmt.Println("  offline_only: true — embedding, rerank, OCR, and xberg extractor network calls are blocked")
 	} else {
 		fmt.Println("  offline_only: false — external providers may receive data:")
 	}
@@ -140,6 +146,9 @@ func (c *DoctorCmd) reportPrivacy(cfg *config.AppConfig) {
 	}
 	if cfg.Config.OCR.Enabled && cfg.Config.OCR.BaseURL != "" {
 		fmt.Printf("  ocr:       %s (%s)  <- scanned PDF page images\n", cfg.Config.OCR.BaseURL, cfg.Config.OCR.Model)
+	}
+	if cfg.Config.Extractor.XbergBaseURL != "" && !cfg.Config.OfflineOnly() {
+		fmt.Printf("  xberg:     %s  <- full document contents (rich-format extraction)\n", cfg.Config.Extractor.XbergBaseURL)
 	}
 	if cfg.Config.OfflineOnly() {
 		return
