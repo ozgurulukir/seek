@@ -43,6 +43,7 @@ type AddCmd struct {
 	Opencode bool `help:"Shortcut for --parser opencode"`
 	Copilot  bool `help:"Shortcut for --parser copilot-cli"`
 	Zed      bool `help:"Shortcut for --parser zed"`
+	Hermes   bool `help:"Shortcut for --parser hermes (Hermes Agent state.db)"`
 
 	// Schema-driven alternatives to the native parsers (text-only, no image extraction).
 	ClaudeSchema bool `help:"Shortcut for --parser claude (schema-driven, text-only)"`
@@ -100,6 +101,9 @@ func (c *AddCmd) Run(cfg *config.AppConfig) error {
 	if c.Zed {
 		parserFlags = append(parserFlags, "--zed")
 	}
+	if c.Hermes {
+		parserFlags = append(parserFlags, "--hermes")
+	}
 	if c.ClaudeSchema {
 		parserFlags = append(parserFlags, "--claude-schema")
 	}
@@ -123,6 +127,9 @@ func (c *AddCmd) Run(cfg *config.AppConfig) error {
 	}
 	if c.Zed {
 		parserName = "zed"
+	}
+	if c.Hermes {
+		parserName = "hermes"
 	}
 	if c.ClaudeSchema {
 		parserName = "claude"

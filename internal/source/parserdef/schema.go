@@ -126,6 +126,12 @@ var knownCursorFormats = map[string]bool{
 var knownMetadataFields = map[string]bool{
 	"workspace": true,
 	"parent":    true,
+	// Hermes Agent conversation context (parsers/hermes.yaml): where and for
+	// whom the conversation happened, and which model served it.
+	"platform": true,
+	"profile":  true,
+	"channel":  true,
+	"model":    true,
 }
 
 // Validate checks the schema for required fields, enum values, and SELECT-only queries.
@@ -184,7 +190,7 @@ func (v *VersionSpec) validate(srcPrefix string, verIdx int, driver string) erro
 	// Metadata field names must be in the known vocabulary.
 	for field := range v.Sessions.Metadata {
 		if !knownMetadataFields[field] {
-			return fmt.Errorf("%s: unknown metadata field %q (known: workspace, parent)", prefix, field)
+			return fmt.Errorf("%s: unknown metadata field %q (known: workspace, parent, platform, profile, channel, model)", prefix, field)
 		}
 	}
 	// Sessions query must be SELECT-only (for sqlite driver).

@@ -124,7 +124,7 @@ seek add <path> --name <name>      # add markdown collection
 seek add <path> --code             # add source code collection (35+ languages)
 seek add <path> --docs             # add rich documents (docx/xlsx/pdf/html/csv via xberg)
 seek add --claude | --codex        # add agent conversation sessions (+images)
-seek add --opencode | --copilot    # add schema-driven agent sessions
+seek add --opencode | --copilot | --hermes # add schema-driven agent sessions
 seek sync                          # incremental index update
 seek embed [-f] [-r]               # generate embeddings (batch or realtime)
 

@@ -117,7 +117,7 @@ ocr:
 seek add <path> --name <n>   # add markdown/notes collection
 seek add <path> --code       # add source code collection (Go, Rust, Python, TS/JS, etc.)
 seek add --claude | --codex | --images <path> | --pdf <path>
-seek add --opencode | --copilot | --zed | --parser <name>   # schema-driven parser collections
+seek add --opencode | --copilot | --zed | --hermes | --parser <name>   # schema-driven parser collections
 seek sync                    # incremental sync
 seek embed                   # generate embeddings (realtime or batch)
 seek search "<query>" [--lex] [--vec] [-l N] [--collection ...] [--aggs ...]

@@ -1,0 +1,92 @@
+format: 1
+name: hermes
+description: Hermes Agent oturumları (~/.hermes/state.db ve profil başına ayrı state.db)
+
+sources:
+  # Aktif profilin veritabanı: <hermes-home>/state.db
+  # Not: source-level when yalnız dosya/dizin kontrolünde değerlendirilir
+  # (tablo kontrolleri version-level'da DB bağlantısıyla yapılır).
+  - driver: sqlite
+    when:
+      file_exists: "~/.hermes/state.db"
+    paths: ["~/.hermes/state.db"]
+    exclude: ["*-wal", "*-shm"]
+    versions:
+      - version: 1
+        when:
+          table_exists: "sessions"
+          column_exists: ["sessions", "profile_name"]
+        sessions:
+          query: |
+            SELECT id,
+                   COALESCE(NULLIF(title, ''), NULLIF(display_name, ''), id) AS stitle,
+                   CAST(COALESCE(last_activity_at, ended_at, started_at) AS INTEGER) AS scursor,
+                   source, profile_name, display_name, model
+            FROM sessions
+            WHERE COALESCE(active, 1) = 1
+          id: id
+          title: stitle
+          cursor: scursor
+          cursor_format: epoch_s
+          metadata:
+            platform: source
+            profile: profile_name
+            channel: display_name
+            model: model
+        messages:
+          query: |
+            SELECT role,
+                   COALESCE(content, '') AS mcontent,
+                   CAST(timestamp AS INTEGER) AS mts
+            FROM messages
+            WHERE session_id = :session_id
+              AND COALESCE(active, 1) = 1
+              AND COALESCE(compacted, 0) = 0
+              AND COALESCE(_compressed_summary, 0) = 0
+              AND TRIM(COALESCE(content, '')) <> ''
+            ORDER BY timestamp, id
+          role: role
+          content: mcontent
+
+  # İzole profiller: <hermes-home>/profiles/<name>/state.db
+  - driver: sqlite
+    when:
+      dir_exists: "~/.hermes/profiles"
+    paths: ["~/.hermes/profiles/*/state.db"]
+    exclude: ["*-wal", "*-shm"]
+    versions:
+      - version: 1
+        when:
+          table_exists: "sessions"
+          column_exists: ["sessions", "profile_name"]
+        sessions:
+          query: |
+            SELECT id,
+                   COALESCE(NULLIF(title, ''), NULLIF(display_name, ''), id) AS stitle,
+                   CAST(COALESCE(last_activity_at, ended_at, started_at) AS INTEGER) AS scursor,
+                   source, profile_name, display_name, model
+            FROM sessions
+            WHERE COALESCE(active, 1) = 1
+          id: id
+          title: stitle
+          cursor: scursor
+          cursor_format: epoch_s
+          metadata:
+            platform: source
+            profile: profile_name
+            channel: display_name
+            model: model
+        messages:
+          query: |
+            SELECT role,
+                   COALESCE(content, '') AS mcontent,
+                   CAST(timestamp AS INTEGER) AS mts
+            FROM messages
+            WHERE session_id = :session_id
+              AND COALESCE(active, 1) = 1
+              AND COALESCE(compacted, 0) = 0
+              AND COALESCE(_compressed_summary, 0) = 0
+              AND TRIM(COALESCE(content, '')) <> ''
+            ORDER BY timestamp, id
+          role: role
+          content: mcontent

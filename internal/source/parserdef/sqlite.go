@@ -115,7 +115,9 @@ func tableExists(db *sql.DB, table string) bool {
 }
 
 func columnExists(db *sql.DB, table, column string) bool {
-	rows, err := db.Query(`SELECT cid, name, type, notnull, dflt_value, pk FROM pragma_table_info(?)`, table)
+	// "notnull" is quoted: newer SQLite versions treat the bare word as a
+	// keyword and reject the statement, making every column_exists check fail.
+	rows, err := db.Query(`SELECT cid, name, type, "notnull", dflt_value, pk FROM pragma_table_info(?)`, table)
 	if err != nil {
 		return false
 	}
