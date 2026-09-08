@@ -126,6 +126,31 @@ Deep-dive documentation and specialized guides:
 | 🔍 [**Query Syntax & Filters Guide**](docs/query-guide.md) | Structured AST syntax (AND/OR/NOT), filters (`--repo`, `--lang`), line spans (`:L10-L45`), and `-C`. |
 | 🤖 [**Schema-Driven Parsers**](docs/parsers.md) | Opencode, Copilot CLI, Zed threads, and `--workspace` filtering. |
 | 🛠️ [**AI Agent Skill Reference**](skills/seek/SKILL.md) | Agent prompt instructions, query strategies, and CLI reference. |
+| 🔌 [**MCP Server**](docs/mcp.md) | `seek mcp` — Model Context Protocol tools (`seek_search`, `seek_status`, `seek_autocomplete`) for Claude Code and other agents. |
+
+---
+
+## 🔌 MCP Server (for AI agents)
+
+Expose your entire seek index to AI agents via the [Model Context Protocol](https://modelcontextprotocol.io):
+
+```bash
+seek mcp          # MCP server on stdio (JSON-RPC 2.0)
+```
+
+**Tools:** `seek_search` (hybrid search, same fields as `seek search --json`), `seek_status` (collections + counts), `seek_autocomplete` (prefix suggestions).
+
+**Claude Code** — add to `~/.claude.json` (or project `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "seek": { "command": "seek", "args": ["mcp"] }
+  }
+}
+```
+
+Reads only the local SQLite index; the `privacy.offline_only` setting applies unchanged (no network egress beyond your configured embedding provider, same as `seek search`).
 
 ---
 
@@ -145,6 +170,7 @@ seek embed [-f] [-r]               # generate embeddings (batch or realtime)
 seek search "<query>"              # hybrid search (BM25 + Vector + Re-ranking)
 seek search "<query>" --json       # machine-readable JSON (agent/scripting surface);
                                    # content_kind: full=whole chunk, snippet=FTS excerpt
+seek mcp                           # MCP server on stdio (AI agent tools)
 seek search "<query>" --lex        # BM25 keyword search only
 seek search "<query>" --vec        # Vector semantic search only
 seek search "<query>" -C 1         # expand surrounding chunk context
