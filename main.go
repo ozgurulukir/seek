@@ -17,21 +17,22 @@ var (
 )
 
 var cli struct {
-	Version kong.VersionFlag `help:"Show version and exit."`
-	Add     cmd.AddCmd       `cmd:"" help:"Add a collection to index"`
-	Rm      cmd.RmCmd        `cmd:"" help:"Remove a collection"`
-	Sync    cmd.SyncCmd      `cmd:"" help:"Sync all collections (incremental)"`
-	Embed   cmd.EmbedCmd     `cmd:"" help:"Generate embeddings (batch or realtime)"`
-	Search  cmd.SearchCmd    `cmd:"" help:"Search across collections"`
-	Analyze cmd.AnalyzeCmd   `cmd:"" help:"Analyze text (tokenize, stem)"`
-	Status  cmd.StatusCmd    `cmd:"" help:"Show index status"`
-	Service cmd.ServiceCmd   `cmd:"" help:"Manage periodic sync+embed service"`
-	Hooks   cmd.HooksCmd     `cmd:"" help:"Install/remove hooks for AI tools"`
-	Auth    cmd.AuthCmd      `cmd:"" help:"Manage API authentication"`
-	Config  cmd.ConfigCmd    `cmd:"" help:"Show or edit config"`
-	Schema  cmd.SchemaCmd    `cmd:"" help:"Show or validate schema"`
-	Doctor  cmd.DoctorCmd    `cmd:"" help:"Check and repair local installation (permissions)"`
-	Parsers cmd.ParsersCmd   `cmd:"" help:"Manage schema-driven parser definitions"`
+	Version   kong.VersionFlag `help:"Show version and exit."`
+	Add       cmd.AddCmd       `cmd:"" help:"Add a collection to index"`
+	Rm        cmd.RmCmd        `cmd:"" help:"Remove a collection"`
+	Sync      cmd.SyncCmd      `cmd:"" help:"Sync all collections (incremental)"`
+	Embed     cmd.EmbedCmd     `cmd:"" help:"Generate embeddings (batch or realtime)"`
+	Search    cmd.SearchCmd    `cmd:"" help:"Search across collections"`
+	Analyze   cmd.AnalyzeCmd   `cmd:"" help:"Analyze text (tokenize, stem)"`
+	Status    cmd.StatusCmd    `cmd:"" help:"Show index status"`
+	Service   cmd.ServiceCmd   `cmd:"" help:"Manage periodic sync+embed service"`
+	Hooks     cmd.HooksCmd     `cmd:"" help:"Install/remove hooks for AI tools"`
+	Auth      cmd.AuthCmd      `cmd:"" help:"Manage API authentication"`
+	Config    cmd.ConfigCmd    `cmd:"" help:"Show or edit config"`
+	Schema    cmd.SchemaCmd    `cmd:"" help:"Show or validate schema"`
+	Doctor    cmd.DoctorCmd    `cmd:"" help:"Check and repair local installation (permissions)"`
+	Uninstall cmd.UninstallCmd `cmd:"" help:"Remove seek service, hooks, cache, and config (--dry-run first)"`
+	Parsers   cmd.ParsersCmd   `cmd:"" help:"Manage schema-driven parser definitions"`
 }
 
 func main() {
