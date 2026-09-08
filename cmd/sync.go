@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/indexer"
@@ -46,7 +47,7 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) error {
 	}
 
 	idx := indexer.New(cfg, db)
-	failed := 0
+	var failedNames []string
 
 	for i := range collections {
 		col := &collections[i]
@@ -60,13 +61,13 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) error {
 		fmt.Printf("Syncing %q (%s)...\n", col.Name, col.Type)
 
 		if err := idx.SyncCollection(col); err != nil {
-			failed++
-			fmt.Printf("  ERROR: %v\n", err)
+			failedNames = append(failedNames, col.Name)
+			fmt.Printf("  ERROR [%s]: %v\n", col.Name, err)
 		}
 	}
 
-	if failed > 0 {
-		return fmt.Errorf("%d collection(s) failed to sync", failed)
+	if len(failedNames) > 0 {
+		return fmt.Errorf("%d collection(s) failed to sync: %v", len(failedNames), strings.Join(failedNames, ", "))
 	}
 	return nil
 }

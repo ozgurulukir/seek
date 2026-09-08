@@ -32,9 +32,12 @@ func TestScanImages(t *testing.T) {
 	// Nested directory — should be walked
 	mustWrite(t, filepath.Join(dir, "sub", "deep.png"))
 
-	files, err := ScanImages(dir)
+	files, issues, err := ScanImages(dir)
 	if err != nil {
 		t.Fatalf("ScanImages: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Errorf("ScanImages = %d issues for normal dir, want 0", len(issues))
 	}
 
 	if got, want := len(files), 10; got != want {
@@ -72,7 +75,7 @@ func TestScanImages_CaseInsensitive(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "upper.PNG"))
 	mustWrite(t, filepath.Join(dir, "mixed.Jpg"))
 
-	files, err := ScanImages(dir)
+	files, _, err := ScanImages(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +85,7 @@ func TestScanImages_CaseInsensitive(t *testing.T) {
 }
 
 func TestScanImages_EmptyDir(t *testing.T) {
-	files, err := ScanImages(t.TempDir())
+	files, _, err := ScanImages(t.TempDir())
 	if err != nil {
 		t.Fatalf("ScanImages empty dir: %v", err)
 	}
@@ -112,7 +115,7 @@ func TestScanImages_ReadError(t *testing.T) {
 		t.Skipf("skipping test due to inability to change file permissions: %v", err)
 	}
 
-	files, err := ScanImages(dir)
+	files, issues, err := ScanImages(dir)
 	if err != nil {
 		t.Fatalf("ScanImages with read error: %v", err)
 	}
@@ -124,5 +127,16 @@ func TestScanImages_ReadError(t *testing.T) {
 
 	if filepath.Base(files[0].Path) != "valid.png" {
 		t.Errorf("Expected valid.png, got %s", filepath.Base(files[0].Path))
+	}
+
+	// The unreadable file's I/O error must be surfaced as a scan issue.
+	if len(issues) != 1 {
+		t.Fatalf("ScanImages = %d issues, want 1 (the unreadable file)", len(issues))
+	}
+	if issues[0].Err == nil {
+		t.Errorf("scan issue for %s has nil error", issues[0].Path)
+	}
+	if filepath.Base(issues[0].Path) != "unreadable.png" {
+		t.Errorf("expected issue for unreadable.png, got %s", filepath.Base(issues[0].Path))
 	}
 }

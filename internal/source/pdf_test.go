@@ -3,6 +3,7 @@ package source
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -27,9 +28,12 @@ func TestScanPdfs(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "sub"), 0755)
 	writeMinPdf(t, filepath.Join(dir, "sub", "b.PDF")) // uppercase ext
 
-	files, err := ScanPdfs(dir)
+	files, issues, err := ScanPdfs(dir)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Errorf("ScanPdfs = %d issues for normal dir, want 0", len(issues))
 	}
 	if len(files) != 2 {
 		t.Fatalf("ScanPdfs = %d files, want 2 (only .pdf, case-insensitive)", len(files))
@@ -38,5 +42,45 @@ func TestScanPdfs(t *testing.T) {
 		if f.ContentHash == "" || f.Mtime == 0 {
 			t.Errorf("file %s missing hash/mtime", f.Path)
 		}
+	}
+}
+
+func TestScanPdfs_ReadError(t *testing.T) {
+	// Windows does not enforce POSIX read permissions — Chmod(0222) does not
+	// prevent reading, so this test cannot verify read-error skipping on Windows.
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not support POSIX read-only file permissions")
+	}
+
+	dir := t.TempDir()
+	writeMinPdf(t, filepath.Join(dir, "valid.pdf"))
+
+	unreadable := filepath.Join(dir, "unreadable.pdf")
+	writeMinPdf(t, unreadable)
+	if err := os.Chmod(unreadable, 0222); err != nil {
+		t.Skipf("skipping test due to inability to change file permissions: %v", err)
+	}
+
+	files, issues, err := ScanPdfs(dir)
+	if err != nil {
+		t.Fatalf("ScanPdfs with read error: %v", err)
+	}
+
+	if len(files) != 1 {
+		t.Fatalf("ScanPdfs = %d files, want 1. Got: %v", len(files), files)
+	}
+	if filepath.Base(files[0].Path) != "valid.pdf" {
+		t.Errorf("Expected valid.pdf, got %s", filepath.Base(files[0].Path))
+	}
+
+	// The unreadable file's I/O error must be surfaced as a scan issue.
+	if len(issues) != 1 {
+		t.Fatalf("ScanPdfs = %d issues, want 1 (the unreadable file)", len(issues))
+	}
+	if issues[0].Err == nil {
+		t.Errorf("scan issue for %s has nil error", issues[0].Path)
+	}
+	if filepath.Base(issues[0].Path) != "unreadable.pdf" {
+		t.Errorf("expected issue for unreadable.pdf, got %s", filepath.Base(issues[0].Path))
 	}
 }

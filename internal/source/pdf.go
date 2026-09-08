@@ -20,10 +20,15 @@ type PdfFile struct {
 // text extraction now live in the extraction domain (internal/extractor/builtin);
 // this scanner only discovers files and hashes their contents so the indexer
 // can skip unchanged PDFs.
-func ScanPdfs(dir string) ([]PdfFile, error) {
+func ScanPdfs(dir string) ([]PdfFile, []ScanIssue, error) {
 	var files []PdfFile
+	var issues []ScanIssue
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil {
+			issues = append(issues, ScanIssue{Path: path, Err: err})
+			return nil
+		}
+		if info.IsDir() {
 			return nil
 		}
 		if strings.ToLower(filepath.Ext(path)) != ".pdf" {
@@ -35,6 +40,7 @@ func ScanPdfs(dir string) ([]PdfFile, error) {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
+			issues = append(issues, ScanIssue{Path: path, Err: err})
 			return nil
 		}
 		hash := sha256.Sum256(data)
@@ -48,5 +54,5 @@ func ScanPdfs(dir string) ([]PdfFile, error) {
 		})
 		return nil
 	})
-	return files, err
+	return files, issues, err
 }

@@ -413,7 +413,7 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 }
 
 func (idx *Indexer) syncImage(col *store.Collection) error {
-	files, err := source.ScanImages(col.Path)
+	files, scanIssues, err := source.ScanImages(col.Path)
 	if err != nil {
 		return err
 	}
@@ -422,9 +422,16 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-	idx.cleanupOrphans(col.ID, diskPaths, "images")
+	if len(scanIssues) == 0 {
+		idx.cleanupOrphans(col.ID, diskPaths, "images")
+	} else {
+		for _, issue := range scanIssues {
+			idx.log.Printf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
+		}
+	}
 
 	var indexed, skipped, failed int
+	failed += len(scanIssues)
 	for _, f := range files {
 		existing, err := idx.db.GetDocument(col.ID, f.Path)
 		if err == nil && existing.ContentHash == f.ContentHash {
@@ -453,7 +460,7 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 }
 
 func (idx *Indexer) syncPdf(col *store.Collection) error {
-	files, err := source.ScanPdfs(col.Path)
+	files, scanIssues, err := source.ScanPdfs(col.Path)
 	if err != nil {
 		return err
 	}
@@ -462,7 +469,13 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-	idx.cleanupOrphans(col.ID, diskPaths, "PDFs")
+	if len(scanIssues) == 0 {
+		idx.cleanupOrphans(col.ID, diskPaths, "PDFs")
+	} else {
+		for _, issue := range scanIssues {
+			idx.log.Printf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
+		}
+	}
 
 	ext, err := idx.extractorFor(col)
 	if err != nil {
@@ -470,6 +483,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 	}
 
 	var indexed, skipped, failed int
+	failed += len(scanIssues)
 	for _, f := range files {
 		existing, err := idx.db.GetDocument(col.ID, f.Path)
 		if err == nil && existing.ContentHash == f.ContentHash {

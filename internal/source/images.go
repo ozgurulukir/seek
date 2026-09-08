@@ -23,12 +23,19 @@ var imageExtensions = map[string]bool{
 	".tiff": true, ".tif": true, ".svg": true,
 }
 
-// ScanImages walks a directory and returns all image files.
-func ScanImages(dir string) ([]ImageFile, error) {
+// ScanImages walks a directory and returns all image files plus any scan
+// issues encountered (walk or read errors). I/O failures are surfaced as
+// ScanIssue entries so the indexer can log them; the scan continues so
+// healthy files are still indexed.
+func ScanImages(dir string) ([]ImageFile, []ScanIssue, error) {
 	var files []ImageFile
-
+	var issues []ScanIssue
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil {
+			issues = append(issues, ScanIssue{Path: path, Err: err})
+			return nil
+		}
+		if info.IsDir() {
 			return nil
 		}
 
@@ -44,6 +51,7 @@ func ScanImages(dir string) ([]ImageFile, error) {
 
 		data, err := os.ReadFile(path)
 		if err != nil {
+			issues = append(issues, ScanIssue{Path: path, Err: err})
 			return nil
 		}
 		hash := sha256.Sum256(data)
@@ -60,5 +68,5 @@ func ScanImages(dir string) ([]ImageFile, error) {
 		return nil
 	})
 
-	return files, err
+	return files, issues, err
 }

@@ -98,6 +98,34 @@ func TestSyncCmd_SyncSpecificCollection(t *testing.T) {
 	}
 }
 
+func TestSyncCmd_ErrorIncludesCollectionName(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db := openTestStore(t, dbPath)
+
+	// An unknown collection type makes SyncCollection fail deterministically
+	// and synchronously, without depending on filesystem state.
+	col, err := db.CreateCollection("unknown-type-col", store.CollectionType("bogus"), tmpDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	cfg := &config.AppConfig{
+		DBPath:   dbPath,
+		CacheDir: filepath.Join(tmpDir, "cache"),
+	}
+
+	syncCmd := &cmd.SyncCmd{}
+	err = syncCmd.Run(cfg)
+	if err == nil {
+		t.Fatalf("expected SyncCmd.Run to fail for an unknown collection type")
+	}
+	if !strings.Contains(err.Error(), col.Name) {
+		t.Errorf("error %q does not include the failing collection name %q", err.Error(), col.Name)
+	}
+}
+
 func TestSyncCmd_SyncAllCollections(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
