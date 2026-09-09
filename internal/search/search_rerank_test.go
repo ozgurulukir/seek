@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
@@ -48,7 +49,7 @@ func TestSearchWithReranker(t *testing.T) {
 	_ = db.UpsertFTS(doc2, "doc2.go", "apple orange")
 	_ = db.InsertChunkWithLines(doc2, 0, "apple orange", 1, 20, nil)
 
-	engine := search.NewEngine(search.NewStoreRepository(db), nil)
+	engine := search.NewEngine(app.NewStoreSearchRepository(db), nil)
 
 	// Invert the order with mock reranker
 	mockR := &mockReranker{

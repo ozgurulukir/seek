@@ -69,9 +69,9 @@ func Open(cfg *config.AppConfig) (*Runtime, error) {
 	r.EmbedClient = embed.NewClientFromConfig(cfg)
 	r.VLClient = embed.NewVLClientFromConfig(cfg)
 	if r.VLClient != nil {
-		r.Search = search.NewEngineWithVL(search.NewStoreRepository(s), r.EmbedClient, r.VLClient)
+		r.Search = search.NewEngineWithVL(NewStoreSearchRepository(s), r.EmbedClient, r.VLClient)
 	} else {
-		r.Search = search.NewEngine(search.NewStoreRepository(s), r.EmbedClient)
+		r.Search = search.NewEngine(NewStoreSearchRepository(s), r.EmbedClient)
 	}
 	r.Indexer = indexer.NewWithDependencies(cfg, s, indexer.NewConfigExtractorResolver(cfg), s)
 	return r, nil

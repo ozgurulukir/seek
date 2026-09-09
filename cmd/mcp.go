@@ -100,9 +100,9 @@ func buildMCPServer(db *store.Store, cfg *config.AppConfig) (*mcp.Server, error)
 	vlClient := embed.NewVLClientFromConfig(cfg)
 	var engine *search.Engine
 	if vlClient != nil {
-		engine = search.NewEngineWithVL(search.NewStoreRepository(db), embedClient, vlClient)
+		engine = search.NewEngineWithVL(app.NewStoreSearchRepository(db), embedClient, vlClient)
 	} else {
-		engine = search.NewEngine(search.NewStoreRepository(db), embedClient)
+		engine = search.NewEngine(app.NewStoreSearchRepository(db), embedClient)
 	}
 	return buildMCPServerWithServices(db, engine, cfg)
 }
