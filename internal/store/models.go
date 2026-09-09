@@ -1,7 +1,8 @@
 package store
 
-// Domain models shared across the store package. Extracted from store.go as
-// part of the god-object decomposition — a mechanical move, no changes.
+// Persistence models shared across the store package. They describe the
+// SQLite-facing representation; search and command presentation contracts
+// must map away from these types at their package boundary.
 
 type CollectionType string
 

@@ -237,7 +237,7 @@ func (idx *Indexer) SyncCollectionWithReport(ctx context.Context, col *store.Col
 		idx.report.Errors = append(idx.report.Errors, SyncFailure{Kind: "unsupported_collection", Error: fmt.Sprintf("unknown collection type: %s", col.Type)})
 		return idx.LastReport(), fmt.Errorf("unknown collection type: %s", col.Type)
 	}
-	err := h(idx.ctx(), idx, col)
+	err := h(idx.ctx(), &HandlerDeps{Indexer: idx, Writer: idx.writer}, col)
 	if err != nil {
 		idx.report.Failed++
 		idx.report.Errors = append(idx.report.Errors, SyncFailure{Kind: "collection", Error: err.Error()})
