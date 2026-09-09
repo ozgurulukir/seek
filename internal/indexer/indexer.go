@@ -33,8 +33,10 @@ func (l defaultLogger) Printf(format string, v ...interface{}) {
 type Indexer struct {
 	cfg      *config.AppConfig
 	db       *store.Store
+	writer   IndexWriter
 	log      Logger
 	ctxValue context.Context
+	report   SyncReport
 	// ext is an explicit override for the extraction backend, taking precedence
 	// over both per-collection backend and the config default. Set via
 	// WithExtractor (e.g. from a --backend flag). When nil, the backend is
@@ -44,12 +46,20 @@ type Indexer struct {
 }
 
 func New(cfg *config.AppConfig, db *store.Store) *Indexer {
+	return NewWithDependencies(cfg, db, NewConfigExtractorResolver(cfg), db)
+}
+
+// NewWithDependencies is the composition-root constructor. The legacy New
+// convenience constructor remains for package callers and tests, while the
+// runtime supplies extractor and writer dependencies explicitly.
+func NewWithDependencies(cfg *config.AppConfig, db *store.Store, resolver ExtractorResolver, writer IndexWriter) *Indexer {
 	return &Indexer{
 		cfg:      cfg,
 		db:       db,
+		writer:   writer,
 		log:      defaultLogger{},
 		ctxValue: context.Background(),
-		resolver: NewConfigExtractorResolver(cfg),
+		resolver: resolver,
 	}
 }
 
@@ -64,6 +74,13 @@ func (idx *Indexer) WithExtractor(ext extractor.Extractor) *Indexer {
 // need to know how the composition root obtains extractors.
 func (idx *Indexer) WithExtractorResolver(resolver ExtractorResolver) *Indexer {
 	idx.resolver = resolver
+	return idx
+}
+
+// WithIndexWriter injects the transactional persistence seam used by all
+// format handlers. The default writer is the Store passed to New.
+func (idx *Indexer) WithIndexWriter(writer IndexWriter) *Indexer {
+	idx.writer = writer
 	return idx
 }
 
@@ -155,9 +172,9 @@ func (idx *Indexer) writeFastFields(docID int64, label string, metadata map[stri
 		}
 		if err := idx.db.FastFields().Set(docID, field, value); err != nil {
 			if label != "" {
-				idx.log.Printf("  WARN: fastfield %s=%s %s: %v\n", field, value, label, err)
+				idx.warnf("  WARN: fastfield %s=%s %s: %v\n", field, value, label, err)
 			} else {
-				idx.log.Printf("  WARN: metadata %s=%s: %v\n", field, value, err)
+				idx.warnf("  WARN: metadata %s=%s: %v\n", field, value, err)
 			}
 		}
 	}
@@ -168,6 +185,29 @@ func (idx *Indexer) WithLogger(l Logger) *Indexer {
 	return idx
 }
 
+func (idx *Indexer) warnf(format string, v ...interface{}) {
+	idx.report.Warnings++
+	idx.log.Printf(format, v...)
+}
+
+func (idx *Indexer) addReport(report SyncReport) {
+	idx.report.add(report)
+}
+
+func (idx *Indexer) recordFailure(path, kind string, err error) {
+	if err == nil {
+		return
+	}
+	idx.report.Errors = append(idx.report.Errors, SyncFailure{Path: path, Kind: kind, Error: err.Error()})
+}
+
+// LastReport returns a snapshot of the most recent collection sync report.
+func (idx *Indexer) LastReport() SyncReport {
+	report := idx.report
+	report.Errors = append([]SyncFailure(nil), report.Errors...)
+	return report
+}
+
 func (idx *Indexer) SyncCollection(col *store.Collection) error {
 	return idx.SyncCollectionContext(context.Background(), col)
 }
@@ -176,15 +216,33 @@ func (idx *Indexer) SyncCollection(col *store.Collection) error {
 // context. The compatibility method above keeps existing command/test call
 // sites source-compatible during the runtime migration.
 func (idx *Indexer) SyncCollectionContext(ctx context.Context, col *store.Collection) error {
+	_, err := idx.SyncCollectionWithReport(ctx, col)
+	return err
+}
+
+// SyncCollectionWithReport syncs one collection and returns structured
+// accounting alongside the compatibility error result.
+func (idx *Indexer) SyncCollectionWithReport(ctx context.Context, col *store.Collection) (SyncReport, error) {
+	idx.report = SyncReport{}
 	if col == nil {
-		return fmt.Errorf("sync collection: nil collection")
+		idx.report.Failed++
+		idx.report.Errors = append(idx.report.Errors, SyncFailure{Kind: "invalid_collection", Error: "nil collection"})
+		return idx.LastReport(), fmt.Errorf("sync collection: nil collection")
 	}
+	idx.report.Collection = col.Name
 	idx.WithContext(ctx)
 	h, ok := syncHandlers[col.Type]
 	if !ok {
-		return fmt.Errorf("unknown collection type: %s", col.Type)
+		idx.report.Unsupported++
+		idx.report.Errors = append(idx.report.Errors, SyncFailure{Kind: "unsupported_collection", Error: fmt.Sprintf("unknown collection type: %s", col.Type)})
+		return idx.LastReport(), fmt.Errorf("unknown collection type: %s", col.Type)
 	}
-	return h(idx.ctx(), idx, col)
+	err := h(idx.ctx(), idx, col)
+	if err != nil {
+		idx.report.Failed++
+		idx.report.Errors = append(idx.report.Errors, SyncFailure{Kind: "collection", Error: err.Error()})
+	}
+	return idx.LastReport(), err
 }
 
 // ConversationBatch is the normalized output of Claude/Codex parsers. The
@@ -232,7 +290,7 @@ func (idx *Indexer) syncConversation(
 
 		lineCount, err := source.CountLines(f.Path)
 		if err != nil {
-			idx.log.Printf("  WARN: count lines %s: %v\n", f.Path, err)
+			idx.warnf("  WARN: count lines %s: %v\n", f.Path, err)
 			failed++
 			continue
 		}
@@ -249,7 +307,7 @@ func (idx *Indexer) syncConversation(
 
 		batch, err := parseFile(f.Path, fromLine)
 		if err != nil {
-			idx.log.Printf("  WARN: parse %s: %v\n", f.Path, err)
+			idx.warnf("  WARN: parse %s: %v\n", f.Path, err)
 			failed++
 			continue
 		}
@@ -293,12 +351,12 @@ func (idx *Indexer) syncConversation(
 		baseSeq := 0
 		if fromLine > 0 {
 			if existing == nil {
-				idx.log.Printf("  WARN: append %s: document state is missing\n", f.Path)
+				idx.warnf("  WARN: append %s: document state is missing\n", f.Path)
 				failed++
 				continue
 			}
 			if ms, err := idx.db.MaxChunkSeqContext(idx.ctx(), existing.ID); err != nil {
-				idx.log.Printf("  WARN: chunk seq %s: %v\n", f.Path, err)
+				idx.warnf("  WARN: chunk seq %s: %v\n", f.Path, err)
 				failed++
 				continue
 			} else {
@@ -348,12 +406,12 @@ func (idx *Indexer) syncConversation(
 			Chunks:       indexChunks,
 		}
 		if fromLine == 0 {
-			_, err = idx.db.UpsertAndReplaceIndex(idx.ctx(), request)
+			_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), request)
 		} else {
-			_, err = idx.db.UpsertAndAppendIndex(idx.ctx(), request)
+			_, err = idx.writer.UpsertAndAppendIndex(idx.ctx(), request)
 		}
 		if err != nil {
-			idx.log.Printf("  WARN: index %s: %v\n", f.Path, err)
+			idx.warnf("  WARN: index %s: %v\n", f.Path, err)
 			failed++
 			continue
 		}
@@ -361,6 +419,7 @@ func (idx *Indexer) syncConversation(
 		indexed++
 	}
 
+	idx.addReport(SyncReport{Indexed: indexed, Skipped: skipped, Failed: failed})
 	idx.log.Printf("  Synced: %d indexed, %d unchanged", indexed, skipped)
 	if totalImages > 0 {
 		idx.log.Printf(", %d images", totalImages)
@@ -433,7 +492,8 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 		}
 	} else {
 		for _, issue := range scanIssues {
-			idx.log.Printf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
+			idx.warnf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
+			idx.recordFailure(issue.Path, "scan", issue.Err)
 		}
 	}
 
@@ -455,7 +515,7 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 		}
 
 		maxSize, overlap := idx.chunkSize()
-		_, err = idx.db.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+		_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
 			CollectionID: col.ID,
 			Path:         f.Path,
 			Title:        f.Title,
@@ -467,13 +527,14 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 			FastFields:   f.Metadata,
 		})
 		if err != nil {
-			idx.log.Printf("  WARN: index %s: %v\n", f.Path, err)
+			idx.warnf("  WARN: index %s: %v\n", f.Path, err)
 			failed++
 			continue
 		}
 		indexed++
 	}
 
+	idx.addReport(SyncReport{Indexed: indexed, Skipped: skipped, Failed: failed})
 	idx.log.Printf("  Synced: %d indexed, %d unchanged", indexed, skipped)
 	if failed > 0 {
 		idx.log.Printf(", %d failed", failed)
@@ -498,7 +559,8 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 		}
 	} else {
 		for _, issue := range scanIssues {
-			idx.log.Printf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
+			idx.warnf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
+			idx.recordFailure(issue.Path, "scan", issue.Err)
 		}
 	}
 
@@ -514,7 +576,7 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 			continue
 		}
 
-		_, err = idx.db.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+		_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
 			CollectionID: col.ID,
 			Path:         f.Path,
 			Title:        f.Name,
@@ -530,13 +592,14 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 			}},
 		})
 		if err != nil {
-			idx.log.Printf("  WARN: index %s: %v\n", f.Path, err)
+			idx.warnf("  WARN: index %s: %v\n", f.Path, err)
 			failed++
 			continue
 		}
 		indexed++
 	}
 
+	idx.addReport(SyncReport{Indexed: indexed, Skipped: skipped, Failed: failed})
 	idx.log.Printf("  Synced: %d indexed, %d unchanged", indexed, skipped)
 	if failed > 0 {
 		idx.log.Printf(", %d failed", failed)
@@ -561,7 +624,8 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 		}
 	} else {
 		for _, issue := range scanIssues {
-			idx.log.Printf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
+			idx.warnf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
+			idx.recordFailure(issue.Path, "scan", issue.Err)
 		}
 	}
 
@@ -588,7 +652,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 		// fall back to chunking the extracted text.
 		res, err := ext.Extract(idx.ctx(), f.Path)
 		if err != nil {
-			idx.log.Printf("  WARN: extract %s: %v\n", f.Path, err)
+			idx.warnf("  WARN: extract %s: %v\n", f.Path, err)
 			failed++
 			continue
 		}
@@ -634,7 +698,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 			pageText.WriteString(res.Content)
 		}
 
-		_, err = idx.db.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+		_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
 			CollectionID: col.ID,
 			Path:         f.Path,
 			Title:        f.Name,
@@ -645,7 +709,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 			Chunks:       indexChunks,
 		})
 		if err != nil {
-			idx.log.Printf("  WARN: index %s: %v\n", f.Path, err)
+			idx.warnf("  WARN: index %s: %v\n", f.Path, err)
 			failed++
 			continue
 		}
@@ -658,6 +722,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 		}
 	}
 
+	idx.addReport(SyncReport{Indexed: indexed, Skipped: skipped, Failed: failed})
 	idx.log.Printf("PDFs: %d indexed, %d skipped", indexed, skipped)
 	if failed > 0 {
 		idx.log.Printf(", %d failed", failed)
@@ -691,7 +756,8 @@ func (idx *Indexer) syncDocuments(col *store.Collection) error {
 		}
 	} else {
 		for _, issue := range scanIssues {
-			idx.log.Printf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
+			idx.warnf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
+			idx.recordFailure(issue.Path, "scan", issue.Err)
 		}
 	}
 
@@ -716,6 +782,7 @@ func (idx *Indexer) syncDocuments(col *store.Collection) error {
 		}
 	}
 
+	idx.addReport(SyncReport{Indexed: indexed, Skipped: skipped, Unsupported: unsupported, Failed: failed})
 	idx.log.Printf("Documents: %d indexed, %d unchanged", indexed, skipped)
 	if unsupported > 0 {
 		idx.log.Printf(", %d unsupported", unsupported)
@@ -736,7 +803,8 @@ func (idx *Indexer) syncCode(col *store.Collection) error {
 		return err
 	}
 	for _, p := range skippedPaths {
-		idx.log.Printf("  WARN: scan skipped %s (unreadable)\n", p)
+		idx.warnf("  WARN: scan skipped %s (unreadable)\n", p)
+		idx.recordFailure(p, "scan", fmt.Errorf("unreadable path"))
 	}
 
 	if len(skippedPaths) == 0 {
@@ -744,7 +812,7 @@ func (idx *Indexer) syncCode(col *store.Collection) error {
 			return fmt.Errorf("cleanup code documents: %w", err)
 		}
 	} else {
-		idx.log.Printf("  WARN: skipping code orphan cleanup due to %d scan issue(s)\n", len(skippedPaths))
+		idx.warnf("  WARN: skipping code orphan cleanup due to %d scan issue(s)\n", len(skippedPaths))
 	}
 
 	var indexed, skipped, failed int
@@ -755,7 +823,7 @@ func (idx *Indexer) syncCode(col *store.Collection) error {
 		}
 		isSkipped, err := idx.indexCodeFile(col, f)
 		if err != nil {
-			idx.log.Printf("  WARN: %v\n", err)
+			idx.warnf("  WARN: %v\n", err)
 			failed++
 			continue
 		}
@@ -766,6 +834,7 @@ func (idx *Indexer) syncCode(col *store.Collection) error {
 		}
 	}
 
+	idx.addReport(SyncReport{Indexed: indexed, Skipped: skipped, Failed: failed})
 	idx.log.Printf("Code: %d indexed, %d unchanged", indexed, skipped)
 	if failed > 0 {
 		idx.log.Printf(", %d failed", failed)
@@ -824,7 +893,7 @@ func (idx *Indexer) indexCodeFile(col *store.Collection, f source.CodeFileInfo) 
 	}
 
 	maxSize, overlap := idx.chunkSize()
-	_, err = idx.db.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+	_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
 		CollectionID: col.ID,
 		Path:         f.Path,
 		Title:        f.Title,
@@ -897,7 +966,8 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 		return fmt.Errorf("sync sessions: %w", err)
 	}
 	for _, se := range sErrs {
-		idx.log.Printf("  WARN: session %s: %v\n", se.SessionID, se.Err)
+		idx.warnf("  WARN: session %s: %v\n", se.SessionID, se.Err)
+		idx.recordFailure(se.SessionID, "scan", se.Err)
 	}
 
 	// 5. Index each session.
@@ -946,7 +1016,7 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 
 		// FTS + chunks: full rewrite (sessions are non-append-only).
 		maxSize, _ := idx.chunkSize()
-		_, err = idx.db.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+		_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
 			CollectionID: col.ID,
 			Path:         docPath,
 			Title:        title,
@@ -957,7 +1027,7 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 			FastFields:   sess.Metadata,
 		})
 		if err != nil {
-			idx.log.Printf("  WARN: index %s: %v\n", docPath, err)
+			idx.warnf("  WARN: index %s: %v\n", docPath, err)
 			failed++
 			continue
 		}
@@ -974,9 +1044,10 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 			return fmt.Errorf("cleanup sessions: %w", err)
 		}
 	} else {
-		idx.log.Printf("  Skipping orphan cleanup due to %d scan error(s)\n", len(sErrs))
+		idx.warnf("  WARN: skipping orphan cleanup due to %d scan error(s)\n", len(sErrs))
 	}
 
+	idx.addReport(SyncReport{Indexed: indexed, Skipped: skipped, Failed: failed + len(sErrs)})
 	idx.log.Printf("  Synced: %d indexed, %d unchanged", indexed, skipped)
 	if failed > 0 || len(sErrs) > 0 {
 		idx.log.Printf(", %d failed", failed+len(sErrs))
@@ -1017,6 +1088,7 @@ func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFil
 	if err == nil && existing.ContentHash == f.ContentHash {
 		if existing.Mtime != f.Mtime {
 			if err := idx.db.UpdateDocumentMtimeContext(idx.ctx(), existing.ID, f.Mtime); err != nil {
+				idx.recordFailure(f.Path, "persistence", err)
 				return docStatusFailed
 			}
 		}
@@ -1027,18 +1099,20 @@ func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFil
 	// scanner set that xberg's /formats doesn't list). Counted separately
 	// from failures so the summary distinguishes "unsupported" from "errored".
 	if !ext.Supports(f.Path) {
+		idx.report.Errors = append(idx.report.Errors, SyncFailure{Path: f.Path, Kind: "unsupported", Error: "extractor does not support file"})
 		return docStatusUnsupported
 	}
 
 	res, err := ext.Extract(idx.ctx(), f.Path)
 	if err != nil {
-		idx.log.Printf("  WARN: extract %s: %v\n", f.Path, err)
+		idx.warnf("  WARN: extract %s: %v\n", f.Path, err)
+		idx.recordFailure(f.Path, "extraction", err)
 		return docStatusFailed
 	}
 
 	lineCount := strings.Count(res.Content, "\n") + 1
 	maxSize, overlap := idx.chunkSize()
-	if _, err := idx.db.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+	if _, err := idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
 		CollectionID: col.ID,
 		Path:         f.Path,
 		Title:        res.Title,
@@ -1048,7 +1122,8 @@ func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFil
 		FTSContent:   res.Content,
 		Chunks:       toIndexChunks(chunk.ChunkMarkdown(res.Content, maxSize, overlap), true),
 	}); err != nil {
-		idx.log.Printf("  WARN: index %s: %v\n", f.Path, err)
+		idx.warnf("  WARN: index %s: %v\n", f.Path, err)
+		idx.recordFailure(f.Path, "persistence", err)
 		return docStatusFailed
 	}
 

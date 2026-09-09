@@ -1,12 +1,13 @@
 package search
 
 import (
-	"database/sql"
 	"fmt"
 	"strings"
 )
 
-// AggregationType represents the type of aggregation.
+// AggregationType represents the type of aggregation requested by a search
+// client. It is a domain value; SQL construction belongs to the persistence
+// adapter.
 type AggregationType string
 
 const (
@@ -16,12 +17,19 @@ const (
 	AggregationCount     AggregationType = "count"
 )
 
-// Aggregation represents a search aggregation.
+// AggregationSpec is the validated, persistence-neutral description of an
+// aggregation. The Store adapter maps it to its own query plan.
+type AggregationSpec struct {
+	Type     AggregationType
+	Field    string
+	Interval string
+	Ranges   []string
+}
+
+// Aggregation is the parsed aggregation contract consumed by SearchRepository.
+// It deliberately exposes no SQL or database row-scanning behavior.
 type Aggregation interface {
-	// SQL returns the SQL query fragment for this aggregation.
-	SQL() (query string, args []interface{})
-	// Scan scans the aggregation result from a row.
-	Scan(rows *sql.Rows) ([]Bucket, error)
+	Spec() AggregationSpec
 }
 
 // Bucket represents an aggregation bucket.
@@ -30,210 +38,47 @@ type Bucket struct {
 	Count int
 }
 
-// --- Aggregation Types ---
+type TermAggregation struct{ Field string }
 
-// escapeColumnName escapes a column identifier to prevent SQL injection.
-// It produces delimited (double-quoted) identifiers.
-// It handles compound identifiers (e.g. c.name) by escaping each part individually.
-func escapeColumnName(name string) string {
-	parts := strings.Split(name, ".")
-	for i, p := range parts {
-		// Wrap in double quotes and escape existing double quotes
-		parts[i] = `"` + strings.ReplaceAll(p, `"`, `""`) + `"`
-	}
-	return strings.Join(parts, ".")
+func (a *TermAggregation) Spec() AggregationSpec {
+	return AggregationSpec{Type: AggregationTerm, Field: a.Field}
 }
 
-// TermAggregation counts documents by a field value.
-type TermAggregation struct {
-	Field string
-}
-
-func (a *TermAggregation) SQL() (string, []interface{}) {
-	field := a.Field
-	// Fast-field facets live in fast_fields (key/value rows per document),
-	// not in a documents column — route them to a dedicated subquery.
-	switch strings.ToLower(field) {
-	case "lang", "tags", "repo", "ext", "filename", "rel_path", "workspace":
-		name := strings.ToLower(field)
-		return `SELECT REPLACE(ff.field_value, '"', '') as key, COUNT(*) as count
-			FROM documents d
-			JOIN collections c ON c.id = d.collection_id
-			JOIN fast_fields ff ON ff.doc_id = d.id AND ff.field_name = ?
-			GROUP BY ff.field_value ORDER BY count DESC`,
-			[]interface{}{name}
-	}
-	// Map common field names to actual columns
-	switch strings.ToLower(field) {
-	case "type", "doc_type":
-		field = "c.type"
-	case "collection":
-		field = "c.name"
-	case "created_at", "date":
-		field = "d.created_at"
-	case "line_count":
-		field = "d.line_count"
-	case "path":
-		field = "d.path"
-	default:
-		// Assume it's a collection field
-		if !strings.Contains(field, ".") {
-			field = "c." + field
-		}
-	}
-	escapedField := escapeColumnName(field)
-	return fmt.Sprintf("SELECT %s as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY %s ORDER BY count DESC", escapedField, escapedField), nil
-}
-
-func (a *TermAggregation) Scan(rows *sql.Rows) ([]Bucket, error) {
-	var buckets []Bucket
-	for rows.Next() {
-		var b Bucket
-		if err := rows.Scan(&b.Key, &b.Count); err != nil {
-			return nil, err
-		}
-		buckets = append(buckets, b)
-	}
-	return buckets, nil
-}
-
-// HistogramAggregation counts documents in time-based buckets.
 type HistogramAggregation struct {
 	Field    string
-	Interval string // "day", "week", "month", "year"
+	Interval string
 }
 
-func (a *HistogramAggregation) SQL() (string, []interface{}) {
-	field := a.Field
-	if field == "" {
-		field = "created_at"
+func (a *HistogramAggregation) Spec() AggregationSpec {
+	interval := a.Interval
+	if interval == "" {
+		interval = "month"
 	}
-	// Map common field names to actual columns
-	switch strings.ToLower(field) {
-	case "type", "doc_type":
-		field = "c.type"
-	case "collection":
-		field = "c.name"
-	case "created_at", "date":
-		field = "d.created_at"
-	case "line_count":
-		field = "d.line_count"
-	case "path":
-		field = "d.path"
-	default:
-		// Assume it's a collection field
-		if !strings.Contains(field, ".") {
-			field = "c." + field
-		}
-	}
-	escapedField := escapeColumnName(field)
-
-	var format string
-	switch strings.ToLower(a.Interval) {
-	case "day":
-		format = "%Y-%m-%d"
-	case "week":
-		format = "%Y-%W"
-	case "month":
-		format = "%Y-%m"
-	case "year":
-		format = "%Y"
-	default:
-		format = "%Y-%m"
-	}
-	return fmt.Sprintf("SELECT strftime(?, %s) as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY key ORDER BY key", escapedField), []interface{}{format}
+	return AggregationSpec{Type: AggregationHistogram, Field: a.Field, Interval: interval}
 }
 
-func (a *HistogramAggregation) Scan(rows *sql.Rows) ([]Bucket, error) {
-	var buckets []Bucket
-	for rows.Next() {
-		var b Bucket
-		if err := rows.Scan(&b.Key, &b.Count); err != nil {
-			return nil, err
-		}
-		buckets = append(buckets, b)
-	}
-	return buckets, nil
-}
-
-// RangeAggregation counts documents in numeric ranges.
 type RangeAggregation struct {
 	Field  string
-	Ranges []string // "0-100", "100-500", "500-"
+	Ranges []string
 }
 
-func (a *RangeAggregation) SQL() (string, []interface{}) {
-	field := "d.line_count"
-	if a.Field != "" {
-		switch strings.ToLower(a.Field) {
-		case "line_count", "lines", "d.line_count":
-			field = "d.line_count"
-		case "mtime", "d.mtime":
-			field = "d.mtime"
-		case "id", "d.id":
-			field = "d.id"
-		case "collection_id", "d.collection_id":
-			field = "d.collection_id"
-		default:
-			// Safely escape user-supplied column name to prevent SQL injection
-			field = escapeColumnName(a.Field)
-		}
+func (a *RangeAggregation) Spec() AggregationSpec {
+	ranges := a.Ranges
+	if len(ranges) == 0 {
+		ranges = []string{"0-100", "100-500", "500-"}
 	}
-	var cases []string
-	var args []interface{}
-	for _, r := range a.Ranges {
-		parts := strings.SplitN(r, "-", 2)
-		if len(parts) == 2 {
-			low, high := parts[0], parts[1]
-			if low == "" && high != "" {
-				cases = append(cases, fmt.Sprintf("WHEN %s < ? THEN ?", field))
-				args = append(args, high, r)
-			} else if high == "" && low != "" {
-				cases = append(cases, fmt.Sprintf("WHEN %s >= ? THEN ?", field))
-				args = append(args, low, r)
-			} else if low != "" && high != "" {
-				cases = append(cases, fmt.Sprintf("WHEN %s >= ? AND %s < ? THEN ?", field, field))
-				args = append(args, low, high, r)
-			}
-		}
-	}
-	caseSQL := strings.Join(cases, " ")
-	return fmt.Sprintf("SELECT CASE %s ELSE 'other' END as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY key ORDER BY key", caseSQL), args
+	return AggregationSpec{Type: AggregationRange, Field: a.Field, Ranges: append([]string(nil), ranges...)}
 }
 
-func (a *RangeAggregation) Scan(rows *sql.Rows) ([]Bucket, error) {
-	var buckets []Bucket
-	for rows.Next() {
-		var b Bucket
-		if err := rows.Scan(&b.Key, &b.Count); err != nil {
-			return nil, err
-		}
-		buckets = append(buckets, b)
-	}
-	return buckets, nil
-}
-
-// CountAggregation returns the total count of matching documents.
 type CountAggregation struct{}
 
-func (a *CountAggregation) SQL() (string, []interface{}) {
-	return "SELECT COUNT(*) FROM documents d JOIN collections c ON c.id = d.collection_id", nil
+func (*CountAggregation) Spec() AggregationSpec {
+	return AggregationSpec{Type: AggregationCount}
 }
 
-func (a *CountAggregation) Scan(rows *sql.Rows) ([]Bucket, error) {
-	var b Bucket
-	for rows.Next() {
-		if err := rows.Scan(&b.Count); err != nil {
-			return nil, err
-		}
-		b.Key = "count"
-	}
-	return []Bucket{b}, nil
-}
-
-// --- Aggregation Parsing ---
-
-// ParseAggregation parses an aggregation spec string like "type:terms" or "created_at:histogram:month".
+// ParseAggregation parses an aggregation spec string like "type:terms" or
+// "created_at:histogram:month". It validates only the domain shape; field
+// support and identifier policy are enforced by the Store adapter.
 func ParseAggregation(spec string) (Aggregation, error) {
 	parts := strings.SplitN(spec, ":", 3)
 	if len(parts) < 2 && spec != "count" {
@@ -250,7 +95,7 @@ func ParseAggregation(spec string) (Aggregation, error) {
 		return &TermAggregation{Field: field}, nil
 	case "histogram":
 		interval := "month"
-		if len(parts) == 3 {
+		if len(parts) == 3 && parts[2] != "" {
 			interval = parts[2]
 		}
 		return &HistogramAggregation{Field: field, Interval: interval}, nil
@@ -265,15 +110,4 @@ func ParseAggregation(spec string) (Aggregation, error) {
 	default:
 		return nil, fmt.Errorf("unknown aggregation type %q", aggType)
 	}
-}
-
-// ExecuteAggregation runs an aggregation query against the store.
-func ExecuteAggregation(db *sql.DB, agg Aggregation) ([]Bucket, error) {
-	query, args := agg.SQL()
-	rows, err := db.Query(query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("aggregation query: %w", err)
-	}
-	defer rows.Close()
-	return agg.Scan(rows)
 }

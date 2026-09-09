@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -8,20 +9,21 @@ import (
 )
 
 func TestContentKind(t *testing.T) {
-	if got := ContentKind(store.SearchResult{}); got != "snippet" {
+	if got := ContentKind(Result{}); got != "snippet" {
 		t.Errorf("document-level = %q, want snippet", got)
 	}
-	if got := ContentKind(store.SearchResult{ChunkID: 7}); got != "full" {
+	if got := ContentKind(Result{ChunkID: 7}); got != "full" {
 		t.Errorf("chunk-level = %q, want full", got)
 	}
 }
 
 func TestEnrichContent_StripsMarkersOnDocumentLevel(t *testing.T) {
-	results := []store.SearchResult{
+	results := []Result{
 		{ChunkID: 0, Content: "hello >>>world<<< here"},
 		{ChunkID: 0, Content: "no markers"},
 	}
-	EnrichContent(nil, results)
+	var engine *Engine
+	engine.EnrichContent(context.Background(), results)
 	if results[0].Content != "hello world here" {
 		t.Errorf("markers not stripped: %q", results[0].Content)
 	}
@@ -32,8 +34,9 @@ func TestEnrichContent_StripsMarkersOnDocumentLevel(t *testing.T) {
 
 func TestEnrichContent_FullChunkWithNilDB(t *testing.T) {
 	// A nil db must leave chunk-level content untouched (guarded).
-	results := []store.SearchResult{{ChunkID: 9, Content: "chunk text"}}
-	EnrichContent(nil, results)
+	results := []Result{{ChunkID: 9, Content: "chunk text"}}
+	var engine *Engine
+	engine.EnrichContent(context.Background(), results)
 	if results[0].Content != "chunk text" {
 		t.Errorf("nil db must not touch chunk content, got %q", results[0].Content)
 	}
@@ -58,8 +61,9 @@ func TestEnrichContent_FullChunkFromDB(t *testing.T) {
 	if err != nil || len(chunks) == 0 {
 		t.Fatalf("get chunk: %v (%d)", err, len(chunks))
 	}
-	results := []store.SearchResult{{ChunkID: chunks[0].ID, Content: ">>>snippet<<<"}}
-	EnrichContent(s, results)
+	results := []Result{{ChunkID: chunks[0].ID, Content: ">>>snippet<<<"}}
+	engine := NewEngine(NewStoreRepository(s), nil)
+	engine.EnrichContent(context.Background(), results)
 	if results[0].Content != "full >>>content<<< stored" {
 		t.Errorf("full content not fetched, got %q", results[0].Content)
 	}

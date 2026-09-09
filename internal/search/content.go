@@ -3,14 +3,12 @@ package search
 import (
 	"context"
 	"strings"
-
-	"github.com/ozgurulukir/seek/internal/store"
 )
 
 // EnrichContent resolves chunk-level hits through the search repository. The
 // CLI and MCP surfaces therefore share content loading without reaching into
 // SQLite themselves.
-func (e *Engine) EnrichContent(ctx context.Context, results []store.SearchResult) {
+func (e *Engine) EnrichContent(ctx context.Context, results []Result) {
 	for i := range results {
 		if results[i].ChunkID <= 0 {
 			results[i].Content = strings.ReplaceAll(results[i].Content, ">>>", "")

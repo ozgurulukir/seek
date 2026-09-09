@@ -6,17 +6,16 @@ import (
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/search"
-	"github.com/ozgurulukir/seek/internal/store"
 )
 
 func TestSearchJSON_Schema(t *testing.T) {
 	c := &SearchCmd{Query: "test query", JSON: true, Limit: 5}
-	results := []store.SearchResult{
+	results := []search.Result{
 		{
 			ChunkID: 42, DocumentID: 7, Seq: 2,
 			Title: "My Note", Path: "notes/my-note.md",
 			Collection: "notes", Content: "some long content",
-			Score: 0.9876, ChunkType: store.ChunkTypeText,
+			Score: 0.9876, ChunkType: search.ChunkTypeText,
 			StartLine: 10, EndLine: 25,
 		},
 	}
@@ -86,7 +85,7 @@ func TestSearchJSON_EmptyAndNoAggs(t *testing.T) {
 }
 
 func TestEnrichJSONContent_StripsMarkers(t *testing.T) {
-	results := []store.SearchResult{
+	results := []search.Result{
 		{ChunkID: -1, Content: ">>>match<<< inside"},
 	}
 	enrichJSONContent(nil, results)
@@ -96,10 +95,10 @@ func TestEnrichJSONContent_StripsMarkers(t *testing.T) {
 }
 
 func TestContentKind(t *testing.T) {
-	if got := contentKind(store.SearchResult{ChunkID: 42}); got != "full" {
+	if got := contentKind(search.Result{ChunkID: 42}); got != "full" {
 		t.Errorf("chunk-level = %q, want full", got)
 	}
-	if got := contentKind(store.SearchResult{ChunkID: 0}); got != "snippet" {
+	if got := contentKind(search.Result{ChunkID: 0}); got != "snippet" {
 		t.Errorf("document-level = %q, want snippet", got)
 	}
 }

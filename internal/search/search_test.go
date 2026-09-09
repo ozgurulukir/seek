@@ -15,8 +15,8 @@ import (
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
-func mkResult(docID int64, title string) store.SearchResult {
-	return store.SearchResult{DocumentID: docID, Title: title}
+func mkResult(docID int64, title string) Result {
+	return Result{DocumentID: docID, Title: title}
 }
 
 func TestRRFFusionEmptyInputs(t *testing.T) {
@@ -27,7 +27,7 @@ func TestRRFFusionEmptyInputs(t *testing.T) {
 }
 
 func TestRRFFusionSingleSource(t *testing.T) {
-	bm25 := []store.SearchResult{
+	bm25 := []Result{
 		mkResult(1, "doc1"),
 		mkResult(2, "doc2"),
 	}
@@ -46,7 +46,7 @@ func TestRRFFusionSingleSource(t *testing.T) {
 }
 
 func TestRRFFusionVectorOnly(t *testing.T) {
-	vec := []store.SearchResult{
+	vec := []Result{
 		mkResult(10, "doc10"),
 		mkResult(20, "doc20"),
 	}
@@ -66,11 +66,11 @@ func TestRRFFusionVectorOnly(t *testing.T) {
 func TestRRFFusionOverlapBoost(t *testing.T) {
 	// doc1 appears in both BM25 (rank 0) and vector (rank 0).
 	// doc2 appears only in BM25 (rank 1).
-	bm25 := []store.SearchResult{
+	bm25 := []Result{
 		mkResult(1, "doc1"),
 		mkResult(2, "doc2"),
 	}
-	vec := []store.SearchResult{
+	vec := []Result{
 		mkResult(1, "doc1"),
 		mkResult(3, "doc3"),
 	}
@@ -95,10 +95,10 @@ func TestRRFFusionOverlapBoost(t *testing.T) {
 
 func TestRRFFusionDedupByDocumentID(t *testing.T) {
 	// Same document in both lists should appear only once.
-	bm25 := []store.SearchResult{
+	bm25 := []Result{
 		mkResult(1, "bm25-version"),
 	}
-	vec := []store.SearchResult{
+	vec := []Result{
 		mkResult(1, "vec-version"),
 	}
 	result := rrfFusion(bm25, vec, DefaultLimit)
@@ -118,12 +118,12 @@ func TestRRFFusionDedupByDocumentID(t *testing.T) {
 }
 
 func TestRRFFusionLimit(t *testing.T) {
-	bm25 := []store.SearchResult{
+	bm25 := []Result{
 		mkResult(1, "doc1"),
 		mkResult(2, "doc2"),
 		mkResult(3, "doc3"),
 	}
-	vec := []store.SearchResult{
+	vec := []Result{
 		mkResult(4, "doc4"),
 		mkResult(5, "doc5"),
 	}
@@ -136,7 +136,7 @@ func TestRRFFusionLimit(t *testing.T) {
 
 func TestRRFFusionLimitZero(t *testing.T) {
 	// limit=0 should return all results (or no results — either is fine, no panic).
-	bm25 := []store.SearchResult{
+	bm25 := []Result{
 		mkResult(1, "doc1"),
 		mkResult(2, "doc2"),
 	}
@@ -147,7 +147,7 @@ func TestRRFFusionLimitZero(t *testing.T) {
 func TestRRFFusionScoringFormula(t *testing.T) {
 	// Verify the RRF formula for single-source ordering.
 	// rank 0 → 1/61, rank 1 → 1/62, etc.
-	bm25 := []store.SearchResult{
+	bm25 := []Result{
 		mkResult(1, "doc1"), // rank 0 → 1/61
 		mkResult(2, "doc2"), // rank 1 → 1/62
 	}
@@ -167,10 +167,10 @@ func TestRRFFusionScoringFormula(t *testing.T) {
 }
 
 func TestRRFFusionCustomK(t *testing.T) {
-	bm25 := []store.SearchResult{
+	bm25 := []Result{
 		mkResult(1, "doc1"), // rank 0
 	}
-	vec := []store.SearchResult{
+	vec := []Result{
 		mkResult(1, "doc1"), // rank 0
 	}
 
@@ -196,14 +196,14 @@ func TestRRFFusionDistinctDocsRanking(t *testing.T) {
 	// No ties at positions 0-1 (both 1/61) — but map iteration order makes
 	// tie order non-deterministic. So we only verify the result set and
 	// that the unique top-scoring doc (doc3, 1/63) appears before doc4 (1/64).
-	bm25 := []store.SearchResult{
+	bm25 := []Result{
 		mkResult(1, "doc1"),
 		mkResult(2, "doc2"),
 		mkResult(3, "doc3"),
 		mkResult(4, "doc4"),
 		mkResult(5, "doc5"),
 	}
-	vec := []store.SearchResult{
+	vec := []Result{
 		mkResult(6, "doc6"),
 		mkResult(7, "doc7"),
 	}
@@ -252,10 +252,10 @@ func TestRRFFusionDistinctDocsRanking(t *testing.T) {
 
 func TestRRFFusionBM25TakesPrecedenceOnTie(t *testing.T) {
 	// Same doc in both lists at same rank. BM25 version should be kept.
-	bm25 := []store.SearchResult{
+	bm25 := []Result{
 		mkResult(1, "from-bm25"),
 	}
-	vec := []store.SearchResult{
+	vec := []Result{
 		mkResult(1, "from-vec"),
 		mkResult(2, "vec-only"),
 	}
@@ -894,8 +894,8 @@ func TestSearchBM25(t *testing.T) {
 
 	t.Run("with filters", func(t *testing.T) {
 		// Only get the Python doc.
-		filters := store.NewFilterSet()
-		filters.Add(&store.PathFilter{Pattern: "/docs/2"})
+		filters := NewFilterSet()
+		filters.Add(PathFilter("/docs/2"))
 		res, err := engine.SearchBM25(ctx, "programming", 10, Options{Filters: filters})
 		if err != nil {
 			t.Fatalf("SearchBM25 error: %v", err)

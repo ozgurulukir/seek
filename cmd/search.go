@@ -145,7 +145,7 @@ func (searchLogger) Printf(format string, v ...interface{}) {
 	fmt.Fprintf(os.Stderr, format, v...)
 }
 
-func (c *SearchCmd) buildFilters() *store.FilterSet {
+func (c *SearchCmd) buildFilters() *search.FilterSet {
 	colName := c.Collection
 	if colName == "" {
 		colName = c.Repo
@@ -155,43 +155,43 @@ func (c *SearchCmd) buildFilters() *store.FilterSet {
 		return nil
 	}
 
-	filters := store.NewFilterSet()
+	filters := search.NewFilterSet()
 	if colName != "" {
-		filters.Add(&store.CollectionFilter{Name: colName})
+		filters.Add(search.CollectionFilter(colName))
 	}
 	if c.DocType != "" {
-		filters.Add(&store.DocTypeFilter{Type: c.DocType})
+		filters.Add(search.DocTypeFilter(c.DocType))
 	}
 	if c.Lang != "" {
-		filters.Add(&store.FastFieldFilter{Field: "lang", Value: strings.ToLower(c.Lang)})
+		filters.Add(search.LanguageFilter(strings.ToLower(c.Lang)))
 	}
 	if c.Tag != "" {
-		filters.Add(&store.TagFilter{Tag: c.Tag})
+		filters.Add(search.TagFilter(c.Tag))
 	}
 	if c.Repo != "" {
-		filters.Add(&store.FastFieldFilter{Field: "repo", Value: c.Repo})
+		filters.Add(search.RepositoryFilter(c.Repo))
 	}
 	if c.After != "" || c.Before != "" {
-		filters.Add(&store.DateRangeFilter{After: c.After, Before: c.Before})
+		filters.Add(search.DateRangeFilter(c.After, c.Before))
 	}
 	if c.ChunkType != "" {
 		ct := 0
 		if strings.ToLower(c.ChunkType) == "image" {
 			ct = 1
 		}
-		filters.Add(&store.ChunkTypeFilter{Type: ct})
+		filters.Add(search.ChunkTypeFilter(search.ChunkType(ct)))
 	}
 	if c.Path != "" {
-		filters.Add(&store.PathFilter{Pattern: c.Path})
+		filters.Add(search.PathFilter(c.Path))
 	}
 	if c.Workspace != "" {
-		filters.Add(&store.FastFieldFilter{Field: "workspace", Value: c.Workspace})
+		filters.Add(search.WorkspaceFilter(c.Workspace))
 	}
 
 	return filters
 }
 
-func (c *SearchCmd) executeSearch(ctx context.Context, engine *search.Engine, embedClient *embed.Client, vlClient *embed.VLClient, opts search.Options) ([]store.SearchResult, error) {
+func (c *SearchCmd) executeSearch(ctx context.Context, engine *search.Engine, embedClient *embed.Client, vlClient *embed.VLClient, opts search.Options) ([]search.Result, error) {
 	switch {
 	case c.Lex:
 		return engine.SearchBM25(ctx, c.Query, c.Limit, opts)
@@ -205,7 +205,7 @@ func (c *SearchCmd) executeSearch(ctx context.Context, engine *search.Engine, em
 	}
 }
 
-func (c *SearchCmd) printAggregations(ctx context.Context, engine *search.Engine, filters *store.FilterSet) error {
+func (c *SearchCmd) printAggregations(ctx context.Context, engine *search.Engine, filters *search.FilterSet) error {
 	aggResults, err := engine.RunAggregations(ctx, c.Aggs, filters)
 	if err != nil {
 		return err
@@ -223,7 +223,7 @@ func (c *SearchCmd) printAggregations(ctx context.Context, engine *search.Engine
 
 // computeAggregations runs the requested aggregations without printing, for
 // the JSON output path. Empty spec list returns nil (no aggregations block).
-func (c *SearchCmd) computeAggregations(ctx context.Context, engine *search.Engine, filters *store.FilterSet) (map[string][]search.Bucket, error) {
+func (c *SearchCmd) computeAggregations(ctx context.Context, engine *search.Engine, filters *search.FilterSet) (map[string][]search.Bucket, error) {
 	if len(c.Aggs) == 0 {
 		return nil, nil
 	}
@@ -235,19 +235,31 @@ func (c *SearchCmd) computeAggregations(ctx context.Context, engine *search.Engi
 // classification live in internal/search (quality.go) as the single source
 // of truth; these wrappers preserve the historical cmd-level API used by
 // buildJSONOutput and its tests.
-func enrichJSONContent(db *store.Store, results []store.SearchResult) {
-	search.EnrichContent(db, results)
+func enrichJSONContent(db *store.Store, results []search.Result) {
+	for i := range results {
+		if results[i].ChunkID <= 0 {
+			results[i].Content = strings.ReplaceAll(results[i].Content, ">>>", "")
+			results[i].Content = strings.ReplaceAll(results[i].Content, "<<<", "")
+			continue
+		}
+		if db == nil {
+			continue
+		}
+		if content, err := db.GetChunkContent(results[i].ChunkID); err == nil {
+			results[i].Content = content
+		}
+	}
 }
 
 // contentKind classifies the Content field for JSON consumers: enriched
 // results carry the complete chunk text, document-level BM25/hybrid results
 // an FTS excerpt.
-func contentKind(r store.SearchResult) string {
+func contentKind(r search.Result) string {
 	return search.ContentKind(r)
 }
 
-// jsonSearchResult mirrors store.SearchResult with explicit, stable JSON
-// field names for agent consumption.
+// jsonSearchResult mirrors search.Result with explicit, stable JSON field
+// names for agent consumption.
 type jsonSearchResult struct {
 	ChunkID     int64   `json:"chunk_id"`
 	DocumentID  int64   `json:"document_id"`
@@ -277,7 +289,7 @@ type jsonAggBucket struct {
 	Count int    `json:"count"`
 }
 
-func (c *SearchCmd) printResultsJSON(results []store.SearchResult, aggs map[string][]search.Bucket) error {
+func (c *SearchCmd) printResultsJSON(results []search.Result, aggs map[string][]search.Bucket) error {
 	out := buildJSONOutput(c, results, aggs)
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -286,7 +298,7 @@ func (c *SearchCmd) printResultsJSON(results []store.SearchResult, aggs map[stri
 
 // buildJSONOutput maps search results and aggregations into the stable JSON
 // envelope; separated from printing so it is directly testable.
-func buildJSONOutput(c *SearchCmd, results []store.SearchResult, aggs map[string][]search.Bucket) *jsonSearchOutput {
+func buildJSONOutput(c *SearchCmd, results []search.Result, aggs map[string][]search.Bucket) *jsonSearchOutput {
 	out := jsonSearchOutput{
 		Query:   c.Query,
 		Total:   len(results),
@@ -322,7 +334,7 @@ func buildJSONOutput(c *SearchCmd, results []store.SearchResult, aggs map[string
 	return &out
 }
 
-func (c *SearchCmd) expandContext(db *store.Store, results []store.SearchResult) {
+func (c *SearchCmd) expandContext(db *store.Store, results []search.Result) {
 	if c.Context <= 0 {
 		return
 	}
@@ -342,7 +354,7 @@ func (c *SearchCmd) expandContext(db *store.Store, results []store.SearchResult)
 	}
 }
 
-func (c *SearchCmd) printResults(results []store.SearchResult) {
+func (c *SearchCmd) printResults(results []search.Result) {
 	for i, r := range results {
 		pathLoc := formatRelPath(r.Path)
 		if r.StartLine > 0 {
@@ -355,7 +367,7 @@ func (c *SearchCmd) printResults(results []store.SearchResult) {
 
 		fmt.Printf("\n%s %s\n", fmt.Sprintf("[%d]", i+1), r.Title)
 		fmt.Printf("    %s  (%s)  score=%.4f\n", pathLoc, r.Collection, r.Score)
-		if r.ChunkType == store.ChunkTypeImage && r.ImagePath != "" {
+		if r.ChunkType == search.ChunkTypeImage && r.ImagePath != "" {
 			fmt.Printf("    %s\n", formatRelPath(r.ImagePath))
 			if r.Content != "" {
 				snippet := formatSnippet(r.Content, config.DefaultImageSnippetLen)

@@ -221,10 +221,11 @@ func buildMCPServerWithServices(db *store.Store, engine *search.Engine, cfg *con
 }
 
 // runMCPSearch dispatches like SearchCmd.executeSearch: lex, vec, or hybrid.
-func runMCPSearch(ctx context.Context, engine *search.Engine, cfg *config.AppConfig, args *mcpSearchArgs, limit int) ([]store.SearchResult, error) {
-	filters := store.NewFilterSet()
+
+func runMCPSearch(ctx context.Context, engine *search.Engine, cfg *config.AppConfig, args *mcpSearchArgs, limit int) ([]search.Result, error) {
+	filters := search.NewFilterSet()
 	if args.Collection != "" {
-		filters.Add(&store.CollectionFilter{Name: args.Collection})
+		filters.Add(search.CollectionFilter(args.Collection))
 	}
 	// Analyzer mirrors SearchCmd: tokenization unless query mode is "raw".
 	var analyzer *search.Analyzer
@@ -254,7 +255,7 @@ func runMCPSearch(ctx context.Context, engine *search.Engine, cfg *config.AppCon
 // mcpContentKind classifies content the same way `seek search --json` does.
 // Classification single-sourced in internal/search (quality.go).
 func mcpContentKind(m *mcpSearchResult) string {
-	return search.ContentKind(store.SearchResult{ChunkID: m.ChunkID})
+	return search.ContentKind(search.Result{ChunkID: m.ChunkID})
 }
 
 type mcpLogger struct{}

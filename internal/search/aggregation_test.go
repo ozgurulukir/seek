@@ -304,7 +304,7 @@ func TestExecuteAggregation(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		agg     Aggregation
+		agg     legacyAggregation
 		want    []Bucket
 		wantErr bool
 	}{

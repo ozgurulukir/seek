@@ -73,7 +73,7 @@ func Open(cfg *config.AppConfig) (*Runtime, error) {
 	} else {
 		r.Search = search.NewEngine(search.NewStoreRepository(s), r.EmbedClient)
 	}
-	r.Indexer = indexer.New(cfg, s)
+	r.Indexer = indexer.NewWithDependencies(cfg, s, indexer.NewConfigExtractorResolver(cfg), s)
 	return r, nil
 }
 

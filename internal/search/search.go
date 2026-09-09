@@ -10,7 +10,6 @@ import (
 	"sort"
 
 	"github.com/ozgurulukir/seek/internal/embed"
-	"github.com/ozgurulukir/seek/internal/store"
 )
 
 const (
@@ -24,7 +23,7 @@ type Options struct {
 	// Query is the parsed query AST. If nil, the raw query string is used.
 	Query Query
 	// Filters to apply to the search.
-	Filters *store.FilterSet
+	Filters *FilterSet
 	// Aggregations to run alongside the search (spec strings like "type:terms").
 	Aggregations []string
 	// QueryMode is "raw" or "parsed".
@@ -90,7 +89,7 @@ func renderFTS5(q Query, a *Analyzer) string {
 }
 
 // searchBM25Raw executes the BM25 full-text query against FTS5 and returns raw candidate hits.
-func (e *Engine) searchBM25Raw(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
+func (e *Engine) searchBM25Raw(ctx context.Context, query string, limit int, opts Options) ([]Result, error) {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
@@ -110,7 +109,7 @@ func (e *Engine) searchBM25Raw(ctx context.Context, query string, limit int, opt
 }
 
 // searchVectorRaw executes the vector semantic query and returns raw candidate hits.
-func (e *Engine) searchVectorRaw(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
+func (e *Engine) searchVectorRaw(ctx context.Context, query string, limit int, opts Options) ([]Result, error) {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
@@ -144,7 +143,7 @@ func (e *Engine) searchVectorRaw(ctx context.Context, query string, limit int, o
 }
 
 // SearchBM25 performs BM25 full-text search with optional filters, reranking, and sorting.
-func (e *Engine) SearchBM25(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
+func (e *Engine) SearchBM25(ctx context.Context, query string, limit int, opts Options) ([]Result, error) {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
@@ -174,7 +173,7 @@ func (e *Engine) SearchBM25(ctx context.Context, query string, limit int, opts O
 }
 
 // SearchVector performs vector semantic search with optional filters, reranking, and sorting.
-func (e *Engine) SearchVector(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
+func (e *Engine) SearchVector(ctx context.Context, query string, limit int, opts Options) ([]Result, error) {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
@@ -204,7 +203,7 @@ func (e *Engine) SearchVector(ctx context.Context, query string, limit int, opts
 }
 
 // SearchHybrid performs hybrid search using RRF fusion with optional filters, reranking, and sorting.
-func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts Options) ([]store.SearchResult, error) {
+func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts Options) ([]Result, error) {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
@@ -221,7 +220,7 @@ func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts
 		return nil, fmt.Errorf("hybrid search failed: bm25: %v; vector: %w", bm25Err, vecErr)
 	}
 
-	var fused []store.SearchResult
+	var fused []Result
 	if bm25Err != nil {
 		if e.logger != nil {
 			e.logger.Printf("  WARN: hybrid search BM25 leg failed: %v\n", bm25Err)
@@ -253,7 +252,7 @@ func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts
 }
 
 // rerankResults re-scores candidate search results using the cross-encoder reranker if configured.
-func (e *Engine) rerankResults(ctx context.Context, query string, results []store.SearchResult, limit int) []store.SearchResult {
+func (e *Engine) rerankResults(ctx context.Context, query string, results []Result, limit int) []Result {
 	if e.reranker == nil || len(results) <= 1 {
 		if len(results) > limit {
 			return results[:limit]
@@ -274,7 +273,7 @@ func (e *Engine) rerankResults(ctx context.Context, query string, results []stor
 		return results
 	}
 
-	reranked := make([]store.SearchResult, 0, len(rerankScores))
+	reranked := make([]Result, 0, len(rerankScores))
 	for _, rs := range rerankScores {
 		if rs.Index >= 0 && rs.Index < len(results) {
 			res := results[rs.Index]
@@ -286,7 +285,7 @@ func (e *Engine) rerankResults(ctx context.Context, query string, results []stor
 }
 
 // SearchWithOptions performs search based on the options.
-func (e *Engine) SearchWithOptions(ctx context.Context, query string, opts Options) ([]store.SearchResult, error) {
+func (e *Engine) SearchWithOptions(ctx context.Context, query string, opts Options) ([]Result, error) {
 	if opts.Limit <= 0 {
 		opts.Limit = DefaultLimit
 	}
@@ -294,7 +293,7 @@ func (e *Engine) SearchWithOptions(ctx context.Context, query string, opts Optio
 }
 
 // RunAggregations executes aggregation queries and returns results.
-func (e *Engine) RunAggregations(ctx context.Context, specs []string, filters *store.FilterSet) (map[string][]Bucket, error) {
+func (e *Engine) RunAggregations(ctx context.Context, specs []string, filters *FilterSet) (map[string][]Bucket, error) {
 	result := make(map[string][]Bucket)
 	for _, spec := range specs {
 		agg, err := ParseAggregation(spec)
@@ -310,11 +309,11 @@ func (e *Engine) RunAggregations(ctx context.Context, specs []string, filters *s
 	return result, nil
 }
 
-func rrfFusion(bm25, vec []store.SearchResult, limit int) []store.SearchResult {
+func rrfFusion(bm25, vec []Result, limit int) []Result {
 	return rrfFusionWithK(bm25, vec, limit, DefaultRRFK)
 }
 
-func rrfFusionWithK(bm25, vec []store.SearchResult, limit int, k int) []store.SearchResult {
+func rrfFusionWithK(bm25, vec []Result, limit int, k int) []Result {
 	if k <= 0 {
 		k = DefaultRRFK
 	}
@@ -322,7 +321,7 @@ func rrfFusionWithK(bm25, vec []store.SearchResult, limit int, k int) []store.Se
 	// BM25 returns ChunkID==0 (document-level), vector returns real chunk IDs.
 	// Using docID ensures both branches can merge for the same document.
 	scores := make(map[int64]float64)
-	resultMap := make(map[int64]store.SearchResult)
+	resultMap := make(map[int64]Result)
 
 	for rank, r := range bm25 {
 		scores[r.DocumentID] += 1.0 / float64(k+rank+1)
@@ -356,7 +355,7 @@ func rrfFusionWithK(bm25, vec []store.SearchResult, limit int, k int) []store.Se
 		sorted = sorted[:limit]
 	}
 
-	results := make([]store.SearchResult, len(sorted))
+	results := make([]Result, len(sorted))
 	for i, s := range sorted {
 		r := resultMap[s.docID]
 		r.Score = s.score
@@ -367,7 +366,7 @@ func rrfFusionWithK(bm25, vec []store.SearchResult, limit int, k int) []store.Se
 }
 
 // sortResults sorts search results by a fast field if specified.
-func (e *Engine) sortResults(ctx context.Context, results []store.SearchResult, opts Options) ([]store.SearchResult, error) {
+func (e *Engine) sortResults(ctx context.Context, results []Result, opts Options) ([]Result, error) {
 	if opts.SortBy == "" || len(results) == 0 {
 		return results, nil
 	}

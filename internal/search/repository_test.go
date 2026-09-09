@@ -3,19 +3,17 @@ package search
 import (
 	"context"
 	"testing"
-
-	"github.com/ozgurulukir/seek/internal/store"
 )
 
 type fakeSearchRepository struct {
-	filters *store.FilterSet
+	filters *FilterSet
 }
 
-func (f *fakeSearchRepository) SearchFTS(ctx context.Context, _ string, _ int, _ *store.FilterSet) ([]store.SearchResult, error) {
+func (f *fakeSearchRepository) SearchFTS(ctx context.Context, _ string, _ int, _ *FilterSet) ([]Result, error) {
 	return nil, ctx.Err()
 }
 
-func (f *fakeSearchRepository) SearchVector(context.Context, []float32, int, *store.FilterSet) ([]store.SearchResult, error) {
+func (f *fakeSearchRepository) SearchVector(context.Context, []float32, int, *FilterSet) ([]Result, error) {
 	return nil, nil
 }
 
@@ -27,7 +25,7 @@ func (f *fakeSearchRepository) GetChunkContent(context.Context, int64) (string, 
 	return "", nil
 }
 
-func (f *fakeSearchRepository) ExecuteAggregation(_ context.Context, _ Aggregation, filters *store.FilterSet) ([]Bucket, error) {
+func (f *fakeSearchRepository) ExecuteAggregation(_ context.Context, _ Aggregation, filters *FilterSet) ([]Bucket, error) {
 	f.filters = filters
 	return []Bucket{{Key: "markdown", Count: 1}}, nil
 }
@@ -42,7 +40,7 @@ func TestEngineRepositoryPropagatesContextAndAggregationFilters(t *testing.T) {
 		t.Fatal("cancelled repository search returned nil error")
 	}
 
-	filters := store.NewFilterSet()
+	filters := NewFilterSet()
 	if _, err := engine.RunAggregations(context.Background(), []string{"type:terms"}, filters); err != nil {
 		t.Fatalf("RunAggregations: %v", err)
 	}
