@@ -100,9 +100,27 @@ Compute statistical facet distributions alongside search results:
 # Distribution by collection and document type
 seek search "error" --aggs "type:terms" --aggs "collection:terms"
 
+# Metadata fast-field facets (markdown frontmatter + code metadata)
+seek search "signal" --aggs "tags:terms"        # tags from YAML frontmatter (comma-separated)
+seek search "error" --aggs "lang:terms"          # code language (go, rust, python, ts, …)
+seek search "req"   --aggs "repo:terms"          # repository/collection name
+
 # Time-based histograms
 seek search "release" --aggs "created_at:histogram:month"
 
 # Numeric range buckets
 seek search "func" --aggs "line_count:range:0-50,50-200,200+"
+```
+
+The `tags`, `lang`, `repo`, `ext`, `filename`, and `rel_path` facets come
+from the fast-field metadata written at index time: markdown notes expose
+their YAML frontmatter keys (e.g. `tags`, `date`), code files expose language
+and repository. They are filterable too:
+
+```bash
+# Filter to documents tagged in frontmatter
+seek search "gradient" --tag go
+
+# Combined filters
+seek search "error" --lang go --repo myrepo
 ```

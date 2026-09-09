@@ -6,7 +6,9 @@
 
 ## 🕒 Background Service (`seek service`)
 
-The background service periodically executes `seek sync && seek embed` using native operating system task schedulers:
+The background service periodically executes `seek sync` — which now also
+embeds any newly indexed chunks in the same pass — using native operating
+system task schedulers:
 
 - **Windows**: Windows Task Scheduler (`schtasks.exe`)
 - **Linux**: `systemd` user timer (`systemctl --user`)

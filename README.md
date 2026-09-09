@@ -167,7 +167,9 @@ seek add <path> --code             # add source code collection (35+ languages)
 seek add <path> --docs             # add rich documents (docx/xlsx/pdf/html/csv via xberg)
 seek add --claude | --codex        # add agent conversation sessions (+images)
 seek add --opencode | --copilot | --hermes # add schema-driven agent sessions
-seek sync                          # incremental index update
+seek sync                          # incremental index update then embed new chunks
+seek sync --no-embed               # index only (keyword-first: skip embedding entirely)
+seek sync --realtime               # embed with the realtime API (used by stop-hooks)
 seek embed [-f] [-r]               # generate embeddings (batch or realtime)
 
 # Search & Navigation
@@ -182,7 +184,7 @@ seek search "<query>" --repo <r>   # filter by repository/collection
 seek search "<query>" --lang <l>   # filter by code language (go, rust, python, ts, etc.)
 seek search "<query>" --tag <t>    # filter by markdown frontmatter tags (fast field)
 seek search "<query>" --path <p>   # filter by file path pattern (GLOB)
-seek search "<query>" --aggs "type:terms"  # faceted aggregations
+seek search "<query>" --aggs "type:terms"  # faceted aggregations (also lang:terms, repo:terms, tags:terms)
 
 # System & Management
 seek status                        # view collections, document & chunk counts
@@ -194,6 +196,13 @@ seek uninstall --dry-run           # remove service/hooks/cache/config (preview 
 seek analyze "<text>" --lang en|tr # tokenize and stem text
 seek parsers list                  # view parser schemas and detection status
 ```
+
+If no embedding provider is configured, `seek sync` still succeeds — it prints
+a single "skip embeddings … run `seek auth login`" hint, leaves chunks pending,
+and keyword (BM25) search keeps working fully. `seek embed` and `seek search
+--vec` will tell you exactly what's missing; `privacy.offline_only: true`
+disables embeddings outright. Use `seek sync --no-embed` for an intentional
+keyword-first workflow.
 
 ---
 
