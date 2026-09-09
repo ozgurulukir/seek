@@ -100,6 +100,10 @@ func buildMCPServer(db *store.Store, cfg *config.AppConfig) (*mcp.Server, error)
 		if err != nil {
 			return nil, nil, err
 		}
+		// Parity with `seek search --json` (single source of truth in
+		// internal/search/quality.go): chunk-level hits get full content,
+		// document-level hits get markers stripped.
+		enrichJSONContent(db, results)
 		out := make([]mcpSearchResult, 0, len(results))
 		for _, r := range results {
 			mr := mcpSearchResult{
@@ -115,16 +119,6 @@ func buildMCPServer(db *store.Store, cfg *config.AppConfig) (*mcp.Server, error)
 				ImagePath:  r.ImagePath,
 				StartLine:  r.StartLine,
 				EndLine:    r.EndLine,
-			}
-			// Parity with `seek search --json`: chunk-level hits get the full
-			// chunk content instead of the 40-token FTS snippet.
-			if mr.ChunkID > 0 {
-				if content, err := db.GetChunkContent(mr.ChunkID); err == nil {
-					mr.Content = content
-				}
-			} else {
-				mr.Content = strings.ReplaceAll(mr.Content, ">>>", "")
-				mr.Content = strings.ReplaceAll(mr.Content, "<<<", "")
 			}
 			mr.ContentKind = mcpContentKind(&mr)
 			out = append(out, mr)
@@ -231,14 +225,10 @@ func runMCPSearch(ctx context.Context, engine *search.Engine, cfg *config.AppCon
 	}
 }
 
-// mcpContentKind classifies content the same way `seek search --json` does:
-// chunk-level hits carry full content, document-level (BM25/hybrid) hits an
-// FTS snippet.
+// mcpContentKind classifies content the same way `seek search --json` does.
+// Classification single-sourced in internal/search (quality.go).
 func mcpContentKind(m *mcpSearchResult) string {
-	if m.ChunkID > 0 {
-		return "full"
-	}
-	return "snippet"
+	return search.ContentKind(store.SearchResult{ChunkID: m.ChunkID})
 }
 
 type mcpLogger struct{}

@@ -247,36 +247,19 @@ func (c *SearchCmd) computeAggregations(ctx context.Context, engine *search.Engi
 }
 
 // enrichJSONContent replaces FTS highlight snippets with the full chunk
-// content for JSON output. Best-effort: a missing chunk keeps its snippet
-// (with the >>>/<<< markers stripped). db may be nil in tests.
-//
-// Only vector-origin results carry a real chunk ID — BM25 and hybrid results
-// are document-level (ChunkID 0) and keep their FTS snippet; buildJSONOutput
-// exposes that distinction via content_kind ("full" vs "snippet").
+// content for JSON output. The content normalization and content_kind
+// classification live in internal/search (quality.go) as the single source
+// of truth; these wrappers preserve the historical cmd-level API used by
+// buildJSONOutput and its tests.
 func enrichJSONContent(db *store.Store, results []store.SearchResult) {
-	for i := range results {
-		if results[i].ChunkID <= 0 {
-			results[i].Content = strings.ReplaceAll(results[i].Content, ">>>", "")
-			results[i].Content = strings.ReplaceAll(results[i].Content, "<<<", "")
-			continue
-		}
-		if db == nil {
-			continue
-		}
-		if content, err := db.GetChunkContent(results[i].ChunkID); err == nil {
-			results[i].Content = content
-		}
-	}
+	search.EnrichContent(db, results)
 }
 
 // contentKind classifies the Content field for JSON consumers: enriched
 // results carry the complete chunk text, document-level BM25/hybrid results
 // an FTS excerpt.
 func contentKind(r store.SearchResult) string {
-	if r.ChunkID > 0 {
-		return "full"
-	}
-	return "snippet"
+	return search.ContentKind(r)
 }
 
 // jsonSearchResult mirrors store.SearchResult with explicit, stable JSON
