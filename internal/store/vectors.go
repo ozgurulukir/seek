@@ -31,12 +31,12 @@ func (s *Store) syncVectorIndexFull() (int, error) {
 }
 
 func (s *Store) syncVectorIndexFullContext(ctx context.Context) (int, error) {
-	if s.vectorIndex == nil {
+	if s.vector() == nil {
 		return 0, nil
 	}
 
 	// Clear existing entries so we rebuild from the current DB state.
-	if err := s.vectorIndex.Clear(); err != nil {
+	if err := s.vector().Clear(); err != nil {
 		return 0, fmt.Errorf("clear vector index: %w", err)
 	}
 
@@ -57,7 +57,7 @@ func (s *Store) syncVectorIndexFullContext(ctx context.Context) (int, error) {
 			return added, err
 		}
 		emb := decodeEmbedding(embBlob)
-		if err := s.vectorIndex.Add(chunkID, emb); err != nil {
+		if err := s.vector().Add(chunkID, emb); err != nil {
 			return added, err
 		}
 		added++
@@ -76,11 +76,11 @@ func (s *Store) SyncVectorIndexIncremental() (int, error) {
 }
 
 func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, error) {
-	if s.vectorIndex == nil {
+	if s.vector() == nil {
 		return 0, nil
 	}
 
-	if s.vectorIndex.Len() == 0 {
+	if s.vector().Len() == 0 {
 		return s.syncVectorIndexFullContext(ctx)
 	}
 
@@ -91,7 +91,7 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 
 	// If index has more entries than DB has embedded chunks, chunks were deleted;
 	// perform full sync to purge stale entries from the HNSW graph.
-	if s.vectorIndex.Len() > dbCount {
+	if s.vector().Len() > dbCount {
 		return s.syncVectorIndexFullContext(ctx)
 	}
 
@@ -111,7 +111,7 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 		if err := rows.Scan(&chunkID); err != nil {
 			return 0, err
 		}
-		if !s.vectorIndex.Contains(chunkID) {
+		if !s.vector().Contains(chunkID) {
 			missingIDs = append(missingIDs, chunkID)
 		}
 	}
@@ -135,7 +135,7 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 			continue
 		}
 		emb := decodeEmbedding(embBlob)
-		if err := s.vectorIndex.Add(chunkID, emb); err != nil {
+		if err := s.vector().Add(chunkID, emb); err != nil {
 			return added, err
 		}
 		added++
@@ -179,7 +179,7 @@ func (s *Store) SearchVectorContext(ctx context.Context, queryEmb []float32, lim
 		return nil, err
 	}
 	// Use HNSW index if available
-	if s.vectorIndex != nil {
+	if s.vector() != nil {
 		// HNSW returns chunk IDs; we push filters into the SQL fetch query
 		// so the DB handles filtering efficiently. Over-fetch to account for
 		// results that get filtered out.
@@ -187,7 +187,7 @@ func (s *Store) SearchVectorContext(ctx context.Context, queryEmb []float32, lim
 		if filters != nil {
 			searchLimit = limit * 10
 		}
-		results, err := s.vectorIndex.Search(queryEmb, searchLimit)
+		results, err := s.vector().Search(queryEmb, searchLimit)
 		if err == nil && len(results) > 0 {
 			fullResults, err := s.fetchSearchResultsContext(ctx, results, filters)
 			if err != nil {

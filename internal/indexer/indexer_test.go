@@ -317,7 +317,9 @@ func TestIndexerCustomChunkConfig(t *testing.T) {
 	// 2. With custom large chunk size (3000), ~1400 chars should produce exactly 1 chunk
 	for _, ch := range chunksDefault {
 		db.DeleteChunksForDocument(ch.DocumentID)
-		db.DB().Exec("UPDATE documents SET content_hash = '' WHERE id = ?", ch.DocumentID)
+		if err := db.UpdateDocumentContentHash(ch.DocumentID, ""); err != nil {
+			t.Fatalf("clear content hash: %v", err)
+		}
 	}
 
 	appCfgCustom := &config.AppConfig{

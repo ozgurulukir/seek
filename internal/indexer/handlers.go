@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/ozgurulukir/seek/internal/store"
 )
@@ -17,13 +18,28 @@ type HandlerDeps struct {
 // SourceHandler is the typed dispatch boundary for one collection format.
 // Context is explicit so handlers cannot accidentally fall back to a process-
 // global background context when invoked by a command or hook.
-type SourceHandler func(context.Context, *HandlerDeps, *store.Collection) error
+type SourceHandler interface {
+	Sync(context.Context, *HandlerDeps, *store.Collection) error
+}
+
+type sourceHandlerFunc func(context.Context, *HandlerDeps, *store.Collection) error
+
+func (f sourceHandlerFunc) Sync(ctx context.Context, deps *HandlerDeps, col *store.Collection) error {
+	return f(ctx, deps, col)
+}
 
 func bindSourceHandler(fn func(*Indexer, *store.Collection) error) SourceHandler {
-	return func(ctx context.Context, deps *HandlerDeps, col *store.Collection) error {
+	return sourceHandlerFunc(func(ctx context.Context, deps *HandlerDeps, col *store.Collection) error {
+		if deps == nil || deps.Indexer == nil {
+			return fmt.Errorf("source handler: missing indexer dependency")
+		}
+		if deps.Writer == nil {
+			return fmt.Errorf("source handler: missing writer dependency")
+		}
+		deps.Indexer.WithIndexWriter(deps.Writer)
 		deps.Indexer.WithContext(ctx)
 		return fn(deps.Indexer, col)
-	}
+	})
 }
 
 // syncHandlers is the single registration point for per-format sync. The

@@ -505,21 +505,13 @@ func TestRangeAggregation_CustomField(t *testing.T) {
 		t.Errorf("expected 1 document in other, got %d", counts["other"])
 	}
 
-	// Verify fallback when Field is empty
-	fallbackAgg := &RangeAggregation{Ranges: []string{"0-50", "50-150"}}
-	q, _ := fallbackAgg.SQL()
-	if !strings.Contains(q, "d.line_count") {
-		t.Errorf("expected fallback to d.line_count, got SQL: %s", q)
-	}
-
 	// Verify open-ended lower and upper ranges (-10 and 20-)
-	openAgg := &RangeAggregation{Field: "mtime", Ranges: []string{"-10", "20-"}}
-	resOpen, err := ExecuteAggregation(s.DB(), openAgg)
+	openResults, err := engine.RunAggregations(ctx, []string{"mtime:range:-10,20-"}, nil)
 	if err != nil {
-		t.Fatalf("ExecuteAggregation open ranges: %v", err)
+		t.Fatalf("RunAggregations open ranges: %v", err)
 	}
 	openCounts := make(map[string]int)
-	for _, b := range resOpen {
+	for _, b := range openResults["mtime:range:-10,20-"] {
 		openCounts[b.Key] = b.Count
 	}
 	// doc1(2.0) and doc2(8.0) are < 10 -> count 2

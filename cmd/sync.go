@@ -57,7 +57,6 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 		return nil
 	}
 
-	idx := runtime.Indexer.WithContext(ctx)
 	var failedNames []string
 
 	for i := range collections {
@@ -71,7 +70,14 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 
 		fmt.Printf("Syncing %q (%s)...\n", col.Name, col.Type)
 
-		if err := idx.SyncCollectionContext(ctx, col); err != nil {
+		_, err := runtime.Pipeline.Sync(ctx, col, pipeline.Options{
+			Type:        c.Type,
+			Realtime:    c.Realtime,
+			Batch:       true,
+			VectorIndex: true,
+			SkipEmbed:   c.NoEmbed,
+		}, pipeline.NewStdoutLogger(os.Stdout))
+		if err != nil {
 			failedNames = append(failedNames, col.Name)
 			fmt.Printf("  ERROR [%s]: %v\n", col.Name, err)
 		}
@@ -81,18 +87,5 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 		return fmt.Errorf("%d collection(s) failed to sync: %v", len(failedNames), strings.Join(failedNames, ", "))
 	}
 
-	// M4: embed in the same process/store the sync just used. A missing
-	// embedding capability is a configuration state, not a failure — the
-	// pipeline warns once and leaves chunks pending (keyword search works).
-	if !c.NoEmbed {
-		if err := runtime.EmbedPending(ctx, pipeline.Options{
-			Batch:       true, // default batch API, same as `seek embed`
-			Realtime:    c.Realtime,
-			Type:        c.Type,
-			VectorIndex: true,
-		}, pipeline.NewStdoutLogger(os.Stdout)); err != nil {
-			return fmt.Errorf("embed pending chunks: %w", err)
-		}
-	}
 	return nil
 }

@@ -68,7 +68,10 @@ func TestEmbedVLTextChunks(t *testing.T) {
 	}
 
 	vlClient := embed.NewVLClient("test-key", "test-model", 3, ts.URL, embed.TaskPrefix{})
-	updated := embedVLText(db, vlClient, chunks, testLogger{})
+	updated, err := embedVLText(db, vlClient, chunks, testLogger{})
+	if err != nil {
+		t.Fatalf("embed VL text: %v", err)
+	}
 	if updated != 2 {
 		t.Errorf("expected 2 chunks updated, got %d", updated)
 	}
@@ -138,7 +141,10 @@ func TestEmbedVLImageChunks(t *testing.T) {
 	}
 
 	vlClient := embed.NewVLClient("test-key", "test-model", 3, ts.URL, embed.TaskPrefix{})
-	updated := embedVLImages(db, vlClient, chunks, testLogger{})
+	updated, err := embedVLImages(db, vlClient, chunks, testLogger{})
+	if err != nil {
+		t.Fatalf("embed VL images: %v", err)
+	}
 	if updated != 1 {
 		t.Errorf("expected 1 chunk updated, got %d", updated)
 	}

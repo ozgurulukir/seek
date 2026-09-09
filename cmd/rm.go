@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/ozgurulukir/seek/internal/app"
@@ -12,7 +13,7 @@ type RmCmd struct {
 	Name string `arg:"" help:"Collection name to remove"`
 }
 
-func (c *RmCmd) Run(cfg *config.AppConfig) error {
+func (c *RmCmd) Run(cfg *config.AppConfig) (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), hookLockWaitTimeout)
 	defer cancel()
 	lock, err := acquireHookLock(ctx, hookSyncLockPath(cfg))
@@ -25,7 +26,7 @@ func (c *RmCmd) Run(cfg *config.AppConfig) error {
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	defer db.Close()
+	defer func() { err = errors.Join(err, db.Close()) }()
 
 	col, err := db.GetCollectionByName(c.Name)
 	if err != nil {

@@ -1,6 +1,7 @@
 package source
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -57,9 +58,16 @@ var documentExtensions = map[string]bool{
 // Like ScanImages/ScanPdfs, it hashes file contents so the indexer can skip
 // unchanged files.
 func ScanDocuments(dir string) ([]DocumentFile, []ScanIssue, error) {
+	return ScanDocumentsContext(context.Background(), dir)
+}
+
+func ScanDocumentsContext(ctx context.Context, dir string) ([]DocumentFile, []ScanIssue, error) {
 	var files []DocumentFile
 	var issues []ScanIssue
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			issues = append(issues, ScanIssue{Path: path, Err: err})
 			return nil

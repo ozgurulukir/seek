@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -85,7 +86,7 @@ func detectSummary(def *parserdef.ParserDef) (version, detect string) {
 // loadCollectionsByParser groups parser collection names by their parser_name.
 // If the DB doesn't exist yet (fresh install), returns an empty map without
 // creating one — `parsers list` is a read-only introspection command.
-func loadCollectionsByParser(cfg *config.AppConfig) (map[string][]string, error) {
+func loadCollectionsByParser(cfg *config.AppConfig) (result map[string][]string, err error) {
 	if _, err := os.Stat(cfg.DBPath); err != nil {
 		return make(map[string][]string), nil // DB doesn't exist yet
 	}
@@ -94,14 +95,14 @@ func loadCollectionsByParser(cfg *config.AppConfig) (map[string][]string, error)
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer func() { err = errors.Join(err, db.Close()) }()
 
 	collections, err := db.ListCollections()
 	if err != nil {
 		return nil, err
 	}
 
-	result := make(map[string][]string)
+	result = make(map[string][]string)
 	for _, col := range collections {
 		if col.Type == store.CollectionTypeParser && col.ParserName != "" {
 			result[col.ParserName] = append(result[col.ParserName], col.Name)

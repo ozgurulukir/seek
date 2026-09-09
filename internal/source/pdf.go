@@ -1,6 +1,7 @@
 package source
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -21,9 +22,16 @@ type PdfFile struct {
 // this scanner only discovers files and hashes their contents so the indexer
 // can skip unchanged PDFs.
 func ScanPdfs(dir string) ([]PdfFile, []ScanIssue, error) {
+	return ScanPdfsContext(context.Background(), dir)
+}
+
+func ScanPdfsContext(ctx context.Context, dir string) ([]PdfFile, []ScanIssue, error) {
 	var files []PdfFile
 	var issues []ScanIssue
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			issues = append(issues, ScanIssue{Path: path, Err: err})
 			return nil

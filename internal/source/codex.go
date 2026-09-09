@@ -1,6 +1,7 @@
 package source
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -27,6 +28,10 @@ type CodexConversation struct {
 
 // ScanCodexFiles scans ~/.codex/ for conversation JSONL file paths without parsing them.
 func ScanCodexFiles() ([]ConversationFile, error) {
+	return ScanCodexFilesContext(context.Background())
+}
+
+func ScanCodexFilesContext(ctx context.Context) ([]ConversationFile, error) {
 	home, _ := os.UserHomeDir()
 
 	dirs := []string{
@@ -41,6 +46,9 @@ func ScanCodexFiles() ([]ConversationFile, error) {
 			continue
 		}
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if err != nil {
 				return nil
 			}
@@ -66,12 +74,20 @@ func ScanCodexFiles() ([]ConversationFile, error) {
 
 // LoadCodexThreadNames loads session index for title lookup.
 func LoadCodexThreadNames() map[string]string {
+	return LoadCodexThreadNamesContext(context.Background())
+}
+
+func LoadCodexThreadNamesContext(ctx context.Context) map[string]string {
 	home, _ := os.UserHomeDir()
-	return loadSessionIndex(home)
+	return loadSessionIndexContext(ctx, home)
 }
 
 // ParseCodexFile parses a single Codex JSONL file starting from a line offset.
 func ParseCodexFile(path string, fromLine int) ([]CodexMessage, string, error) {
+	return ParseCodexFileContext(context.Background(), path, fromLine)
+}
+
+func ParseCodexFileContext(ctx context.Context, path string, fromLine int) ([]CodexMessage, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, "", err
@@ -85,6 +101,9 @@ func ParseCodexFile(path string, fromLine int) ([]CodexMessage, string, error) {
 	lineNum := 0
 
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
 		lineNum++
 		if lineNum <= fromLine {
 			continue
@@ -244,6 +263,10 @@ func processCodexResponseItem(payload json.RawMessage, sessionID string, message
 
 // ParseCodexFileWithImages parses a Codex JSONL file and extracts both messages and images.
 func ParseCodexFileWithImages(path string, fromLine int) ([]CodexMessage, string, []ConversationImage, error) {
+	return ParseCodexFileWithImagesContext(context.Background(), path, fromLine)
+}
+
+func ParseCodexFileWithImagesContext(ctx context.Context, path string, fromLine int) ([]CodexMessage, string, []ConversationImage, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, "", nil, err
@@ -259,6 +282,9 @@ func ParseCodexFileWithImages(path string, fromLine int) ([]CodexMessage, string
 	imgIdx := 0
 
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return nil, "", nil, err
+		}
 		lineNum++
 		if lineNum <= fromLine {
 			continue
@@ -356,6 +382,10 @@ func parseCodexConversation(path string, threadNames map[string]string) (*CodexC
 }
 
 func loadSessionIndex(home string) map[string]string {
+	return loadSessionIndexContext(context.Background(), home)
+}
+
+func loadSessionIndexContext(ctx context.Context, home string) map[string]string {
 	indexPath := filepath.Join(home, ".codex", "sessions", "session_index.jsonl")
 	f, err := os.Open(indexPath)
 	if err != nil {
@@ -366,6 +396,9 @@ func loadSessionIndex(home string) map[string]string {
 	names := make(map[string]string)
 	scanner := jsonl.NewScanner(f)
 	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return names
+		}
 		var entry struct {
 			ID         string `json:"id"`
 			ThreadName string `json:"thread_name"`

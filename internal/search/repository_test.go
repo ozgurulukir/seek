@@ -2,7 +2,7 @@ package search
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/store"
@@ -74,40 +74,51 @@ func testStoreFilters(filters *FilterSet) (*store.FilterSet, error) {
 	if filters == nil || len(filters.Items()) == 0 {
 		return nil, nil
 	}
-	out := store.NewFilterSet()
-	for _, filter := range filters.Items() {
-		switch filter.Kind {
-		case FilterCollection:
-			out.Add(&store.CollectionFilter{Name: filter.Value})
-		case FilterDocType:
-			out.Add(&store.DocTypeFilter{Type: filter.Value})
-		case FilterLanguage:
-			out.Add(&store.FastFieldFilter{Field: "lang", Value: filter.Value})
-		case FilterTag:
-			out.Add(&store.TagFilter{Tag: filter.Value})
-		case FilterRepository:
-			out.Add(&store.FastFieldFilter{Field: "repo", Value: filter.Value})
-		case FilterDateRange:
-			out.Add(&store.DateRangeFilter{After: filter.After, Before: filter.Before})
-		case FilterChunkType:
-			out.Add(&store.ChunkTypeFilter{Type: int(filter.Chunk)})
-		case FilterPath:
-			out.Add(&store.PathFilter{Pattern: filter.Pattern})
-		case FilterWorkspace:
-			out.Add(&store.FastFieldFilter{Field: "workspace", Value: filter.Value})
-		default:
-			return nil, fmt.Errorf("unsupported search filter kind %q", filter.Kind)
-		}
+	target := &testStoreFilterTarget{filters: store.NewFilterSet()}
+	if err := filters.Apply(target); err != nil {
+		return nil, err
 	}
-	return out, nil
+	return target.filters, nil
+}
+
+type testStoreFilterTarget struct{ filters *store.FilterSet }
+
+func (t *testStoreFilterTarget) AddCollection(name string) {
+	t.filters.Add(&store.CollectionFilter{Name: name})
+}
+func (t *testStoreFilterTarget) AddDocType(typ string) {
+	t.filters.Add(&store.DocTypeFilter{Type: typ})
+}
+func (t *testStoreFilterTarget) AddLanguage(language string) {
+	t.filters.Add(&store.FastFieldFilter{Field: "lang", Value: language})
+}
+func (t *testStoreFilterTarget) AddTag(tag string) { t.filters.Add(&store.TagFilter{Tag: tag}) }
+func (t *testStoreFilterTarget) AddRepository(repository string) {
+	t.filters.Add(&store.FastFieldFilter{Field: "repo", Value: repository})
+}
+func (t *testStoreFilterTarget) AddDateRange(after, before string) {
+	t.filters.Add(&store.DateRangeFilter{After: after, Before: before})
+}
+func (t *testStoreFilterTarget) AddChunkType(chunkType ChunkType) {
+	t.filters.Add(&store.ChunkTypeFilter{Type: int(chunkType)})
+}
+func (t *testStoreFilterTarget) AddPath(pattern string) {
+	t.filters.Add(&store.PathFilter{Pattern: pattern})
+}
+func (t *testStoreFilterTarget) AddWorkspace(workspace string) {
+	t.filters.Add(&store.FastFieldFilter{Field: "workspace", Value: workspace})
 }
 
 type fakeSearchRepository struct {
 	filters *FilterSet
+	sortErr error
 }
 
 func (f *fakeSearchRepository) SearchFTS(ctx context.Context, _ string, _ int, _ *FilterSet) ([]Result, error) {
-	return nil, ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return []Result{{DocumentID: 1, Title: "result"}}, nil
 }
 
 func (f *fakeSearchRepository) SearchVector(context.Context, []float32, int, *FilterSet) ([]Result, error) {
@@ -115,7 +126,18 @@ func (f *fakeSearchRepository) SearchVector(context.Context, []float32, int, *Fi
 }
 
 func (f *fakeSearchRepository) BatchGetFastFields(context.Context, []int64, string) (map[int64]interface{}, error) {
-	return nil, nil
+	return nil, f.sortErr
+}
+
+func TestEnginePropagatesFastFieldSortErrors(t *testing.T) {
+	sentinel := errors.New("fast field unavailable")
+	repository := &fakeSearchRepository{sortErr: sentinel}
+	engine := NewEngine(repository, nil)
+
+	_, err := engine.SearchBM25(context.Background(), "query", 10, Options{SortBy: "mtime"})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("sort error = %v, want %v", err, sentinel)
+	}
 }
 
 func (f *fakeSearchRepository) GetChunkContent(context.Context, int64) (string, error) {

@@ -1,5 +1,7 @@
 package search
 
+import "fmt"
+
 // FilterKind identifies a domain filter. It intentionally has no SQL
 // behavior; the persistence adapter owns translating it to its query plan.
 type FilterKind string
@@ -33,6 +35,21 @@ type FilterSet struct {
 	filters []Filter
 }
 
+// FilterTarget is the persistence adapter's construction surface. Search
+// owns the kind-to-operation mapping; adapters only implement how each domain
+// predicate is represented by their storage engine.
+type FilterTarget interface {
+	AddCollection(string)
+	AddDocType(string)
+	AddLanguage(string)
+	AddTag(string)
+	AddRepository(string)
+	AddDateRange(string, string)
+	AddChunkType(ChunkType)
+	AddPath(string)
+	AddWorkspace(string)
+}
+
 func NewFilterSet() *FilterSet {
 	return &FilterSet{}
 }
@@ -51,6 +68,40 @@ func (fs *FilterSet) Items() []Filter {
 	items := make([]Filter, len(fs.filters))
 	copy(items, fs.filters)
 	return items
+}
+
+func (fs *FilterSet) Apply(target FilterTarget) error {
+	if fs == nil || len(fs.filters) == 0 {
+		return nil
+	}
+	if target == nil {
+		return fmt.Errorf("filter target is nil")
+	}
+	for _, filter := range fs.filters {
+		switch filter.Kind {
+		case FilterCollection:
+			target.AddCollection(filter.Value)
+		case FilterDocType:
+			target.AddDocType(filter.Value)
+		case FilterLanguage:
+			target.AddLanguage(filter.Value)
+		case FilterTag:
+			target.AddTag(filter.Value)
+		case FilterRepository:
+			target.AddRepository(filter.Value)
+		case FilterDateRange:
+			target.AddDateRange(filter.After, filter.Before)
+		case FilterChunkType:
+			target.AddChunkType(filter.Chunk)
+		case FilterPath:
+			target.AddPath(filter.Pattern)
+		case FilterWorkspace:
+			target.AddWorkspace(filter.Value)
+		default:
+			return fmt.Errorf("unsupported search filter kind %q", filter.Kind)
+		}
+	}
+	return nil
 }
 
 func CollectionFilter(name string) Filter {

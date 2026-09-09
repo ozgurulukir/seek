@@ -5,6 +5,19 @@ import (
 	"time"
 )
 
+// Provider is the capability bundle owned by the application composition
+// root. Keeping capabilities as interfaces lets search and pipeline depend on
+// what they use while one runtime still owns the concrete clients.
+type Provider struct {
+	Query    QueryEmbedder
+	Document DocumentEmbedder
+	Batch    BatchEmbedder
+	VLQuery  VLQueryEmbedder
+	VLText   VLTextBatcher
+	VLImage  VLImageBatcher
+	Reranker Reranker
+}
+
 // Capability interfaces for the embedding subsystem. Consumers (search
 // Engine, pipeline, cmd) depend on these rather than the concrete clients so
 // mock providers can substitute any backend in tests (M7).

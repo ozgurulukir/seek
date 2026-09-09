@@ -11,7 +11,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
-	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
 )
@@ -83,26 +82,13 @@ func (c *McpCmd) Run(cfg *config.AppConfig) (err error) {
 // the three seek tools. Separated from Run so tests can drive it over an
 // in-memory transport.
 func buildMCPServer(db *store.Store, cfg *config.AppConfig) (*mcp.Server, error) {
-	backend := strings.ToLower(strings.TrimSpace(cfg.Config.VectorIndex.Backend))
-	if backend != "" && backend != "linear" && backend != "hnsw" {
-		return nil, fmt.Errorf("unsupported vector index backend %q", cfg.Config.VectorIndex.Backend)
-	}
-	if backend == "hnsw" {
-		vi, err := store.NewVectorIndex(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("open vector index: %w", err)
-		}
-		db.SetVectorIndex(vi)
+	if _, _, err := app.ConfigureVectorIndex(context.Background(), db, cfg); err != nil {
+		return nil, err
 	}
 	db.ConfigureCompression(cfg.Config.Compression)
-
-	embedClient := embed.NewClientFromConfig(cfg)
-	vlClient := embed.NewVLClientFromConfig(cfg)
-	var engine *search.Engine
-	if vlClient != nil {
-		engine = search.NewEngineWithVL(app.NewStoreSearchRepository(db), embedClient, vlClient)
-	} else {
-		engine = search.NewEngine(app.NewStoreSearchRepository(db), embedClient)
+	engine, err := app.NewSearchEngine(db, cfg)
+	if err != nil {
+		return nil, err
 	}
 	return buildMCPServerWithServices(db, engine, cfg)
 }
@@ -129,7 +115,9 @@ func buildMCPServerWithServices(db *store.Store, engine *search.Engine, cfg *con
 		// Parity with `seek search --json` (single source of truth in
 		// internal/search/quality.go): chunk-level hits get full content,
 		// document-level hits get markers stripped.
-		engine.EnrichContent(ctx, results)
+		if err := engine.EnrichContent(ctx, results); err != nil {
+			return nil, nil, fmt.Errorf("enrich results: %w", err)
+		}
 		out := make([]mcpSearchResult, 0, len(results))
 		for _, r := range results {
 			mr := mcpSearchResult{

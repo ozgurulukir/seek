@@ -22,6 +22,7 @@ import (
 
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/embed"
+	"github.com/ozgurulukir/seek/internal/indexer"
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
@@ -46,19 +47,69 @@ type Options struct {
 	Batch bool
 	// Type restricts embedding to collections of this type ("" = all).
 	Type string
+	// CollectionID restricts embedding to one collection. A zero value means
+	// all collections, which is the behaviour of `seek embed`.
+	CollectionID int64
+	// SkipEmbed keeps sync useful for keyword-only runs and is used by
+	// --no-embed. The index step still runs through the same Pipeline.
+	SkipEmbed bool
 	// VectorIndex, when true, refreshes the HNSW index after embedding
 	// (full rebuild on Force, incremental otherwise). Sync failures are
-	// non-fatal: a WARN is logged and embedding is still considered done.
+	// returned after being logged so callers can report an incomplete run.
 	VectorIndex bool
+}
+
+// Pipeline is the deep sync-to-embedding module. Its small interface hides
+// indexer orchestration, provider capability selection and vector refresh.
+type Pipeline struct {
+	cfg      *config.AppConfig
+	db       *store.Store
+	indexer  *indexer.Indexer
+	provider embed.Provider
+}
+
+func New(cfg *config.AppConfig, db *store.Store, idx *indexer.Indexer, provider embed.Provider) *Pipeline {
+	return &Pipeline{cfg: cfg, db: db, indexer: idx, provider: provider}
+}
+
+// Sync indexes one collection and, unless disabled, embeds only the chunks
+// produced by that collection in the same process and Store.
+func (p *Pipeline) Sync(ctx context.Context, col *store.Collection, opts Options, log Logger) (indexer.SyncReport, error) {
+	if p == nil || p.indexer == nil || p.db == nil {
+		return indexer.SyncReport{}, fmt.Errorf("sync pipeline is not configured")
+	}
+	report, err := p.indexer.SyncCollectionWithReport(ctx, col)
+	if err != nil {
+		return report, err
+	}
+	if opts.CollectionID == 0 && col != nil {
+		opts.CollectionID = col.ID
+	}
+	if opts.SkipEmbed {
+		return report, nil
+	}
+	if err := p.embedPendingContext(ctx, opts, log); err != nil {
+		return report, err
+	}
+	return report, nil
+}
+
+// EmbedPendingContext runs one embedding pass with the provider owned by this
+// pipeline. The method is the runtime path; the package-level function below
+// remains a compatibility wrapper for callers that do not construct a Runtime.
+func (p *Pipeline) EmbedPendingContext(ctx context.Context, opts Options, log Logger) error {
+	if p == nil {
+		return fmt.Errorf("embedding pipeline is nil")
+	}
+	return p.embedPendingContext(ctx, opts, log)
 }
 
 // EmbedPending embeds all chunks that still lack an embedding, mirroring the
 // semantics of `seek embed`: pending-chunk fetch, text/image split, the
 // multimodal-vs-text client decision, and the vector-index sync.
 //
-// It is intentionally non-fatal on per-chunk failures: a bad embedding
-// response marks that chunk as skipped (its row keeps no embedding) so the
-// next pass retries it, matching the legacy WARN-and-continue behaviour.
+// A provider or persistence failure is returned after the completed prefix;
+// chunks without an embedding remain pending and can be retried safely.
 func EmbedPending(cfg *config.AppConfig, db *store.Store, opts Options, log Logger) error {
 	return EmbedPendingContext(context.Background(), cfg, db, opts, log)
 }
@@ -67,8 +118,23 @@ func EmbedPending(cfg *config.AppConfig, db *store.Store, opts Options, log Logg
 // lock, network, and SQLite work cancellable while preserving the legacy
 // wrapper above for direct callers.
 func EmbedPendingContext(ctx context.Context, cfg *config.AppConfig, db *store.Store, opts Options, log Logger) error {
+	provider, err := embed.NewProviderFromConfig(cfg)
+	if err != nil {
+		return err
+	}
+	return (&Pipeline{cfg: cfg, db: db, provider: provider}).embedPendingContext(ctx, opts, log)
+}
+
+func (p *Pipeline) embedPendingContext(ctx context.Context, opts Options, log Logger) error {
+	cfg, db := p.cfg, p.db
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if cfg == nil || db == nil {
+		return fmt.Errorf("embedding pipeline is not configured")
+	}
+	if log == nil {
+		log = stdoutLogger{w: io.Discard}
 	}
 	// Keyword-only degradation, decided up front: a missing capability is a
 	// configuration state, not a runtime failure, so it warns once and stops.
@@ -81,7 +147,9 @@ func EmbedPendingContext(ctx context.Context, cfg *config.AppConfig, db *store.S
 		chunks []store.Chunk
 		err    error
 	)
-	if opts.Type != "" {
+	if opts.CollectionID != 0 {
+		chunks, err = db.GetChunksWithoutEmbeddingForCollectionContext(ctx, opts.CollectionID, opts.Force)
+	} else if opts.Type != "" {
 		chunks, err = db.GetChunksWithoutEmbeddingForCollectionTypeContext(ctx, store.CollectionType(opts.Type), opts.Force)
 	} else {
 		chunks, err = db.GetChunksWithoutEmbeddingContext(ctx, opts.Force)
@@ -109,18 +177,29 @@ func EmbedPendingContext(ctx context.Context, cfg *config.AppConfig, db *store.S
 
 	var updated int
 	if cfg.Config.Embedding.IsMultimodal() {
-		vlClient := embed.NewVLClientFromConfig(cfg)
+		vlClient := p.provider.VLQuery
 		if vlClient == nil {
-			// Capability check passed but the client still failed to build
-			// (e.g. a transient config race). Treat as degraded, not fatal.
-			log.Printf("  skip embeddings: multimodal client unavailable — check embedding.vl_base_url")
-			return nil
+			return fmt.Errorf("multimodal embedding client unavailable — check embedding.vl_base_url")
 		}
 		if len(textChunks) > 0 {
-			updated += embedVLTextContext(ctx, db, vlClient, textChunks, log)
+			if p.provider.VLText == nil {
+				return fmt.Errorf("multimodal text embedding capability unavailable")
+			}
+			count, err := embedVLTextContext(ctx, db, p.provider.VLText, textChunks, log)
+			updated += count
+			if err != nil {
+				return err
+			}
 		}
 		if len(imageChunks) > 0 {
-			updated += embedVLImagesContext(ctx, db, vlClient, imageChunks, log)
+			if p.provider.VLImage == nil {
+				return fmt.Errorf("multimodal image embedding capability unavailable")
+			}
+			count, err := embedVLImagesContext(ctx, db, p.provider.VLImage, imageChunks, log)
+			updated += count
+			if err != nil {
+				return err
+			}
 		}
 		log.Printf("Embedded %d/%d chunks via VL API", updated, len(chunks))
 	} else {
@@ -128,10 +207,9 @@ func EmbedPendingContext(ctx context.Context, cfg *config.AppConfig, db *store.S
 			log.Printf("  WARNING: %d image chunks skipped (model %q does not support multimodal)", len(imageChunks), cfg.Config.Embedding.Model)
 			log.Printf("  To embed images, set model to a multimodal model (e.g. qwen3-vl-embedding) or set embedding.multimodal: true")
 		}
-		embedClient := embed.NewClientFromConfig(cfg)
+		embedClient := p.provider.Document
 		if embedClient == nil {
-			log.Printf("  skip embeddings: text client unavailable — check embedding.api_key")
-			return nil
+			return fmt.Errorf("text embedding client unavailable — check embedding.api_key")
 		}
 		// Nothing to embed text-wise (only image chunks, non-multimodal):
 		// skip the embed call entirely rather than round-trip an empty batch.
@@ -141,9 +219,12 @@ func EmbedPendingContext(ctx context.Context, cfg *config.AppConfig, db *store.S
 				texts[i] = ch.Content
 			}
 			if opts.Realtime || !opts.Batch {
-				updated = embedRealtimeContext(ctx, db, embedClient, textChunks, texts, log)
+				updated, err = embedRealtimeContext(ctx, db, embedClient, textChunks, texts, log)
 			} else {
-				updated = embedBatchContext(ctx, db, embedClient, textChunks, texts, log)
+				updated, err = embedBatchContext(ctx, db, p.provider.Batch, textChunks, texts, log)
+			}
+			if err != nil {
+				return err
 			}
 			log.Printf("Embedded %d/%d text chunks", updated, len(textChunks))
 		}
@@ -159,17 +240,18 @@ func EmbedPendingContext(ctx context.Context, cfg *config.AppConfig, db *store.S
 		}
 		if syncErr != nil {
 			log.Printf("  WARN: vector index sync: %v", syncErr)
+			return fmt.Errorf("vector index sync: %w", syncErr)
 		}
 	}
 
 	return nil
 }
 
-func embedVLText(db *store.Store, vlClient embed.VLTextBatcher, textChunks []store.Chunk, log Logger) int {
+func embedVLText(db *store.Store, vlClient embed.VLTextBatcher, textChunks []store.Chunk, log Logger) (int, error) {
 	return embedVLTextContext(context.Background(), db, vlClient, textChunks, log)
 }
 
-func embedVLTextContext(ctx context.Context, db *store.Store, vlClient embed.VLTextBatcher, textChunks []store.Chunk, log Logger) int {
+func embedVLTextContext(ctx context.Context, db *store.Store, vlClient embed.VLTextBatcher, textChunks []store.Chunk, log Logger) (int, error) {
 	log.Printf("Embedding %d text chunks via VL realtime API...", len(textChunks))
 	texts := make([]string, len(textChunks))
 	for i, ch := range textChunks {
@@ -187,10 +269,10 @@ func embedVLTextContext(ctx context.Context, db *store.Store, vlClient embed.VLT
 		})
 	}
 	if err != nil {
-		log.Printf("\n  WARN: text batch: %v", err)
+		return updated, fmt.Errorf("text batch: %w", err)
 	}
 	log.Printf("\n")
-	return updated
+	return updated, nil
 }
 
 func updateTextEmbeddings(ctx context.Context, db *store.Store, chunks []store.Chunk, batchStart int, embeddings [][]float32, updated *int, log Logger) error {
@@ -203,8 +285,7 @@ func updateTextEmbeddings(ctx context.Context, db *store.Store, chunks []store.C
 			continue
 		}
 		if err := db.UpdateChunkEmbeddingContext(ctx, chunks[idx].ID, emb); err != nil {
-			log.Printf("  WARN: update chunk %d: %v", chunks[idx].ID, err)
-			continue
+			return fmt.Errorf("update chunk %d: %w", chunks[idx].ID, err)
 		}
 		*updated++
 	}
@@ -212,11 +293,11 @@ func updateTextEmbeddings(ctx context.Context, db *store.Store, chunks []store.C
 	return nil
 }
 
-func embedVLImages(db *store.Store, vlClient embed.VLImageBatcher, imageChunks []store.Chunk, log Logger) int {
+func embedVLImages(db *store.Store, vlClient embed.VLImageBatcher, imageChunks []store.Chunk, log Logger) (int, error) {
 	return embedVLImagesContext(context.Background(), db, vlClient, imageChunks, log)
 }
 
-func embedVLImagesContext(ctx context.Context, db *store.Store, vlClient embed.VLImageBatcher, imageChunks []store.Chunk, log Logger) int {
+func embedVLImagesContext(ctx context.Context, db *store.Store, vlClient embed.VLImageBatcher, imageChunks []store.Chunk, log Logger) (int, error) {
 	log.Printf("Embedding %d image chunks via VL realtime API...", len(imageChunks))
 	items := make([]embed.ImageBatchItem, len(imageChunks))
 	for i, ch := range imageChunks {
@@ -234,8 +315,7 @@ func embedVLImagesContext(ctx context.Context, db *store.Store, vlClient embed.V
 			}
 			idx := validIndices[j]
 			if err := db.UpdateChunkEmbeddingContext(ctx, imageChunks[idx].ID, emb); err != nil {
-				log.Printf("  WARN: update image chunk %d: %v", imageChunks[idx].ID, err)
-				continue
+				return fmt.Errorf("update image chunk %d: %w", imageChunks[idx].ID, err)
 			}
 			imageUpdated++
 		}
@@ -248,17 +328,20 @@ func embedVLImagesContext(ctx context.Context, db *store.Store, vlClient embed.V
 		_, err = vlClient.EmbedImagesInBatches(items, 5, 500*time.Millisecond, callback)
 	}
 	if err != nil {
-		log.Printf("\n  WARN: image batch: %v", err)
+		return imageUpdated, fmt.Errorf("image batch: %w", err)
 	}
 	log.Printf("\n")
-	return imageUpdated
+	return imageUpdated, nil
 }
 
-func embedBatch(db *store.Store, client embed.BatchEmbedder, chunks []store.Chunk, texts []string, log Logger) int {
+func embedBatch(db *store.Store, client embed.BatchEmbedder, chunks []store.Chunk, texts []string, log Logger) (int, error) {
 	return embedBatchContext(context.Background(), db, client, chunks, texts, log)
 }
 
-func embedBatchContext(ctx context.Context, db *store.Store, client embed.BatchEmbedder, chunks []store.Chunk, texts []string, log Logger) int {
+func embedBatchContext(ctx context.Context, db *store.Store, client embed.BatchEmbedder, chunks []store.Chunk, texts []string, log Logger) (int, error) {
+	if client == nil {
+		return 0, fmt.Errorf("batch embedding client is unavailable")
+	}
 	log.Printf("Using Batch API (async, 50%% cheaper)...\n")
 	var embeddings [][]float32
 	var err error
@@ -272,34 +355,34 @@ func embedBatchContext(ctx context.Context, db *store.Store, client embed.BatchE
 	}
 	log.Printf("\n")
 	if err != nil {
-		log.Printf("  WARN: batch embed: %v", err)
-		return 0
+		return 0, fmt.Errorf("batch embed: %w", err)
 	}
 	updated := 0
 	for i, emb := range embeddings {
 		if i < len(chunks) && emb != nil {
 			if err := db.UpdateChunkEmbeddingContext(ctx, chunks[i].ID, emb); err != nil {
-				log.Printf("  WARN: update chunk %d: %v", chunks[i].ID, err)
-				continue
+				return updated, fmt.Errorf("update chunk %d: %w", chunks[i].ID, err)
 			}
 			updated++
 		}
 	}
-	return updated
+	return updated, nil
 }
 
-func embedRealtime(db *store.Store, client embed.DocumentEmbedder, chunks []store.Chunk, texts []string, log Logger) int {
+func embedRealtime(db *store.Store, client embed.DocumentEmbedder, chunks []store.Chunk, texts []string, log Logger) (int, error) {
 	return embedRealtimeContext(context.Background(), db, client, chunks, texts, log)
 }
 
-func embedRealtimeContext(ctx context.Context, db *store.Store, client embed.DocumentEmbedder, chunks []store.Chunk, texts []string, log Logger) int {
+func embedRealtimeContext(ctx context.Context, db *store.Store, client embed.DocumentEmbedder, chunks []store.Chunk, texts []string, log Logger) (int, error) {
+	if client == nil {
+		return 0, fmt.Errorf("document embedding client is unavailable")
+	}
 	log.Printf("Using realtime API (synchronous)...\n")
 	const batch = 25
 	updated := 0
 	for i := 0; i < len(chunks); i += batch {
 		if err := ctx.Err(); err != nil {
-			log.Printf("  WARN: embedding canceled: %v", err)
-			break
+			return updated, err
 		}
 		end := i + batch
 		if end > len(chunks) {
@@ -313,20 +396,21 @@ func embedRealtimeContext(ctx context.Context, db *store.Store, client embed.Doc
 			embeddings, err = client.EmbedDocuments(texts[i:end])
 		}
 		if err != nil {
-			log.Printf("  WARN: batch %d-%d: %v", i, end, err)
-			continue
+			return updated, fmt.Errorf("batch %d-%d: %w", i, end, err)
 		}
 		for j, emb := range embeddings {
 			idx := i + j
+			if idx >= len(chunks) {
+				break
+			}
 			if err := db.UpdateChunkEmbeddingContext(ctx, chunks[idx].ID, emb); err != nil {
-				log.Printf("  WARN: update chunk %d: %v", chunks[idx].ID, err)
-				continue
+				return updated, fmt.Errorf("update chunk %d: %w", chunks[idx].ID, err)
 			}
 			updated++
 		}
 		log.Printf("\r  %d/%d", updated, len(chunks))
 	}
-	return updated
+	return updated, nil
 }
 
 // stdoutLogger is the production Logger backed by a writer (io.Discard in

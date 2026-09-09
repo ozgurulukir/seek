@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -268,7 +270,10 @@ func TestEmbedPending_MockProvider(t *testing.T) {
 	}
 	var log captureLogger
 	mock := &mockDocEmbedder{vec: []float32{0.1, 0.2}}
-	updated := embedRealtime(db, mock, chunks, []string{"hello world content"}, &log)
+	updated, err := embedRealtime(db, mock, chunks, []string{"hello world content"}, &log)
+	if err != nil {
+		t.Fatalf("realtime embed: %v", err)
+	}
 	if updated != 1 {
 		t.Errorf("expected 1 embedded, got %d", updated)
 	}
@@ -278,5 +283,83 @@ func TestEmbedPending_MockProvider(t *testing.T) {
 	remaining, _ := db.GetChunksWithoutEmbedding(false)
 	if len(remaining) != 0 {
 		t.Errorf("chunk still pending after mock embed: %d", len(remaining))
+	}
+}
+
+func TestPipelineEmbedPendingScopesCollection(t *testing.T) {
+	db := newPipelineStore(t)
+	first, err := db.GetCollectionByName("notes")
+	if err != nil {
+		t.Fatalf("get first collection: %v", err)
+	}
+	second, err := db.CreateCollection("other", store.CollectionTypeMarkdown, t.TempDir(), "*.md")
+	if err != nil {
+		t.Fatalf("create second collection: %v", err)
+	}
+	docID, err := db.UpsertDocument(second.ID, "other.md", "Other", "h2", 1, 1)
+	if err != nil {
+		t.Fatalf("upsert second document: %v", err)
+	}
+	if err := db.InsertChunk(docID, 0, "other content", nil); err != nil {
+		t.Fatalf("insert second chunk: %v", err)
+	}
+
+	cfg := appConfigFor(t, func(c *config.Config) {
+		c.Embedding.APIKey = "test-key"
+		c.Embedding.Model = "text-embedding-3-small"
+		c.Embedding.Dimensions = 2
+	})
+	mock := &mockDocEmbedder{vec: []float32{1, 0}}
+	p := New(cfg, db, nil, embed.Provider{Document: mock})
+	var log captureLogger
+	if err := p.EmbedPendingContext(context.Background(), Options{CollectionID: first.ID, Realtime: true}, &log); err != nil {
+		t.Fatalf("scoped embed: %v", err)
+	}
+	firstPending, err := db.GetChunksWithoutEmbeddingForCollectionContext(context.Background(), first.ID, false)
+	if err != nil {
+		t.Fatalf("first pending query: %v", err)
+	}
+	secondPending, err := db.GetChunksWithoutEmbeddingForCollectionContext(context.Background(), second.ID, false)
+	if err != nil {
+		t.Fatalf("second pending query: %v", err)
+	}
+	if len(firstPending) != 0 || len(secondPending) != 1 {
+		t.Fatalf("pending chunks after scoped embed = first %d, second %d; want 0, 1", len(firstPending), len(secondPending))
+	}
+}
+
+type cancelingDocumentEmbedder struct {
+	started chan struct{}
+}
+
+func (m *cancelingDocumentEmbedder) EmbedDocuments([]string) ([][]float32, error) {
+	return nil, context.Canceled
+}
+
+func (m *cancelingDocumentEmbedder) EmbedDocumentsContext(ctx context.Context, _ []string) ([][]float32, error) {
+	close(m.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestPipelineEmbedPendingPropagatesProviderCancellation(t *testing.T) {
+	db := newPipelineStore(t)
+	cfg := appConfigFor(t, func(c *config.Config) {
+		c.Embedding.APIKey = "test-key"
+		c.Embedding.Model = "text-embedding-3-small"
+	})
+	mock := &cancelingDocumentEmbedder{started: make(chan struct{})}
+	p := New(cfg, db, nil, embed.Provider{Document: mock})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-mock.started
+		cancel()
+	}()
+
+	var log captureLogger
+	err := p.EmbedPendingContext(ctx, Options{Realtime: true}, &log)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("provider cancellation error = %v, want context.Canceled", err)
 	}
 }

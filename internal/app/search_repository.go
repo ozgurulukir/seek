@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
@@ -95,30 +94,35 @@ func toStoreFilters(filters *search.FilterSet) (*store.FilterSet, error) {
 	if filters == nil || len(filters.Items()) == 0 {
 		return nil, nil
 	}
-	result := store.NewFilterSet()
-	for _, filter := range filters.Items() {
-		switch filter.Kind {
-		case search.FilterCollection:
-			result.Add(&store.CollectionFilter{Name: filter.Value})
-		case search.FilterDocType:
-			result.Add(&store.DocTypeFilter{Type: filter.Value})
-		case search.FilterLanguage:
-			result.Add(&store.FastFieldFilter{Field: "lang", Value: filter.Value})
-		case search.FilterTag:
-			result.Add(&store.TagFilter{Tag: filter.Value})
-		case search.FilterRepository:
-			result.Add(&store.FastFieldFilter{Field: "repo", Value: filter.Value})
-		case search.FilterDateRange:
-			result.Add(&store.DateRangeFilter{After: filter.After, Before: filter.Before})
-		case search.FilterChunkType:
-			result.Add(&store.ChunkTypeFilter{Type: int(filter.Chunk)})
-		case search.FilterPath:
-			result.Add(&store.PathFilter{Pattern: filter.Pattern})
-		case search.FilterWorkspace:
-			result.Add(&store.FastFieldFilter{Field: "workspace", Value: filter.Value})
-		default:
-			return nil, fmt.Errorf("unsupported search filter kind %q", filter.Kind)
-		}
+	target := &storeFilterTarget{filters: store.NewFilterSet()}
+	if err := filters.Apply(target); err != nil {
+		return nil, err
 	}
-	return result, nil
+	return target.filters, nil
+}
+
+type storeFilterTarget struct{ filters *store.FilterSet }
+
+func (t *storeFilterTarget) AddCollection(name string) {
+	t.filters.Add(&store.CollectionFilter{Name: name})
+}
+func (t *storeFilterTarget) AddDocType(typ string) { t.filters.Add(&store.DocTypeFilter{Type: typ}) }
+func (t *storeFilterTarget) AddLanguage(language string) {
+	t.filters.Add(&store.FastFieldFilter{Field: "lang", Value: language})
+}
+func (t *storeFilterTarget) AddTag(tag string) { t.filters.Add(&store.TagFilter{Tag: tag}) }
+func (t *storeFilterTarget) AddRepository(repository string) {
+	t.filters.Add(&store.FastFieldFilter{Field: "repo", Value: repository})
+}
+func (t *storeFilterTarget) AddDateRange(after, before string) {
+	t.filters.Add(&store.DateRangeFilter{After: after, Before: before})
+}
+func (t *storeFilterTarget) AddChunkType(chunkType search.ChunkType) {
+	t.filters.Add(&store.ChunkTypeFilter{Type: int(chunkType)})
+}
+func (t *storeFilterTarget) AddPath(pattern string) {
+	t.filters.Add(&store.PathFilter{Pattern: pattern})
+}
+func (t *storeFilterTarget) AddWorkspace(workspace string) {
+	t.filters.Add(&store.FastFieldFilter{Field: "workspace", Value: workspace})
 }

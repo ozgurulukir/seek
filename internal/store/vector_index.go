@@ -57,6 +57,13 @@ type VectorIndexMetadata interface {
 	SetWarning(string)
 }
 
+// VectorIndexRecovery is implemented by persistent indexes whose on-disk
+// state could not be trusted and must be rebuilt from the Store.
+type VectorIndexRecovery interface {
+	NeedsRebuild() bool
+	SetNeedsRebuild(bool)
+}
+
 // --- HNSW Implementation ---
 
 type hnswIndex struct {
@@ -70,6 +77,7 @@ type hnswIndex struct {
 	warning           string
 	configFingerprint string
 	generation        string
+	needsRebuild      bool
 }
 
 type vectorManifest struct {
@@ -233,6 +241,18 @@ func (h *hnswIndex) Flush() error {
 		return nil
 	}
 	return h.Save(path)
+}
+
+func (h *hnswIndex) NeedsRebuild() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.needsRebuild
+}
+
+func (h *hnswIndex) SetNeedsRebuild(value bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.needsRebuild = value
 }
 
 func (h *hnswIndex) Warning() string {
@@ -408,7 +428,15 @@ func NewVectorIndex(cfg *config.AppConfig) (VectorIndex, error) {
 					idx.configFingerprint = vectorConfigFingerprint(cfg)
 					idx.persistPath = path
 					idx.warning = warning
+					idx.needsRebuild = true
 				}
+			} else if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("inspect vector index %q: %w", path, err)
+			} else {
+				// No persisted graph is a normal first-run state, but the Store
+				// may already contain embeddings (for example after upgrading).
+				// Let recovery materialize the graph from SQLite.
+				idx.needsRebuild = true
 			}
 		}
 		return idx, nil

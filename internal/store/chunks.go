@@ -147,21 +147,9 @@ func (s *Store) GetChunkContent(chunkID int64) (string, error) {
 
 // GetChunkContentContext returns a chunk body while honoring cancellation.
 func (s *Store) GetChunkContentContext(ctx context.Context, chunkID int64) (string, error) {
-	var content string
-	var contentZstd []byte
-	err := s.db.QueryRowContext(ctx,
-		`SELECT content, content_zstd FROM chunks WHERE id = ?`,
-		chunkID,
-	).Scan(&content, &contentZstd)
+	content, err := s.repositories.chunks.contentContext(ctx, chunkID)
 	if err != nil {
-		return "", err
-	}
-	if len(contentZstd) > 0 {
-		decompressed, err := DecompressString(contentZstd)
-		if err != nil {
-			return "", fmt.Errorf("decompress chunk %d: %w", chunkID, err)
-		}
-		return decompressed, nil
+		return "", fmt.Errorf("get chunk content %d: %w", chunkID, err)
 	}
 	return content, nil
 }
@@ -175,8 +163,8 @@ func (s *Store) UpdateChunkEmbeddingContext(ctx context.Context, chunkID int64, 
 	if err != nil {
 		return err
 	}
-	if s.vectorIndex != nil {
-		if err := s.vectorIndex.Add(chunkID, embedding); err != nil {
+	if s.vector() != nil {
+		if err := s.vector().Add(chunkID, embedding); err != nil {
 			return fmt.Errorf("update vector index: %w", err)
 		}
 	}
@@ -201,6 +189,45 @@ func (s *Store) GetChunksWithoutEmbeddingForCollectionType(typ CollectionType, f
 
 func (s *Store) GetChunksWithoutEmbeddingForCollectionTypeContext(ctx context.Context, typ CollectionType, force bool) ([]Chunk, error) {
 	return s.getChunksWithoutEmbeddingContext(ctx, force, typ, true)
+}
+
+// GetChunksWithoutEmbeddingForCollectionContext returns pending chunks for
+// exactly one collection. Collection type is intentionally not used here:
+// multiple collections may share a type, while sync(collection) must not
+// embed another collection's pending work.
+func (s *Store) GetChunksWithoutEmbeddingForCollectionContext(ctx context.Context, collectionID int64, force bool) ([]Chunk, error) {
+	query := `SELECT chunks.id, chunks.document_id, chunks.seq, chunks.content, chunks.content_zstd,
+		COALESCE(chunks.chunk_type, ?), COALESCE(chunks.image_path, '')
+		FROM chunks JOIN documents d ON d.id = chunks.document_id
+		WHERE d.collection_id = ?`
+	args := []interface{}{ChunkTypeText, collectionID}
+	if !force {
+		query += " AND chunks.embedding IS NULL"
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var chunks []Chunk
+	for rows.Next() {
+		var c Chunk
+		var contentZstd []byte
+		if err := rows.Scan(&c.ID, &c.DocumentID, &c.Seq, &c.Content, &contentZstd, &c.ChunkType, &c.ImagePath); err != nil {
+			return nil, err
+		}
+		if len(contentZstd) > 0 {
+			c.Content, err = DecompressString(contentZstd)
+			if err != nil {
+				return nil, fmt.Errorf("decompress chunk %d: %w", c.ID, err)
+			}
+		}
+		chunks = append(chunks, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return chunks, nil
 }
 
 func (s *Store) getChunksWithoutEmbedding(force bool, typ CollectionType, filterType bool) ([]Chunk, error) {

@@ -1,12 +1,11 @@
 package search
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
-	"slices"
 	"sort"
 
 	"github.com/ozgurulukir/seek/internal/embed"
@@ -61,6 +60,15 @@ func NewEngine(repository SearchRepository, ec embed.QueryEmbedder) *Engine {
 // NewEngineWithVL creates a search engine with a VL client for multimodal query embedding.
 func NewEngineWithVL(repository SearchRepository, ec embed.QueryEmbedder, vlc embed.VLQueryEmbedder) *Engine {
 	return &Engine{repository: repository, embedClient: ec, vlClient: vlc}
+}
+
+// NewEngineWithProvider builds the engine from the runtime-owned capability
+// bundle, keeping provider construction out of commands and search logic.
+func NewEngineWithProvider(repository SearchRepository, provider embed.Provider) *Engine {
+	e := NewEngine(repository, provider.Query)
+	e.vlClient = provider.VLQuery
+	e.reranker = provider.Reranker
+	return e
 }
 
 // WithReranker sets an optional cross-encoder reranker.
@@ -169,7 +177,8 @@ func (e *Engine) SearchBM25(ctx context.Context, query string, limit int, opts O
 		return sorted, nil
 	}
 
-	return e.rerankResults(ctx, query, results, limit), nil
+	reranked, err := e.rerankResults(ctx, query, results, limit)
+	return reranked, err
 }
 
 // SearchVector performs vector semantic search with optional filters, reranking, and sorting.
@@ -199,7 +208,8 @@ func (e *Engine) SearchVector(ctx context.Context, query string, limit int, opts
 		return sorted, nil
 	}
 
-	return e.rerankResults(ctx, query, results, limit), nil
+	reranked, err := e.rerankResults(ctx, query, results, limit)
+	return reranked, err
 }
 
 // SearchHybrid performs hybrid search using RRF fusion with optional filters, reranking, and sorting.
@@ -215,6 +225,15 @@ func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts
 
 	bm25Results, bm25Err := e.searchBM25Raw(ctx, query, candidateLimit, opts)
 	vecResults, vecErr := e.searchVectorRaw(ctx, query, candidateLimit, opts)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if errors.Is(bm25Err, context.Canceled) || errors.Is(bm25Err, context.DeadlineExceeded) {
+		return nil, bm25Err
+	}
+	if errors.Is(vecErr, context.Canceled) || errors.Is(vecErr, context.DeadlineExceeded) {
+		return nil, vecErr
+	}
 
 	if bm25Err != nil && vecErr != nil {
 		return nil, fmt.Errorf("hybrid search failed: bm25: %v; vector: %w", bm25Err, vecErr)
@@ -248,40 +267,8 @@ func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts
 		return sorted, nil
 	}
 
-	return e.rerankResults(ctx, query, fused, limit), nil
-}
-
-// rerankResults re-scores candidate search results using the cross-encoder reranker if configured.
-func (e *Engine) rerankResults(ctx context.Context, query string, results []Result, limit int) []Result {
-	if e.reranker == nil || len(results) <= 1 {
-		if len(results) > limit {
-			return results[:limit]
-		}
-		return results
-	}
-
-	docTexts := make([]string, len(results))
-	for i, r := range results {
-		docTexts[i] = r.Title + "\n" + r.Content
-	}
-
-	rerankScores, err := e.reranker.Rerank(ctx, query, docTexts, limit)
-	if err != nil || len(rerankScores) == 0 {
-		if len(results) > limit {
-			return results[:limit]
-		}
-		return results
-	}
-
-	reranked := make([]Result, 0, len(rerankScores))
-	for _, rs := range rerankScores {
-		if rs.Index >= 0 && rs.Index < len(results) {
-			res := results[rs.Index]
-			res.Score = rs.RelevanceScore
-			reranked = append(reranked, res)
-		}
-	}
-	return reranked
+	reranked, err := e.rerankResults(ctx, query, fused, limit)
+	return reranked, err
 }
 
 // SearchWithOptions performs search based on the options.
@@ -309,62 +296,6 @@ func (e *Engine) RunAggregations(ctx context.Context, specs []string, filters *F
 	return result, nil
 }
 
-func rrfFusion(bm25, vec []Result, limit int) []Result {
-	return rrfFusionWithK(bm25, vec, limit, DefaultRRFK)
-}
-
-func rrfFusionWithK(bm25, vec []Result, limit int, k int) []Result {
-	if k <= 0 {
-		k = DefaultRRFK
-	}
-	// Key by DocumentID for document-level fusion.
-	// BM25 returns ChunkID==0 (document-level), vector returns real chunk IDs.
-	// Using docID ensures both branches can merge for the same document.
-	scores := make(map[int64]float64)
-	resultMap := make(map[int64]Result)
-
-	for rank, r := range bm25 {
-		scores[r.DocumentID] += 1.0 / float64(k+rank+1)
-		resultMap[r.DocumentID] = r
-	}
-
-	for rank, r := range vec {
-		scores[r.DocumentID] += 1.0 / float64(k+rank+1)
-		if _, exists := resultMap[r.DocumentID]; !exists {
-			resultMap[r.DocumentID] = r
-		}
-	}
-
-	// Sort by RRF score
-	type scored struct {
-		docID int64
-		score float64
-	}
-	var sorted []scored
-	for id, s := range scores {
-		sorted = append(sorted, scored{id, s})
-	}
-	slices.SortFunc(sorted, func(a, b scored) int {
-		if c := cmp.Compare(b.score, a.score); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.docID, b.docID)
-	})
-
-	if len(sorted) > limit {
-		sorted = sorted[:limit]
-	}
-
-	results := make([]Result, len(sorted))
-	for i, s := range sorted {
-		r := resultMap[s.docID]
-		r.Score = s.score
-		results[i] = r
-	}
-
-	return results
-}
-
 // sortResults sorts search results by a fast field if specified.
 func (e *Engine) sortResults(ctx context.Context, results []Result, opts Options) ([]Result, error) {
 	if opts.SortBy == "" || len(results) == 0 {
@@ -379,8 +310,7 @@ func (e *Engine) sortResults(ctx context.Context, results []Result, opts Options
 
 	values, err := e.repository.BatchGetFastFields(ctx, docIDs, opts.SortBy)
 	if err != nil {
-		// If fast field doesn't exist, return unsorted
-		return results, nil
+		return nil, fmt.Errorf("sort by %q: %w", opts.SortBy, err)
 	}
 
 	// Sort results by fast field value

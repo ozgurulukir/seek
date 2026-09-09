@@ -16,8 +16,7 @@ import (
 
 type Store struct {
 	db                 *sql.DB
-	vectorIndex        VectorIndex
-	fastFields         *FastFieldStore
+	repositories       storeRepositories
 	compressionEnabled bool
 	compressionLevel   int
 	closeOnce          sync.Once
@@ -36,17 +35,12 @@ func Open(dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	s := &Store{db: db, fastFields: NewFastFieldStore(db)}
+	fastFields := NewFastFieldStore(db)
+	s := &Store{db: db, repositories: newStoreRepositories(db, fastFields)}
 	if err := s.migrate(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
+		return nil, fmt.Errorf("migrate: %w", errors.Join(err, db.Close()))
 	}
 	return s, nil
-}
-
-// DB returns the underlying *sql.DB for direct queries (aggregations, etc.).
-func (s *Store) DB() *sql.DB {
-	return s.db
 }
 
 func (s *Store) Close() error {
@@ -65,24 +59,28 @@ func (s *Store) Close() error {
 	return s.closeErr
 }
 
+func (s *Store) vector() VectorIndex {
+	return s.repositories.vectors.current()
+}
+
 // FlushVectorIndex publishes the vector graph and its manifest before the
 // database is closed. The generation is calculated from the persisted
 // embeddings so a restart can reject a stale graph instead of returning ghost
 // vector hits.
 func (s *Store) FlushVectorIndex(ctx context.Context) error {
-	if s.vectorIndex == nil {
+	if s.vector() == nil {
 		return nil
 	}
 	var errs []error
-	if metadata, ok := s.vectorIndex.(VectorIndexMetadata); ok {
+	if metadata, ok := s.vector().(VectorIndexMetadata); ok {
 		generation, err := s.vectorGenerationContext(ctx)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("calculate vector generation: %w", err))
+			return fmt.Errorf("calculate vector generation: %w", err)
 		} else {
 			metadata.SetManifestGeneration(generation)
 		}
 	}
-	if flusher, ok := s.vectorIndex.(VectorIndexFlusher); ok {
+	if flusher, ok := s.vector().(VectorIndexFlusher); ok {
 		if err := flusher.Flush(); err != nil {
 			errs = append(errs, fmt.Errorf("flush vector index: %w", err))
 		}
@@ -92,37 +90,58 @@ func (s *Store) FlushVectorIndex(ctx context.Context) error {
 
 // SetVectorIndex sets the vector index backend (HNSW or linear scan).
 func (s *Store) SetVectorIndex(idx VectorIndex) {
-	s.vectorIndex = idx
+	s.repositories.vectors.set(idx)
 }
 
 // RecoverVectorIndex validates the loaded manifest against the current
 // persisted embeddings. A mismatch is a safe stale state: clear the graph,
 // rebuild from SQLite, and expose the repair through the warning interface.
 func (s *Store) RecoverVectorIndex(ctx context.Context) error {
-	metadata, ok := s.vectorIndex.(VectorIndexMetadata)
-	if !ok || metadata.ManifestGeneration() == "" {
+	metadata, ok := s.vector().(VectorIndexMetadata)
+	if !ok {
+		return nil
+	}
+	recovery, needsRecovery := s.vector().(VectorIndexRecovery)
+	needsRebuild := needsRecovery && recovery.NeedsRebuild()
+	if !needsRebuild && metadata.ManifestGeneration() == "" {
 		return nil
 	}
 	current, err := s.vectorGenerationContext(ctx)
 	if err != nil {
 		return fmt.Errorf("read vector generation: %w", err)
 	}
-	if current == metadata.ManifestGeneration() {
+	if !needsRebuild && current == metadata.ManifestGeneration() {
 		return nil
 	}
-	if err := s.vectorIndex.Clear(); err != nil {
+	previous := metadata.ManifestGeneration()
+	if err := s.vector().Clear(); err != nil {
 		return fmt.Errorf("clear stale vector index: %w", err)
 	}
-	metadata.SetWarning(fmt.Sprintf("vector index rebuilt because persisted embeddings changed (generation %s -> %s)", metadata.ManifestGeneration(), current))
+	if needsRebuild {
+		metadata.SetWarning(fmt.Sprintf("vector index rebuilt from persisted embeddings: %s", recoveryReason(previous)))
+	} else {
+		metadata.SetWarning(fmt.Sprintf("vector index rebuilt because persisted embeddings changed (generation %s -> %s)", previous, current))
+	}
 	if _, err := s.syncVectorIndexFullContext(ctx); err != nil {
 		return fmt.Errorf("rebuild stale vector index: %w", err)
+	}
+	metadata.SetManifestGeneration(current)
+	if needsRecovery {
+		recovery.SetNeedsRebuild(false)
 	}
 	return nil
 }
 
+func recoveryReason(previous string) string {
+	if previous == "" {
+		return "persisted graph is missing or has no trusted manifest"
+	}
+	return "persisted graph metadata was invalid"
+}
+
 // FastFields returns the fast field store for sorting and aggregation.
 func (s *Store) FastFields() *FastFieldStore {
-	return s.fastFields
+	return s.repositories.fastFields
 }
 
 // SetCompression configures chunk content compression.

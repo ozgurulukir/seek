@@ -2,6 +2,7 @@ package source
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -177,18 +178,26 @@ func DetectLanguage(path string) (string, string) {
 
 // IsBinaryFile checks if a file is binary by inspecting the first 1024 bytes for null bytes.
 func IsBinaryFile(path string) bool {
+	result, _ := IsBinaryFileContext(context.Background(), path)
+	return result
+}
+
+func IsBinaryFileContext(ctx context.Context, path string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer f.Close()
 
 	buf := make([]byte, 1024)
 	n, err := f.Read(buf)
 	if err != nil && err != io.EOF {
-		return false
+		return false, err
 	}
-	return bytes.Contains(buf[:n], []byte{0})
+	return bytes.Contains(buf[:n], []byte{0}), nil
 }
 
 // parseGitignore reads simple ignore rules from a .gitignore file.
@@ -271,6 +280,13 @@ func isIgnoredFile(baseName string, relPath string, gitignorePatterns []string) 
 }
 
 func processCodeFile(path, relPath string, info os.FileInfo, pattern string) (*CodeFileInfo, error) {
+	return processCodeFileContext(context.Background(), path, relPath, info, pattern)
+}
+
+func processCodeFileContext(ctx context.Context, path, relPath string, info os.FileInfo, pattern string) (*CodeFileInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	lang, ext := DetectLanguage(path)
 	if lang == "" {
 		return nil, nil
@@ -290,7 +306,11 @@ func processCodeFile(path, relPath string, info os.FileInfo, pattern string) (*C
 	}
 
 	// Null-byte check for binaries
-	if IsBinaryFile(path) {
+	binary, err := IsBinaryFileContext(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	if binary {
 		return nil, nil
 	}
 
@@ -318,7 +338,7 @@ func processCodeFile(path, relPath string, info os.FileInfo, pattern string) (*C
 
 // ScanCode scans a directory for source code files.
 func ScanCode(dir, pattern string) ([]CodeFileInfo, error) {
-	files, _, err := ScanCodeWithWarnings(dir, pattern)
+	files, _, err := ScanCodeWithWarningsContext(context.Background(), dir, pattern)
 	return files, err
 }
 
@@ -332,6 +352,10 @@ func ScanCode(dir, pattern string) ([]CodeFileInfo, error) {
 // leading-slash anchoring are NOT supported; the matcher is a simple
 // filepath.Match + path-prefix approximation. See matchesGitignore.
 func ScanCodeWithWarnings(dir, pattern string) ([]CodeFileInfo, []string, error) {
+	return ScanCodeWithWarningsContext(context.Background(), dir, pattern)
+}
+
+func ScanCodeWithWarningsContext(ctx context.Context, dir, pattern string) ([]CodeFileInfo, []string, error) {
 	var files []CodeFileInfo
 	var skipped []string
 	absDir, err := filepath.Abs(dir)
@@ -345,6 +369,9 @@ func ScanCodeWithWarnings(dir, pattern string) ([]CodeFileInfo, []string, error)
 	}
 
 	err = filepath.Walk(absDir, func(path string, info os.FileInfo, walkErr error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if walkErr != nil {
 			skipped = append(skipped, path)
 			return nil // skip unreadable paths, but record them
@@ -369,7 +396,7 @@ func ScanCodeWithWarnings(dir, pattern string) ([]CodeFileInfo, []string, error)
 			return nil
 		}
 
-		codeFile, err := processCodeFile(path, relPath, info, pattern)
+		codeFile, err := processCodeFileContext(ctx, path, relPath, info, pattern)
 		if err != nil {
 			skipped = append(skipped, path)
 			return nil

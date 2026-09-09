@@ -17,16 +17,7 @@ func (s *Store) GetDocument(collectionID int64, path string) (*Document, error) 
 }
 
 func (s *Store) GetDocumentContext(ctx context.Context, collectionID int64, path string) (*Document, error) {
-	d := &Document{}
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, collection_id, path, title, content_hash, mtime, line_count, created_at, updated_at
-		 FROM documents WHERE collection_id = ? AND path = ?`,
-		collectionID, path,
-	).Scan(&d.ID, &d.CollectionID, &d.Path, &d.Title, &d.ContentHash, &d.Mtime, &d.LineCount, &d.CreatedAt, &d.UpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	return d, nil
+	return s.repositories.documents.getContext(ctx, collectionID, path)
 }
 
 func (s *Store) UpsertDocument(collectionID int64, path, title, contentHash string, mtime float64, lineCount int) (int64, error) {
@@ -117,6 +108,15 @@ func (s *Store) UpdateDocumentMtime(docID int64, mtime float64) error {
 
 func (s *Store) UpdateDocumentMtimeContext(ctx context.Context, docID int64, mtime float64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE documents SET mtime = ? WHERE id = ?`, mtime, docID)
+	return err
+}
+
+func (s *Store) UpdateDocumentContentHash(docID int64, contentHash string) error {
+	return s.UpdateDocumentContentHashContext(context.Background(), docID, contentHash)
+}
+
+func (s *Store) UpdateDocumentContentHashContext(ctx context.Context, docID int64, contentHash string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE documents SET content_hash = ? WHERE id = ?`, contentHash, docID)
 	return err
 }
 

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/ozgurulukir/seek/internal/app"
@@ -9,12 +10,12 @@ import (
 
 type StatusCmd struct{}
 
-func (c *StatusCmd) Run(cfg *config.AppConfig) error {
+func (c *StatusCmd) Run(cfg *config.AppConfig) (err error) {
 	db, err := app.OpenStore(cfg)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	defer db.Close()
+	defer func() { err = errors.Join(err, db.Close()) }()
 
 	collections, err := db.ListCollections()
 	if err != nil {

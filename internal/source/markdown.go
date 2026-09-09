@@ -1,6 +1,7 @@
 package source
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -23,6 +24,12 @@ type FileInfo struct {
 
 // ScanMarkdown scans a directory for markdown files matching the pattern.
 func ScanMarkdown(dir, pattern string) ([]FileInfo, []ScanIssue, error) {
+	return ScanMarkdownContext(context.Background(), dir, pattern)
+}
+
+// ScanMarkdownContext scans markdown files while honoring cancellation during
+// both directory traversal and file reads.
+func ScanMarkdownContext(ctx context.Context, dir, pattern string) ([]FileInfo, []ScanIssue, error) {
 	if pattern == "" {
 		pattern = "**/*.md"
 	}
@@ -31,6 +38,9 @@ func ScanMarkdown(dir, pattern string) ([]FileInfo, []ScanIssue, error) {
 	var issues []ScanIssue
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			issues = append(issues, ScanIssue{Path: path, Err: err})
 			return nil

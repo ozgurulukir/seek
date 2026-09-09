@@ -2,6 +2,7 @@ package parserdef
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -13,13 +14,20 @@ import (
 // plus the discovered source files. This is the detect entry point used by the
 // indexer and CLI.
 func (d *ParserDef) Match() (src *SourceSpec, ver *VersionSpec, files []string, err error) {
+	return d.MatchContext(context.Background())
+}
+
+func (d *ParserDef) MatchContext(ctx context.Context) (src *SourceSpec, ver *VersionSpec, files []string, err error) {
 	for i := range d.Sources {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
 		s := &d.Sources[i]
 		switch s.Driver {
 		case "sqlite":
-			return detectSQLiteSource(d)
+			return detectSQLiteSourceContext(ctx, d)
 		case "jsonl", "jsonfiles":
-			return detectJSONLSource(d)
+			return detectJSONLSourceContext(ctx, d)
 		}
 	}
 	return nil, nil, nil, fmt.Errorf("parser %q: no supported driver found in sources", d.Name)
@@ -34,11 +42,18 @@ func (d *ParserDef) Match() (src *SourceSpec, ver *VersionSpec, files []string, 
 // returned with Messages=nil (unchanged — the caller should skip re-indexing them).
 // This avoids the need for a separate "list all IDs" query.
 func SyncSessions(src *SourceSpec, ver *VersionSpec, files []string, since time.Time) ([]Session, []SessionError, error) {
+	return SyncSessionsContext(context.Background(), src, ver, files, since)
+}
+
+func SyncSessionsContext(ctx context.Context, src *SourceSpec, ver *VersionSpec, files []string, since time.Time) ([]Session, []SessionError, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	switch src.Driver {
 	case "sqlite":
-		return syncSQLiteSessions(src, ver, files, since)
+		return syncSQLiteSessionsContext(ctx, src, ver, files, since)
 	case "jsonl", "jsonfiles":
-		return syncJSONLSessions(src, ver, files, since)
+		return syncJSONLSessionsContext(ctx, src, ver, files, since)
 	default:
 		return nil, nil, fmt.Errorf("driver %q not yet supported", src.Driver)
 	}
@@ -47,11 +62,18 @@ func SyncSessions(src *SourceSpec, ver *VersionSpec, files []string, since time.
 // syncJSONLSessions reads all JSONL files, producing one Session per file.
 // Incremental sync uses file mtime as cursor.
 func syncJSONLSessions(src *SourceSpec, ver *VersionSpec, files []string, since time.Time) ([]Session, []SessionError, error) {
+	return syncJSONLSessionsContext(context.Background(), src, ver, files, since)
+}
+
+func syncJSONLSessionsContext(ctx context.Context, src *SourceSpec, ver *VersionSpec, files []string, since time.Time) ([]Session, []SessionError, error) {
 	var sessions []Session
 	var errs []SessionError
 
 	for _, filePath := range files {
-		row, err := scanJSONLFile(filePath, ver)
+		if err := ctx.Err(); err != nil {
+			return sessions, errs, err
+		}
+		row, err := scanJSONLFileContext(ctx, filePath, ver)
 		if err != nil {
 			errs = append(errs, SessionError{SessionID: filePath, Err: fmt.Errorf("scan jsonl: %w", err)})
 			continue
@@ -93,11 +115,18 @@ func syncJSONLSessions(src *SourceSpec, ver *VersionSpec, files []string, since 
 // syncSQLiteSessions reads all sessions from matched SQLite databases,
 // optionally filtering by a cursor threshold.
 func syncSQLiteSessions(src *SourceSpec, ver *VersionSpec, files []string, since time.Time) ([]Session, []SessionError, error) {
+	return syncSQLiteSessionsContext(context.Background(), src, ver, files, since)
+}
+
+func syncSQLiteSessionsContext(ctx context.Context, src *SourceSpec, ver *VersionSpec, files []string, since time.Time) ([]Session, []SessionError, error) {
 	var sessions []Session
 	var errs []SessionError
 
 	for _, dbPath := range files {
-		dbSessions, dbErrs := syncSQLiteDB(dbPath, ver, since)
+		if err := ctx.Err(); err != nil {
+			return sessions, errs, err
+		}
+		dbSessions, dbErrs := syncSQLiteDBContext(ctx, dbPath, ver, since)
 		sessions = append(sessions, dbSessions...)
 		errs = append(errs, dbErrs...)
 	}
@@ -107,13 +136,20 @@ func syncSQLiteSessions(src *SourceSpec, ver *VersionSpec, files []string, since
 
 // syncSQLiteDB syncs sessions from a single SQLite database file.
 func syncSQLiteDB(dbPath string, ver *VersionSpec, since time.Time) ([]Session, []SessionError) {
+	return syncSQLiteDBContext(context.Background(), dbPath, ver, since)
+}
+
+func syncSQLiteDBContext(ctx context.Context, dbPath string, ver *VersionSpec, since time.Time) ([]Session, []SessionError) {
+	if err := ctx.Err(); err != nil {
+		return nil, []SessionError{{SessionID: dbPath, Err: err}}
+	}
 	db, err := openExternalDB(dbPath)
 	if err != nil {
 		return nil, []SessionError{{SessionID: dbPath, Err: fmt.Errorf("open db: %w", err)}}
 	}
 	defer db.Close()
 
-	rawRows, err := scanSQLiteSessions(db, ver)
+	rawRows, err := scanSQLiteSessionsContext(ctx, db, ver)
 	if err != nil {
 		return nil, []SessionError{{SessionID: dbPath, Err: fmt.Errorf("scan sessions: %w", err)}}
 	}
@@ -124,6 +160,9 @@ func syncSQLiteDB(dbPath string, ver *VersionSpec, since time.Time) ([]Session, 
 	var batchIndices []int
 
 	for _, raw := range rawRows {
+		if err := ctx.Err(); err != nil {
+			return sessions, append(errs, SessionError{SessionID: dbPath, Err: err})
+		}
 		sess, err := processSQLiteSessionRow(raw, dbPath, ver)
 		if err != nil {
 			errs = append(errs, SessionError{SessionID: raw.id, Err: err})
@@ -153,7 +192,7 @@ func syncSQLiteDB(dbPath string, ver *VersionSpec, since time.Time) ([]Session, 
 			batchIndices = append(batchIndices, idx)
 
 			if len(batchIDs) >= 500 {
-				errs = append(errs, fetchAndAssignBatch(db, ver, batchIDs, batchIndices, sessions)...)
+				errs = append(errs, fetchAndAssignBatchContext(ctx, db, ver, batchIDs, batchIndices, sessions)...)
 				batchIDs = batchIDs[:0]
 				batchIndices = batchIndices[:0]
 			}
@@ -161,7 +200,7 @@ func syncSQLiteDB(dbPath string, ver *VersionSpec, since time.Time) ([]Session, 
 	}
 
 	if len(batchIDs) > 0 {
-		errs = append(errs, fetchAndAssignBatch(db, ver, batchIDs, batchIndices, sessions)...)
+		errs = append(errs, fetchAndAssignBatchContext(ctx, db, ver, batchIDs, batchIndices, sessions)...)
 	}
 
 	return sessions, errs

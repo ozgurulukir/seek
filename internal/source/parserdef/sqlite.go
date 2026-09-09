@@ -1,6 +1,7 @@
 package parserdef
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -28,9 +29,16 @@ func expandTilde(p string) string {
 
 // matchGlob expands glob patterns, applying exclude filters.
 func matchGlob(patterns, excludes []string) ([]string, error) {
+	return matchGlobContext(context.Background(), patterns, excludes)
+}
+
+func matchGlobContext(ctx context.Context, patterns, excludes []string) ([]string, error) {
 	var result []string
 	seen := make(map[string]bool)
 	for _, pat := range patterns {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		expanded := expandTilde(pat)
 		matches, err := filepath.Glob(expanded)
 		if err != nil {
@@ -198,7 +206,14 @@ func openExternalDB(path string) (*sql.DB, error) {
 // detectSQLiteSource returns the first matching source and version for the given ParserDef,
 // opening each discovered DB to test version-level detect rules.
 func detectSQLiteSource(def *ParserDef) (*SourceSpec, *VersionSpec, []string, error) {
+	return detectSQLiteSourceContext(context.Background(), def)
+}
+
+func detectSQLiteSourceContext(ctx context.Context, def *ParserDef) (*SourceSpec, *VersionSpec, []string, error) {
 	for si := range def.Sources {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
 		src := &def.Sources[si]
 		if src.Driver != "sqlite" {
 			continue
@@ -208,7 +223,7 @@ func detectSQLiteSource(def *ParserDef) (*SourceSpec, *VersionSpec, []string, er
 			continue
 		}
 		// Discover candidate DB files.
-		files, err := matchGlob(src.Paths, src.Exclude)
+		files, err := matchGlobContext(ctx, src.Paths, src.Exclude)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -219,6 +234,9 @@ func detectSQLiteSource(def *ParserDef) (*SourceSpec, *VersionSpec, []string, er
 		// Per the plan: "version detect first DB'ye göre yapılır."
 		var matchedVer *VersionSpec
 		for _, f := range files {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, nil, err
+			}
 			db, err := openExternalDB(f)
 			if err != nil {
 				continue
@@ -287,7 +305,11 @@ func buildBatchQuery(query string) (string, int, error) {
 
 // scanSQLiteSessions runs the sessions query against a DB file and returns raw rows.
 func scanSQLiteSessions(db *sql.DB, ver *VersionSpec) ([]sqliteSessionRow, error) {
-	rows, err := db.Query(ver.Sessions.Query)
+	return scanSQLiteSessionsContext(context.Background(), db, ver)
+}
+
+func scanSQLiteSessionsContext(ctx context.Context, db *sql.DB, ver *VersionSpec) ([]sqliteSessionRow, error) {
+	rows, err := db.QueryContext(ctx, ver.Sessions.Query)
 	if err != nil {
 		return nil, fmt.Errorf("sessions query: %w", err)
 	}
@@ -326,6 +348,9 @@ func scanSQLiteSessions(db *sql.DB, ver *VersionSpec) ([]sqliteSessionRow, error
 
 	var result []sqliteSessionRow
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		vals := make([]sql.NullString, len(cols))
 		ptrs := make([]interface{}, len(cols))
 		for i := range vals {
@@ -358,7 +383,11 @@ func scanSQLiteSessions(db *sql.DB, ver *VersionSpec) ([]sqliteSessionRow, error
 
 // fetchSQLiteMessages runs the messages query for a single session (Mode A).
 func fetchSQLiteMessages(db *sql.DB, ver *VersionSpec, sessionID string) ([]Message, error) {
-	rows, err := db.Query(ver.Messages.Query, sql.Named("session_id", sessionID))
+	return fetchSQLiteMessagesContext(context.Background(), db, ver, sessionID)
+}
+
+func fetchSQLiteMessagesContext(ctx context.Context, db *sql.DB, ver *VersionSpec, sessionID string) ([]Message, error) {
+	rows, err := db.QueryContext(ctx, ver.Messages.Query, sql.Named("session_id", sessionID))
 	if err != nil {
 		return nil, fmt.Errorf("messages query: %w", err)
 	}
@@ -377,6 +406,9 @@ func fetchSQLiteMessages(db *sql.DB, ver *VersionSpec, sessionID string) ([]Mess
 
 	var messages []Message
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		vals := make([]sql.NullString, len(cols))
 		ptrs := make([]interface{}, len(cols))
 		for i := range vals {
@@ -404,6 +436,10 @@ func fetchSQLiteMessages(db *sql.DB, ver *VersionSpec, sessionID string) ([]Mess
 
 // fetchSQLiteMessagesBatch runs the messages query for multiple sessions.
 func fetchSQLiteMessagesBatch(db *sql.DB, ver *VersionSpec, sessionIDs []string) (map[string][]Message, error) {
+	return fetchSQLiteMessagesBatchContext(context.Background(), db, ver, sessionIDs)
+}
+
+func fetchSQLiteMessagesBatchContext(ctx context.Context, db *sql.DB, ver *VersionSpec, sessionIDs []string) (map[string][]Message, error) {
 	if len(sessionIDs) == 0 {
 		return nil, nil
 	}
@@ -423,7 +459,7 @@ func fetchSQLiteMessagesBatch(db *sql.DB, ver *VersionSpec, sessionIDs []string)
 		args[i] = string(idsJSON)
 	}
 
-	rows, err := db.Query(q, args...)
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("batch messages query: %w", err)
 	}
@@ -444,6 +480,9 @@ func fetchSQLiteMessagesBatch(db *sql.DB, ver *VersionSpec, sessionIDs []string)
 	result := make(map[string][]Message, len(sessionIDs))
 
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		vals := make([]sql.NullString, len(cols))
 		ptrs := make([]interface{}, len(cols))
 		for i := range vals {
@@ -478,11 +517,15 @@ func fetchSQLiteMessagesBatch(db *sql.DB, ver *VersionSpec, sessionIDs []string)
 // custom schema the batch rewrite cannot handle), it falls back to individual
 // fetches so the whole batch is not lost.
 func fetchAndAssignBatch(db *sql.DB, ver *VersionSpec, batchIDs []string, batchIndices []int, sessions []Session) []SessionError {
-	msgMap, err := fetchSQLiteMessagesBatch(db, ver, batchIDs)
+	return fetchAndAssignBatchContext(context.Background(), db, ver, batchIDs, batchIndices, sessions)
+}
+
+func fetchAndAssignBatchContext(ctx context.Context, db *sql.DB, ver *VersionSpec, batchIDs []string, batchIndices []int, sessions []Session) []SessionError {
+	msgMap, err := fetchSQLiteMessagesBatchContext(ctx, db, ver, batchIDs)
 	if err != nil {
 		var errs []SessionError
 		for i, id := range batchIDs {
-			msgs, fErr := fetchSQLiteMessages(db, ver, id)
+			msgs, fErr := fetchSQLiteMessagesContext(ctx, db, ver, id)
 			if fErr != nil {
 				errs = append(errs, SessionError{SessionID: id, Err: fmt.Errorf("messages fallback: %w", fErr)})
 			} else {

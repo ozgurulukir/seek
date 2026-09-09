@@ -80,10 +80,6 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) (err error) {
 
 	engine := runtime.Search
 	engine.WithLogger(searchLogger{})
-	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.APIKey != "" && !cfg.Config.OfflineOnly() {
-		reranker := embed.NewRerankClient(cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.APIKey, cfg.Config.Rerank.Model)
-		engine.WithReranker(reranker)
-	}
 	embedClient, vlClient := runtime.EmbedClient, runtime.VLClient
 	filters := c.buildFilters()
 
@@ -113,7 +109,9 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) (err error) {
 	// context expansion. Content is emitted in full (the FTS snippet carries
 	// >>> markers and 40-token truncation; agents decide how much to read).
 	if c.JSON {
-		engine.EnrichContent(ctx, results)
+		if err := engine.EnrichContent(ctx, results); err != nil {
+			return fmt.Errorf("enrich results: %w", err)
+		}
 		aggs, err := c.computeAggregations(ctx, engine, filters)
 		if err != nil {
 			return fmt.Errorf("aggregations: %w", err)
@@ -416,12 +414,12 @@ func effectiveAnalyzeLang(flagLang string, cfg *config.AppConfig) string {
 }
 
 // runAutocomplete handles the --autocomplete flag: shows prefix completions.
-func (c *SearchCmd) runAutocomplete(cfg *config.AppConfig) error {
+func (c *SearchCmd) runAutocomplete(cfg *config.AppConfig) (err error) {
 	db, err := app.OpenStore(cfg)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	defer db.Close()
+	defer func() { err = errors.Join(err, db.Close()) }()
 
 	query := strings.TrimSpace(c.Query)
 	var results []string

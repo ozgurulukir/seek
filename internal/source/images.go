@@ -1,6 +1,7 @@
 package source
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -28,9 +29,16 @@ var imageExtensions = map[string]bool{
 // ScanIssue entries so the indexer can log them; the scan continues so
 // healthy files are still indexed.
 func ScanImages(dir string) ([]ImageFile, []ScanIssue, error) {
+	return ScanImagesContext(context.Background(), dir)
+}
+
+func ScanImagesContext(ctx context.Context, dir string) ([]ImageFile, []ScanIssue, error) {
 	var files []ImageFile
 	var issues []ScanIssue
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			issues = append(issues, ScanIssue{Path: path, Err: err})
 			return nil

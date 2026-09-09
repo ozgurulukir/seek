@@ -1,8 +1,71 @@
 package embed
 
 import (
+	"fmt"
+	"sync"
+
 	"github.com/ozgurulukir/seek/internal/config"
 )
+
+// ProviderFactory constructs a capability bundle for one configured provider.
+type ProviderFactory func(*config.AppConfig) (Provider, error)
+
+// ProviderRegistry keeps provider construction at one seam. Additional
+// providers can register a factory without making command or pipeline code
+// aware of provider-specific clients.
+type ProviderRegistry struct {
+	mu        sync.RWMutex
+	factories map[string]ProviderFactory
+}
+
+func NewProviderRegistry() *ProviderRegistry {
+	registry := &ProviderRegistry{factories: make(map[string]ProviderFactory)}
+	registry.Register("configured", configuredProvider)
+	return registry
+}
+
+func (r *ProviderRegistry) Register(name string, factory ProviderFactory) {
+	if r == nil || name == "" || factory == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.factories[name] = factory
+}
+
+func (r *ProviderRegistry) Build(name string, cfg *config.AppConfig) (Provider, error) {
+	if r == nil {
+		return Provider{}, fmt.Errorf("embedding provider registry is nil")
+	}
+	r.mu.RLock()
+	factory := r.factories[name]
+	r.mu.RUnlock()
+	if factory == nil {
+		return Provider{}, fmt.Errorf("embedding provider %q is not registered", name)
+	}
+	return factory(cfg)
+}
+
+func NewProviderFromConfig(cfg *config.AppConfig) (Provider, error) {
+	return NewProviderRegistry().Build("configured", cfg)
+}
+
+func configuredProvider(cfg *config.AppConfig) (Provider, error) {
+	if cfg == nil {
+		return Provider{}, fmt.Errorf("embedding provider: nil config")
+	}
+	client := NewClientFromConfig(cfg)
+	p := Provider{Query: client, Document: client, Batch: client}
+	if vl := NewVLClientFromConfig(cfg); vl != nil {
+		p.VLQuery = vl
+		p.VLText = vl
+		p.VLImage = vl
+	}
+	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.APIKey != "" && !cfg.Config.OfflineOnly() {
+		p.Reranker = NewRerankClient(cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.APIKey, cfg.Config.Rerank.Model)
+	}
+	return p, nil
+}
 
 // NewClientFromConfig builds the text-embedding client from config. Returns
 // the offline (network-refusing) client when privacy.offline_only is set, and

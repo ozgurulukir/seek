@@ -228,6 +228,61 @@ func TestStoreRecoverVectorIndexOnGenerationMismatch(t *testing.T) {
 	}
 }
 
+func TestStoreRecoverVectorIndexFromMissingOrCorruptPersistence(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(map[bool]string{false: "missing", true: "corrupt"}[corrupt], func(t *testing.T) {
+			s := newTestStore(t)
+			col, err := s.CreateCollection("notes", CollectionTypeMarkdown, t.TempDir(), "*.md")
+			if err != nil {
+				t.Fatalf("CreateCollection: %v", err)
+			}
+			docID, err := s.UpsertDocument(col.ID, "note.md", "Note", "hash", 1, 1)
+			if err != nil {
+				t.Fatalf("UpsertDocument: %v", err)
+			}
+			if err := s.InsertChunk(docID, 0, "content", []float32{1, 0}); err != nil {
+				t.Fatalf("InsertChunk: %v", err)
+			}
+			var chunkID int64
+			if err := s.db.QueryRow(`SELECT id FROM chunks WHERE document_id = ?`, docID).Scan(&chunkID); err != nil {
+				t.Fatalf("read chunk id: %v", err)
+			}
+
+			path := filepath.Join(t.TempDir(), "vectors.hnsw")
+			if corrupt {
+				if err := os.WriteFile(path, []byte("corrupt"), 0600); err != nil {
+					t.Fatalf("write corrupt graph: %v", err)
+				}
+			}
+			cfg := &config.AppConfig{
+				Config: config.Config{
+					Embedding:   config.EmbeddingConfig{Dimensions: 2},
+					VectorIndex: config.VectorIndexConfig{Backend: "hnsw", HNSW: config.HNSWConfig{PersistPath: path}},
+				},
+				CacheDir: t.TempDir(),
+			}
+			idx, err := NewVectorIndex(cfg)
+			if err != nil {
+				t.Fatalf("NewVectorIndex: %v", err)
+			}
+			s.SetVectorIndex(idx)
+			if err := s.RecoverVectorIndex(context.Background()); err != nil {
+				t.Fatalf("RecoverVectorIndex: %v", err)
+			}
+			hnsw, ok := idx.(*hnswIndex)
+			if !ok || !hnsw.Contains(chunkID) {
+				t.Fatalf("recovered index = %T, contains(%d)=%v; want persisted embedding", idx, chunkID, ok && hnsw.Contains(chunkID))
+			}
+			if hnsw.NeedsRebuild() {
+				t.Fatal("recovery flag remained set after rebuild")
+			}
+			if hnsw.Warning() == "" {
+				t.Fatal("expected recovery warning for untrusted persisted graph")
+			}
+		})
+	}
+}
+
 func TestStoreCloseReturnsVectorFlushError(t *testing.T) {
 	s := newTestStore(t)
 	idx, err := newHNSWIndex(3, 16, 50)

@@ -1,6 +1,7 @@
 package parserdef
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -37,7 +38,14 @@ type jsonlSessionRow struct {
 
 // detectJSONLSource discovers JSONL files matching the source spec.
 func detectJSONLSource(def *ParserDef) (*SourceSpec, *VersionSpec, []string, error) {
+	return detectJSONLSourceContext(context.Background(), def)
+}
+
+func detectJSONLSourceContext(ctx context.Context, def *ParserDef) (*SourceSpec, *VersionSpec, []string, error) {
 	for si := range def.Sources {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
 		src := &def.Sources[si]
 		if src.Driver != "jsonl" && src.Driver != "jsonfiles" {
 			continue
@@ -47,7 +55,7 @@ func detectJSONLSource(def *ParserDef) (*SourceSpec, *VersionSpec, []string, err
 			continue
 		}
 		// Discover JSONL files by recursive walk.
-		files, err := walkJSONLFiles(src.Paths, src.Exclude)
+		files, err := walkJSONLFilesContext(ctx, src.Paths, src.Exclude)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -67,10 +75,17 @@ func detectJSONLSource(def *ParserDef) (*SourceSpec, *VersionSpec, []string, err
 // walkJSONLFiles recursively walks the given directories and returns all .jsonl files,
 // applying exclude filters. This mirrors the native ScanClaudeFiles/ScanCodexFiles behavior.
 func walkJSONLFiles(paths, excludes []string) ([]string, error) {
+	return walkJSONLFilesContext(context.Background(), paths, excludes)
+}
+
+func walkJSONLFilesContext(ctx context.Context, paths, excludes []string) ([]string, error) {
 	var result []string
 	seen := make(map[string]bool)
 
 	for _, p := range paths {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		root := expandTilde(p)
 		info, err := os.Stat(root)
 		if err != nil {
@@ -87,7 +102,10 @@ func walkJSONLFiles(paths, excludes []string) ([]string, error) {
 		// Walk the directory tree. Per-file traversal errors are skipped (the
 		// walk continues to other subtrees). This matches the native parser
 		// pattern (ScanClaudeFiles/ScanCodexFiles).
-		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		walkErr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if err != nil {
 				return nil // skip unreadable paths, continue walking
 			}
@@ -106,12 +124,19 @@ func walkJSONLFiles(paths, excludes []string) ([]string, error) {
 			}
 			return nil
 		})
+		if walkErr != nil {
+			return result, walkErr
+		}
 	}
 	return result, nil
 }
 
 // scanJSONLFile reads a single JSONL file and produces a session row.
 func scanJSONLFile(filePath string, ver *VersionSpec) (*jsonlSessionRow, error) {
+	return scanJSONLFileContext(context.Background(), filePath, ver)
+}
+
+func scanJSONLFileContext(ctx context.Context, filePath string, ver *VersionSpec) (*jsonlSessionRow, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("open: %w", err)
@@ -141,6 +166,9 @@ func scanJSONLFile(filePath string, ver *VersionSpec) (*jsonlSessionRow, error) 
 	}
 
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue

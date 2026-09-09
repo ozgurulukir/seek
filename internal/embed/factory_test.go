@@ -66,3 +66,39 @@ func TestClientFromConfigTable(t *testing.T) {
 		})
 	}
 }
+
+func TestProviderRegistryUsesCapabilityFactory(t *testing.T) {
+	registry := NewProviderRegistry()
+	marker := &Client{}
+	registry.Register("test", func(*config.AppConfig) (Provider, error) {
+		return Provider{Query: marker, Document: marker, Batch: marker}, nil
+	})
+
+	provider, err := registry.Build("test", &config.AppConfig{})
+	if err != nil {
+		t.Fatalf("Build(test): %v", err)
+	}
+	if provider.Query != marker || provider.Document != marker || provider.Batch != marker {
+		t.Fatalf("provider capabilities were not returned by the registered factory")
+	}
+	if _, err := registry.Build("missing", &config.AppConfig{}); err == nil {
+		t.Fatal("Build(missing) succeeded, want registration error")
+	}
+}
+
+func TestNewProviderFromConfigBuildsConfiguredBundle(t *testing.T) {
+	cfg := &config.AppConfig{Config: config.Config{}}
+	cfg.Config.Privacy.OfflineOnly = true
+	cfg.Config.Embedding.Model = "text-embedding-3-small"
+
+	provider, err := NewProviderFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("NewProviderFromConfig: %v", err)
+	}
+	if provider.Query == nil || provider.Document == nil || provider.Batch == nil {
+		t.Fatalf("configured provider is missing text capabilities: %#v", provider)
+	}
+	if provider.VLQuery != nil || provider.VLText != nil || provider.VLImage != nil {
+		t.Fatalf("offline configured provider unexpectedly exposes VL capabilities")
+	}
+}

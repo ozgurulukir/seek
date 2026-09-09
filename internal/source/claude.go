@@ -1,6 +1,7 @@
 package source
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -34,6 +35,10 @@ type ConversationFile struct {
 
 // ScanClaudeFiles scans ~/.claude/projects/ for conversation JSONL file paths without parsing them.
 func ScanClaudeFiles() ([]ConversationFile, error) {
+	return ScanClaudeFilesContext(context.Background())
+}
+
+func ScanClaudeFilesContext(ctx context.Context) ([]ConversationFile, error) {
 	home, _ := os.UserHomeDir()
 	projectsDir := filepath.Join(home, ".claude", "projects")
 
@@ -44,6 +49,9 @@ func ScanClaudeFiles() ([]ConversationFile, error) {
 	var files []ConversationFile
 
 	err := filepath.Walk(projectsDir, func(path string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			return nil
 		}
@@ -62,6 +70,10 @@ func ScanClaudeFiles() ([]ConversationFile, error) {
 
 // ParseClaudeFile parses a single Claude JSONL file starting from a line offset.
 func ParseClaudeFile(path string, fromLine int) ([]ClaudeMessage, error) {
+	return ParseClaudeFileContext(context.Background(), path, fromLine)
+}
+
+func ParseClaudeFileContext(ctx context.Context, path string, fromLine int) ([]ClaudeMessage, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -73,6 +85,9 @@ func ParseClaudeFile(path string, fromLine int) ([]ClaudeMessage, error) {
 	lineNum := 0
 
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		lineNum++
 		if lineNum <= fromLine {
 			continue
@@ -93,6 +108,10 @@ func ParseClaudeFile(path string, fromLine int) ([]ClaudeMessage, error) {
 
 // ParseClaudeFileWithImages parses a Claude JSONL file and extracts both messages and images.
 func ParseClaudeFileWithImages(path string, fromLine int, convID string) ([]ClaudeMessage, []ConversationImage, error) {
+	return ParseClaudeFileWithImagesContext(context.Background(), path, fromLine, convID)
+}
+
+func ParseClaudeFileWithImagesContext(ctx context.Context, path string, fromLine int, convID string) ([]ClaudeMessage, []ConversationImage, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
@@ -109,6 +128,9 @@ func ParseClaudeFileWithImages(path string, fromLine int, convID string) ([]Clau
 	var allTexts []string
 
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		lineNum++
 		if lineNum <= fromLine {
 			continue
@@ -343,6 +365,10 @@ func Truncate(s string, maxLen int) string {
 
 // CountLines counts the number of lines in a file.
 func CountLines(path string) (int, error) {
+	return CountLinesContext(context.Background(), path)
+}
+
+func CountLinesContext(ctx context.Context, path string) (int, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, err
@@ -352,6 +378,9 @@ func CountLines(path string) (int, error) {
 	count := 0
 	scanner := jsonl.NewScanner(f)
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		count++
 	}
 	return count, scanner.Err()

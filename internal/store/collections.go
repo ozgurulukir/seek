@@ -106,41 +106,11 @@ func (s *Store) MaxDocumentMtimeContext(ctx context.Context, collectionID int64)
 }
 
 func (s *Store) GetCollectionByName(name string) (*Collection, error) {
-	c := &Collection{}
-	var parserName, backend sql.NullString
-	err := s.db.QueryRow(
-		`SELECT id, name, type, path, pattern, parser_name, parser_version, backend, created_at, updated_at
-		 FROM collections WHERE name = ?`, name,
-	).Scan(&c.ID, &c.Name, &c.Type, &c.Path, &c.Pattern, &parserName, &c.ParserVersion, &backend, &c.CreatedAt, &c.UpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	c.ParserName = parserName.String
-	c.Backend = backend.String
-	return c, nil
+	return s.repositories.collections.getByName(name)
 }
 
 func (s *Store) ListCollections() ([]Collection, error) {
-	rows, err := s.db.Query(`SELECT id, name, type, path, pattern, parser_name, parser_version, backend, created_at, updated_at FROM collections ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var cols []Collection
-	for rows.Next() {
-		var c Collection
-		var parserName, backend sql.NullString
-		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.Path, &c.Pattern, &parserName, &c.ParserVersion, &backend, &c.CreatedAt, &c.UpdatedAt); err != nil {
-			return nil, err
-		}
-		c.ParserName = parserName.String
-		c.Backend = backend.String
-		cols = append(cols, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list collections rows: %w", err)
-	}
-	return cols, nil
+	return s.repositories.collections.list()
 }
 
 // DeleteCollection removes a collection and all its documents, chunks, FTS

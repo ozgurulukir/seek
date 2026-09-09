@@ -8,7 +8,7 @@ func TestFastFieldSetGet(t *testing.T) {
 	db := newTestStore(t)
 	defer db.Close()
 
-	ff := NewFastFieldStore(db.DB())
+	ff := db.FastFields()
 
 	// Set a string value
 	if err := ff.Set(1, "title", "hello"); err != nil {
@@ -30,7 +30,7 @@ func TestFastFieldSetGetInt(t *testing.T) {
 	db := newTestStore(t)
 	defer db.Close()
 
-	ff := NewFastFieldStore(db.DB())
+	ff := db.FastFields()
 
 	if err := ff.Set(1, "line_count", 42); err != nil {
 		t.Fatalf("Set failed: %v", err)
@@ -50,7 +50,7 @@ func TestFastFieldSetGetDate(t *testing.T) {
 	db := newTestStore(t)
 	defer db.Close()
 
-	ff := NewFastFieldStore(db.DB())
+	ff := db.FastFields()
 
 	date := "2024-01-01T00:00:00Z"
 	if err := ff.Set(1, "created_at", date); err != nil {
@@ -71,7 +71,7 @@ func TestFastFieldBatchGet(t *testing.T) {
 	db := newTestStore(t)
 	defer db.Close()
 
-	ff := NewFastFieldStore(db.DB())
+	ff := db.FastFields()
 
 	// Set values for multiple docs
 	if err := ff.Set(1, "score", 0.9); err != nil {
@@ -109,7 +109,7 @@ func TestFastFieldBatchGetMissing(t *testing.T) {
 	db := newTestStore(t)
 	defer db.Close()
 
-	ff := NewFastFieldStore(db.DB())
+	ff := db.FastFields()
 
 	// Batch get for non-existent docs
 	vals, err := ff.BatchGet([]int64{1, 2, 3}, "nonexistent")
@@ -126,7 +126,7 @@ func TestFastFieldDelete(t *testing.T) {
 	db := newTestStore(t)
 	defer db.Close()
 
-	ff := NewFastFieldStore(db.DB())
+	ff := db.FastFields()
 
 	if err := ff.Set(1, "title", "hello"); err != nil {
 		t.Fatalf("Set failed: %v", err)
@@ -150,7 +150,7 @@ func TestFastFieldDeleteForDocument(t *testing.T) {
 	db := newTestStore(t)
 	defer db.Close()
 
-	ff := NewFastFieldStore(db.DB())
+	ff := db.FastFields()
 
 	if err := ff.Set(1, "title", "hello"); err != nil {
 		t.Fatalf("Set failed: %v", err)
@@ -175,7 +175,7 @@ func TestFastFieldOverwrite(t *testing.T) {
 	db := newTestStore(t)
 	defer db.Close()
 
-	ff := NewFastFieldStore(db.DB())
+	ff := db.FastFields()
 
 	if err := ff.Set(1, "title", "hello"); err != nil {
 		t.Fatalf("Set failed: %v", err)
@@ -200,7 +200,7 @@ func TestFastFieldJSONValue(t *testing.T) {
 	db := newTestStore(t)
 	defer db.Close()
 
-	ff := NewFastFieldStore(db.DB())
+	ff := db.FastFields()
 
 	obj := map[string]interface{}{"key": "value", "count": 42}
 	if err := ff.Set(1, "metadata", obj); err != nil {
@@ -229,7 +229,7 @@ func BenchmarkFastFieldBatchGet(b *testing.B) {
 	}
 	defer s.Close()
 
-	ff := NewFastFieldStore(s.DB())
+	ff := s.FastFields()
 
 	docIDs := make([]int64, 100)
 	for i := 0; i < 100; i++ {

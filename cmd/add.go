@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,7 +51,7 @@ type AddCmd struct {
 	CodexSchema  bool `help:"Shortcut for --parser codex (schema-driven, text-only)"`
 }
 
-func (c *AddCmd) Run(cfg *config.AppConfig) error {
+func (c *AddCmd) Run(cfg *config.AppConfig) (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), hookLockWaitTimeout)
 	defer cancel()
 	lock, err := acquireHookLock(ctx, hookSyncLockPath(cfg))
@@ -63,7 +64,7 @@ func (c *AddCmd) Run(cfg *config.AppConfig) error {
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	defer db.Close()
+	defer func() { err = errors.Join(err, db.Close()) }()
 
 	// Validate --backend early so a bad value fails before any work.
 	if c.Backend != "" && c.Backend != "builtin" && c.Backend != "xberg" {

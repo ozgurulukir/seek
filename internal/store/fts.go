@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 )
 
@@ -183,7 +182,11 @@ func (s *Store) UpsertFTS(docID int64, title, content string) error {
 }
 
 func (s *Store) UpsertFTSContext(ctx context.Context, docID int64, title, content string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	return s.repositories.fts.upsertContext(ctx, docID, title, content)
+}
+
+func (r ftsRepository) upsertContext(ctx context.Context, docID int64, title, content string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
@@ -204,7 +207,11 @@ func (s *Store) AppendFTS(docID int64, newContent string) error {
 }
 
 func (s *Store) AppendFTSContext(ctx context.Context, docID int64, newContent string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	return s.repositories.fts.appendContext(ctx, docID, newContent)
+}
+
+func (r ftsRepository) appendContext(ctx context.Context, docID int64, newContent string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
@@ -240,6 +247,10 @@ func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]Search
 // repository adapter. The legacy SearchFTS method remains for callers that do
 // not yet own a context.
 func (s *Store) SearchFTSContext(ctx context.Context, query string, limit int, filters *FilterSet) ([]SearchResult, error) {
+	return s.repositories.fts.searchContext(ctx, query, limit, filters)
+}
+
+func (r ftsRepository) searchContext(ctx context.Context, query string, limit int, filters *FilterSet) ([]SearchResult, error) {
 	// bm25 column weights follow the table's column order (title, content),
 	// so title matches (FTSTitleWeight=10.0) rank above body matches (1.0).
 	sqlQuery := `SELECT d.id, d.title, d.path, c.name, snippet(documents_fts, 1, '>>>', '<<<', '...', 40) as snip, bm25(documents_fts, ?, 1.0)
@@ -262,7 +273,7 @@ func (s *Store) SearchFTSContext(ctx context.Context, query string, limit int, f
 	sqlQuery += " ORDER BY bm25(documents_fts, ?, 1.0) LIMIT ?"
 	args = append(args, FTSTitleWeight, limit)
 
-	rows, err := s.db.QueryContext(ctx, sqlQuery, args...)
+	rows, err := r.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -295,11 +306,10 @@ func (s *Store) SearchFTSContext(ctx context.Context, query string, limit int, f
 				       ROW_NUMBER() OVER (PARTITION BY document_id ORDER BY seq ASC) as rn
 				FROM chunks WHERE document_id IN (%s)
 			) WHERE rn = 1`, strings.Join(placeholders, ","))
-		chunkRows, err := s.db.QueryContext(ctx, chunkQuery, docArgs...)
+		chunkRows, err := r.db.QueryContext(ctx, chunkQuery, docArgs...)
 		if err != nil {
-			log.Printf("WARN: line-span query failed for %d documents: %v", len(docIDs), err)
+			return nil, fmt.Errorf("line-span query for %d documents: %w", len(docIDs), err)
 		} else {
-			defer chunkRows.Close()
 			type lineSpan struct {
 				start, end int
 			}
@@ -308,13 +318,17 @@ func (s *Store) SearchFTSContext(ctx context.Context, query string, limit int, f
 				var docID int64
 				var sLine, eLine int
 				if err := chunkRows.Scan(&docID, &sLine, &eLine); err != nil {
-					log.Printf("WARN: line-span row scan failed: %v", err)
-					continue
+					chunkRows.Close()
+					return nil, fmt.Errorf("line-span row scan: %w", err)
 				}
 				spans[docID] = lineSpan{start: sLine, end: eLine}
 			}
 			if err := chunkRows.Err(); err != nil {
-				log.Printf("WARN: line-span query iteration failed: %v", err)
+				chunkRows.Close()
+				return nil, fmt.Errorf("line-span query iteration: %w", err)
+			}
+			if err := chunkRows.Close(); err != nil {
+				return nil, fmt.Errorf("close line-span rows: %w", err)
 			}
 			for i := range results {
 				if span, ok := spans[results[i].DocumentID]; ok {
