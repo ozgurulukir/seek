@@ -147,7 +147,7 @@ func EmbedPending(cfg *config.AppConfig, db *store.Store, opts Options, log Logg
 	return nil
 }
 
-func embedVLText(db *store.Store, vlClient *embed.VLClient, textChunks []store.Chunk, log Logger) int {
+func embedVLText(db *store.Store, vlClient embed.VLTextBatcher, textChunks []store.Chunk, log Logger) int {
 	log.Printf("Embedding %d text chunks via VL realtime API...", len(textChunks))
 	texts := make([]string, len(textChunks))
 	for i, ch := range textChunks {
@@ -176,7 +176,7 @@ func embedVLText(db *store.Store, vlClient *embed.VLClient, textChunks []store.C
 	return updated
 }
 
-func embedVLImages(db *store.Store, vlClient *embed.VLClient, imageChunks []store.Chunk, log Logger) int {
+func embedVLImages(db *store.Store, vlClient embed.VLImageBatcher, imageChunks []store.Chunk, log Logger) int {
 	log.Printf("Embedding %d image chunks via VL realtime API...", len(imageChunks))
 	items := make([]embed.ImageBatchItem, len(imageChunks))
 	for i, ch := range imageChunks {
@@ -205,7 +205,7 @@ func embedVLImages(db *store.Store, vlClient *embed.VLClient, imageChunks []stor
 	return imageUpdated
 }
 
-func embedBatch(db *store.Store, client *embed.Client, chunks []store.Chunk, texts []string, log Logger) int {
+func embedBatch(db *store.Store, client embed.BatchEmbedder, chunks []store.Chunk, texts []string, log Logger) int {
 	log.Printf("Using Batch API (async, 50%% cheaper)...\n")
 	embeddings, err := client.BatchEmbedAsync(texts, func(status string, elapsed time.Duration) {
 		log.Printf("\r  [%s] %s", elapsed.Round(time.Second), status)
@@ -228,7 +228,7 @@ func embedBatch(db *store.Store, client *embed.Client, chunks []store.Chunk, tex
 	return updated
 }
 
-func embedRealtime(db *store.Store, client *embed.Client, chunks []store.Chunk, texts []string, log Logger) int {
+func embedRealtime(db *store.Store, client embed.DocumentEmbedder, chunks []store.Chunk, texts []string, log Logger) int {
 	log.Printf("Using realtime API (synchronous)...\n")
 	const batch = 25
 	updated := 0

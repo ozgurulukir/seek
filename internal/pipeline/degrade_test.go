@@ -237,3 +237,46 @@ func TestEmbedPending_BatchFlagSelectsPath(t *testing.T) {
 		t.Errorf("chunk not embedded: %d remaining", len(remaining))
 	}
 }
+
+// mockQueryEmbedder / mockDocEmbedder are capability-scoped mock providers,
+// proving the pipeline is provider-independent (M7 evidence).
+type mockDocEmbedder struct {
+	calls int
+	vec   []float32
+}
+
+func (m *mockDocEmbedder) EmbedDocuments(texts []string) ([][]float32, error) {
+	m.calls++
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = m.vec
+	}
+	return out, nil
+}
+
+func TestEmbedPending_MockProvider(t *testing.T) {
+	db := newPipelineStore(t)
+	cfg := appConfigFor(t, nil) // capability gate passes structurally? No — need key.
+	cfg.Config.Embedding.APIKey = "test-key"
+
+	// Bypass NewClientFromConfig by stubbing capability via a key and
+	// injecting the mock at the helper level instead: EmbedPending builds its
+	// own client, so this test drives the helpers directly.
+	chunks, err := db.GetChunksWithoutEmbedding(false)
+	if err != nil || len(chunks) != 1 {
+		t.Fatalf("setup: %v (%d)", err, len(chunks))
+	}
+	var log captureLogger
+	mock := &mockDocEmbedder{vec: []float32{0.1, 0.2}}
+	updated := embedRealtime(db, mock, chunks, []string{"hello world content"}, &log)
+	if updated != 1 {
+		t.Errorf("expected 1 embedded, got %d", updated)
+	}
+	if mock.calls != 1 {
+		t.Errorf("expected 1 embedder call, got %d", mock.calls)
+	}
+	remaining, _ := db.GetChunksWithoutEmbedding(false)
+	if len(remaining) != 0 {
+		t.Errorf("chunk still pending after mock embed: %d", len(remaining))
+	}
+}

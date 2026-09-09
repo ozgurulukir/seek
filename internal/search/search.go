@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 
@@ -48,18 +49,18 @@ type Logger interface {
 // Engine performs BM25, vector, and hybrid search with optional filters, aggregations, and reranking.
 type Engine struct {
 	store       *store.Store
-	embedClient *embed.Client
-	vlClient    *embed.VLClient
+	embedClient embed.QueryEmbedder
+	vlClient    embed.VLQueryEmbedder
 	reranker    embed.Reranker
 	logger      Logger
 }
 
-func NewEngine(s *store.Store, ec *embed.Client) *Engine {
+func NewEngine(s *store.Store, ec embed.QueryEmbedder) *Engine {
 	return &Engine{store: s, embedClient: ec}
 }
 
 // NewEngineWithVL creates a search engine with a VL client for multimodal query embedding.
-func NewEngineWithVL(s *store.Store, ec *embed.Client, vlc *embed.VLClient) *Engine {
+func NewEngineWithVL(s *store.Store, ec embed.QueryEmbedder, vlc embed.VLQueryEmbedder) *Engine {
 	return &Engine{store: s, embedClient: ec, vlClient: vlc}
 }
 
@@ -117,12 +118,12 @@ func (e *Engine) searchVectorRaw(ctx context.Context, query string, limit int, o
 	// Prefer VL client if available (unified vector space for multimodal)
 	var qEmb []float32
 	var err error
-	if e.vlClient != nil {
+	if !isNilInterface(e.vlClient) {
 		qEmb, err = e.vlClient.EmbedText(query)
 		if err != nil {
 			return nil, err
 		}
-	} else if e.embedClient != nil {
+	} else if !isNilInterface(e.embedClient) {
 		qEmb, err = e.embedClient.EmbedQuery(query)
 		if err != nil {
 			return nil, err
@@ -467,4 +468,20 @@ func compareFastFieldValues(a, b interface{}) int {
 		}
 		return 0
 	}
+}
+
+// isNilInterface reports whether an interface holds a nil value, including
+// the typed-nil case (e.g. a (*embed.Client)(nil) boxed into an interface).
+// Comparing an interface to nil directly is false for a typed nil, which is
+// how a *Client returned from a factory as nil slips past `!= nil` checks.
+func isNilInterface(i interface{}) bool {
+	if i == nil {
+		return true
+	}
+	v := reflect.ValueOf(i)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Ptr, reflect.Interface, reflect.Slice:
+		return v.IsNil()
+	}
+	return false
 }
