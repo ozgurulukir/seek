@@ -82,7 +82,7 @@ func TestWriteFastFields(t *testing.T) {
 	idx := New(cfgFromTest(t, tmp, filepath.Join(tmp, "test.db")), db)
 	idx.WithLogger(nopLogger{}) // ignore the small diagnostic output
 
-	idx.writeFastFields(docID, map[string]string{
+	idx.writeFastFields(docID, "n.md", map[string]string{
 		"tag":  "go,rust",
 		"date": "2026-01-15",
 		"":     "skipped-empty-key", // empty key must be ignored

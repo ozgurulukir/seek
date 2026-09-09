@@ -422,7 +422,7 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 
 		// Metadata SSOT: frontmatter key/values go to fast_fields so they are
 		// filterable via FastFieldFilter (search --tag/--lang, faceting).
-		idx.writeFastFields(docID, f.Metadata)
+		idx.writeFastFields(docID, f.Path, f.Metadata)
 		indexed++
 	}
 
@@ -712,14 +712,20 @@ func (idx *Indexer) cleanupOrphans(colID int64, livePaths map[string]bool, label
 // label identifies the source in WARN lines (usually the file path).
 // writeFastFields writes a metadata map to fast_fields, logging a WARN per
 // failing key. Single write path so format-specific sync functions do not
-// each reimplement the Set + WARN loop (M6).
-func (idx *Indexer) writeFastFields(docID int64, metadata map[string]string) {
+// each reimplement the Set + WARN loop (M6). label identifies the source
+// file in WARN lines ("" hides it); empty values are skipped — an empty
+// fast-field value is never meaningful to filter or facet on.
+func (idx *Indexer) writeFastFields(docID int64, label string, metadata map[string]string) {
 	for field, value := range metadata {
 		if value == "" {
 			continue
 		}
 		if err := idx.db.FastFields().Set(docID, field, value); err != nil {
-			idx.log.Printf("  WARN: metadata %s=%s: %v\n", field, value, err)
+			if label != "" {
+				idx.log.Printf("  WARN: fastfield %s=%s %s: %v\n", field, value, label, err)
+			} else {
+				idx.log.Printf("  WARN: metadata %s=%s: %v\n", field, value, err)
+			}
 		}
 	}
 }
@@ -770,7 +776,7 @@ func (idx *Indexer) indexCodeFile(col *store.Collection, f source.CodeFileInfo) 
 	// Fast field metadata. Errors are logged (pattern used elsewhere in the
 	// indexer) rather than silently swallowed so missing fastfields surface
 	// during sync instead of only at --aggs query time.
-	idx.writeFastFields(docID, map[string]string{
+	idx.writeFastFields(docID, f.Path, map[string]string{
 		"lang":     f.Language,
 		"ext":      f.Extension,
 		"filename": filepath.Base(f.Path),
@@ -883,7 +889,7 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 		idx.replaceIndexText(docID, docPath, title, text, chunk.ChunkConversation(text, maxSize), false)
 
 		// Metadata enrichment (§6.13): write known fields to fast_fields.
-		idx.writeFastFields(docID, sess.Metadata)
+		idx.writeFastFields(docID, "", sess.Metadata)
 
 		indexed++
 	}
