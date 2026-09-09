@@ -9,7 +9,6 @@ import (
 
 	"github.com/ozgurulukir/seek/internal/chunk"
 	"github.com/ozgurulukir/seek/internal/config"
-	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/indexer"
 	"github.com/ozgurulukir/seek/internal/source/parserdef"
 	"github.com/ozgurulukir/seek/internal/store"
@@ -434,41 +433,6 @@ func (c *AddCmd) newIndexer(cfg *config.AppConfig, db *store.Store) *indexer.Ind
 		return idx
 	}
 	return idx.WithExtractor(ext)
-}
-
-func newEmbedClient(cfg *config.AppConfig) *embed.Client {
-	if cfg.Config.OfflineOnly() {
-		return embed.NewOfflineClient(cfg.Config.Embedding.Model)
-	}
-	key, err := cfg.RequireEmbeddingKey()
-	if err != nil {
-		return nil
-	}
-	q, d := cfg.Config.Embedding.TaskPrefixes()
-	return embed.NewClient(
-		cfg.Config.Embedding.BaseURL,
-		key,
-		cfg.Config.Embedding.Model,
-		cfg.Config.Embedding.Dimensions,
-		embed.TaskPrefix{Query: q, Document: d},
-	)
-}
-
-func newVLClient(cfg *config.AppConfig) *embed.VLClient {
-	if cfg.Config.OfflineOnly() {
-		return nil // offline: never build a multimodal network client
-	}
-	key, err := cfg.RequireEmbeddingKey()
-	if err != nil {
-		return nil
-	}
-	ec := cfg.Config.Embedding
-	// Only create VL client for multimodal models.
-	if !ec.IsMultimodal() {
-		return nil
-	}
-	q, d := ec.TaskPrefixes()
-	return embed.NewVLClient(key, ec.Model, ec.Dimensions, ec.VLBaseURL, embed.TaskPrefix{Query: q, Document: d})
 }
 
 // indexChunks stores chunks in DB without embeddings.

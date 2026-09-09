@@ -1,7 +1,8 @@
-package cmd
+package pipeline
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -67,9 +68,7 @@ func TestEmbedVLTextChunks(t *testing.T) {
 	}
 
 	vlClient := embed.NewVLClient("test-key", "test-model", 3, ts.URL, embed.TaskPrefix{})
-	cmd := &EmbedCmd{}
-
-	updated := cmd.embedVLTextChunks(db, vlClient, chunks)
+	updated := embedVLText(db, vlClient, chunks, testLogger{})
 	if updated != 2 {
 		t.Errorf("expected 2 chunks updated, got %d", updated)
 	}
@@ -139,9 +138,7 @@ func TestEmbedVLImageChunks(t *testing.T) {
 	}
 
 	vlClient := embed.NewVLClient("test-key", "test-model", 3, ts.URL, embed.TaskPrefix{})
-	cmd := &EmbedCmd{}
-
-	updated := cmd.embedVLImageChunks(db, vlClient, chunks)
+	updated := embedVLImages(db, vlClient, chunks, testLogger{})
 	if updated != 1 {
 		t.Errorf("expected 1 chunk updated, got %d", updated)
 	}
@@ -154,4 +151,10 @@ func TestEmbedVLImageChunks(t *testing.T) {
 	if len(remaining) != 0 {
 		t.Errorf("expected 0 chunks without embedding, got %d", len(remaining))
 	}
+}
+
+type testLogger struct{}
+
+func (testLogger) Printf(format string, args ...any) {
+	fmt.Printf(format, args...)
 }

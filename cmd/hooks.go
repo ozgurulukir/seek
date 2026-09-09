@@ -290,7 +290,18 @@ func (c *HooksSyncCmd) Run(cfg *config.AppConfig) error {
 	if c.Agent != "" {
 		args = append(args, "--type", c.Agent)
 	}
-	syncCtx, cancelSync := context.WithTimeout(context.Background(), hookSyncTimeout)
+	// M4: sync now embeds in the same process by default. A hook installed
+	// without --embed must stay keyword-only, so pass --no-embed explicitly.
+	if !c.Embed {
+		args = append(args, "--no-embed")
+	}
+	// With --embed the single child covers sync + incremental embedding, so
+	// budget the historical sync + embed windows.
+	timeout := hookSyncTimeout
+	if c.Embed {
+		timeout = hookSyncTimeout + hookEmbedTimeout
+	}
+	syncCtx, cancelSync := context.WithTimeout(context.Background(), timeout)
 	defer cancelSync()
 	var childErr error
 	syncErr := runHooksSync(func() error {
@@ -302,21 +313,6 @@ func (c *HooksSyncCmd) Run(cfg *config.AppConfig) error {
 		childErr = command.Run()
 		return childErr
 	}, os.Stdout)
-	if childErr == nil && c.Embed {
-		embedCtx, cancelEmbed := context.WithTimeout(context.Background(), hookEmbedTimeout)
-		defer cancelEmbed()
-		embedArgs := []string{"embed", "--no-lock"}
-		if c.Agent != "" {
-			embedArgs = append(embedArgs, "--type", c.Agent)
-		}
-		embedArgs = append(embedArgs, "--realtime")
-		embed := exec.CommandContext(embedCtx, hookRuntimeBinary(), embedArgs...)
-		embed.Env = withHookLockEnv(os.Environ())
-		embed.WaitDelay = hookContextWaitDelay
-		embed.Stdout = io.Discard
-		embed.Stderr = io.Discard
-		childErr = embed.Run()
-	}
 	if err := writeHookState(statePath, hookState{Agent: c.Agent, CompletedAt: time.Now(), LastAttemptAt: time.Now(), Error: errorString(childErr)}); err != nil {
 		fmt.Fprintf(os.Stderr, "WARN: record seek hook state: %v\n", err)
 	}

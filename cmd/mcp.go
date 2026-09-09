@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
 )
@@ -75,8 +76,8 @@ func buildMCPServer(db *store.Store, cfg *config.AppConfig) (*mcp.Server, error)
 	}
 	db.SetCompression(cfg.Config.Compression.Algorithm != "", cfg.Config.Compression.Level)
 
-	embedClient := newEmbedClient(cfg)
-	vlClient := newVLClient(cfg)
+	embedClient := embed.NewClientFromConfig(cfg)
+	vlClient := embed.NewVLClientFromConfig(cfg)
 	var engine *search.Engine
 	if vlClient != nil {
 		engine = search.NewEngineWithVL(db, embedClient, vlClient)

@@ -142,8 +142,8 @@ func (searchLogger) Printf(format string, v ...interface{}) {
 }
 
 func (c *SearchCmd) buildEngine(db *store.Store, cfg *config.AppConfig) (*search.Engine, *embed.Client, *embed.VLClient) {
-	embedClient := newEmbedClient(cfg)
-	vlClient := newVLClient(cfg)
+	embedClient := embed.NewClientFromConfig(cfg)
+	vlClient := embed.NewVLClientFromConfig(cfg)
 
 	var engine *search.Engine
 	if vlClient != nil {

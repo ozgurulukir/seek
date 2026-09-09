@@ -8,12 +8,14 @@ import (
 
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/indexer"
+	"github.com/ozgurulukir/seek/internal/pipeline"
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
 type SyncCmd struct {
 	Collection string `arg:"" optional:"" help:"Sync a specific collection (default: all)"`
 	Type       string `help:"Sync only collections of this type"`
+	NoEmbed    bool   `help:"Skip embedding newly synced chunks (keyword-only)"`
 	NoLock     bool   `hidden:""`
 }
 
@@ -68,6 +70,25 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) error {
 
 	if len(failedNames) > 0 {
 		return fmt.Errorf("%d collection(s) failed to sync: %v", len(failedNames), strings.Join(failedNames, ", "))
+	}
+
+	// M4: embed in the same process/store the sync just used. A missing
+	// embedding capability is a configuration state, not a failure — the
+	// pipeline warns once and leaves chunks pending (keyword search works).
+	if !c.NoEmbed {
+		vectorIndex := false
+		if cfg.Config.VectorIndex.Backend != "" && cfg.Config.VectorIndex.Backend != "linear" {
+			if vi, err := store.NewVectorIndex(cfg); err == nil {
+				db.SetVectorIndex(vi)
+				vectorIndex = true
+			}
+		}
+		if err := pipeline.EmbedPending(cfg, db, pipeline.Options{
+			Type:        c.Type,
+			VectorIndex: vectorIndex,
+		}, pipeline.NewStdoutLogger(os.Stdout)); err != nil {
+			return fmt.Errorf("embed pending chunks: %w", err)
+		}
 	}
 	return nil
 }
