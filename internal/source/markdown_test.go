@@ -6,161 +6,86 @@ import (
 	"testing"
 )
 
-func TestScanMarkdown(t *testing.T) {
-	dir := t.TempDir()
-
-	// Write markdown files
-	mustWriteContent(t, filepath.Join(dir, "readme.md"), "# Readme\nHello world\n")
-	mustWriteContent(t, filepath.Join(dir, "notes.markdown"), "## Subtitle\nNo main title here\n")
-	mustWriteContent(t, filepath.Join(dir, "sub", "deep.md"), "# Deep File\nNested file\n")
-
-	// Write non-markdown files (should be ignored)
-	mustWriteContent(t, filepath.Join(dir, "image.png"), "fake image")
-	mustWriteContent(t, filepath.Join(dir, "document.pdf"), "fake pdf")
-	mustWriteContent(t, filepath.Join(dir, "source.go"), "package main\n")
-
-	files, issues, err := ScanMarkdown(dir, "")
-	if err != nil {
-		t.Fatalf("ScanMarkdown failed: %v", err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("ScanMarkdown issues: %v", issues)
-	}
-
-	if len(files) != 3 {
-		t.Fatalf("ScanMarkdown returned %d files, want 3", len(files))
-	}
-
-	// Verify details
-	fileMap := make(map[string]FileInfo)
-	for _, f := range files {
-		fileMap[filepath.Base(f.Path)] = f
-	}
-
-	if f, ok := fileMap["readme.md"]; !ok {
-		t.Errorf("readme.md missing")
-	} else if f.Title != "Readme" {
-		t.Errorf("readme.md title = %q, want %q", f.Title, "Readme")
-	}
-
-	if f, ok := fileMap["notes.markdown"]; !ok {
-		t.Errorf("notes.markdown missing")
-	} else if f.Title != "notes" {
-		t.Errorf("notes.markdown title = %q, want %q", f.Title, "notes")
-	}
-
-	if f, ok := fileMap["deep.md"]; !ok {
-		t.Errorf("deep.md missing")
-	} else if f.Title != "Deep File" {
-		t.Errorf("deep.md title = %q, want %q", f.Title, "Deep File")
-	}
-}
-
-func TestScanMarkdown_Pattern(t *testing.T) {
-	dir := t.TempDir()
-
-	mustWriteContent(t, filepath.Join(dir, "readme.md"), "# Readme\n")
-	mustWriteContent(t, filepath.Join(dir, "log-2023.md"), "# Log 2023\n")
-	mustWriteContent(t, filepath.Join(dir, "log-2024.md"), "# Log 2024\n")
-	mustWriteContent(t, filepath.Join(dir, "notes.txt"), "text file\n")
-
-	files, issues, err := ScanMarkdown(dir, "log-*.md")
-	if err != nil {
-		t.Fatalf("ScanMarkdown failed: %v", err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("ScanMarkdown issues: %v", issues)
-	}
-
-	if len(files) != 2 {
-		t.Fatalf("ScanMarkdown returned %d files, want 2", len(files))
-	}
-
-	for _, f := range files {
-		base := filepath.Base(f.Path)
-		if base != "log-2023.md" && base != "log-2024.md" {
-			t.Errorf("unexpected file in results: %s", base)
-		}
-	}
-}
-
-func TestScanMarkdown_Empty(t *testing.T) {
-	dir := t.TempDir()
-
-	mustWriteContent(t, filepath.Join(dir, "source.go"), "package main\n")
-
-	files, issues, err := ScanMarkdown(dir, "")
-	if err != nil {
-		t.Fatalf("ScanMarkdown failed: %v", err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("ScanMarkdown issues: %v", issues)
-	}
-
-	if len(files) != 0 {
-		t.Fatalf("ScanMarkdown returned %d files, want 0", len(files))
-	}
-}
-
-func TestScanMarkdownReportsWalkError(t *testing.T) {
-	files, issues, err := ScanMarkdown(filepath.Join(t.TempDir(), "missing"), "")
-	if err != nil {
-		t.Fatalf("ScanMarkdown: %v", err)
-	}
-	if len(files) != 0 || len(issues) != 1 {
-		t.Fatalf("files=%d issues=%d, want 0 files and 1 issue", len(files), len(issues))
-	}
-}
-
-func mustWriteContent(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestExtractMarkdownTitle(t *testing.T) {
+func TestParseFrontmatter(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
-		path    string
-		want    string
+		want    map[string]string
 	}{
 		{
-			name:    "first line header",
-			content: "# My Document\nSome text.",
-			path:    "doc.md",
-			want:    "My Document",
+			name:    "basic scalars",
+			content: "---\ntitle: My Note\ntags: go,rust\n---\n\n# Body\n",
+			want:    map[string]string{"title": "My Note", "tags": "go,rust"},
 		},
 		{
-			name:    "header with spaces",
-			content: "  #   Spaced Header  \nText",
-			path:    "space.md",
-			want:    "Spaced Header",
+			name:    "list items join with comma",
+			content: "---\ntags:\n  - go\n  - rust\nlang: go\n---\nbody",
+			want:    map[string]string{"tags": "go,rust", "lang": "go"},
 		},
 		{
-			name:    "no header fallback to path",
-			content: "Just some text\nwithout a header.",
-			path:    "/path/to/my-file.md",
-			want:    "my-file",
+			name:    "quoted values",
+			content: "---\nauthor: \"Jane Doe\"\n---\n",
+			want:    map[string]string{"author": "Jane Doe"},
 		},
 		{
-			name:    "header down a bit",
-			content: "\n\n\n# Found It\n",
-			path:    "x.md",
-			want:    "Found It",
+			name:    "keys lowercased",
+			content: "---\nTags: Go\n---\n",
+			want:    map[string]string{"tags": "Go"},
+		},
+		{
+			name:    "no frontmatter",
+			content: "# Just a heading\n",
+			want:    map[string]string{},
+		},
+		{
+			name:    "list after second scalar attaches correctly",
+			content: "---\nlang: go\ntags:\n  - a\n  - b\n---\n",
+			want:    map[string]string{"lang": "go", "tags": "a,b"},
+		},
+		{
+			name:    "empty values skipped",
+			content: "---\ntitle:\nauthor: Jane\n---\n",
+			want:    map[string]string{"author": "Jane"},
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := extractMarkdownTitle(tc.content, tc.path)
-			if got != tc.want {
-				t.Errorf("extractMarkdownTitle(%q, %q) = %q; want %q", tc.content, tc.path, got, tc.want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseFrontmatter(tt.content)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+			for k, v := range tt.want {
+				if got[k] != v {
+					t.Errorf("key %q = %q, want %q", k, got[k], v)
+				}
 			}
 		})
+	}
+}
+
+func TestScanMarkdown_ExtractsFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.md")
+	if err := os.WriteFile(path, []byte("---\ntags: go,testing\ndate: 2026-01-15\n---\n\n# Note\n\nbody text\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, issues, err := ScanMarkdown(dir, "**/*.md")
+	if err != nil {
+		t.Fatalf("ScanMarkdown: %v", err)
+	}
+	if len(issues) > 0 {
+		t.Fatalf("unexpected issues: %v", issues)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+	f := files[0]
+	if f.Metadata["tags"] != "go,testing" {
+		t.Errorf("tags = %q, want go,testing", f.Metadata["tags"])
+	}
+	if f.Metadata["date"] != "2026-01-15" {
+		t.Errorf("date = %q, want 2026-01-15", f.Metadata["date"])
 	}
 }

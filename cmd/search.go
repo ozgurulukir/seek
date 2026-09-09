@@ -21,6 +21,7 @@ type SearchCmd struct {
 
 	// New filter flags
 	Collection string `help:"Filter by collection name"`
+	Tag        string `help:"Filter by tag (markdown frontmatter tags, fast field)"`
 	Repo       string `help:"Filter by repository or collection name (alias for --collection)"`
 	DocType    string `help:"Filter by document type (markdown, claude, codex, images, pdf, documents, parser, code)"`
 	Lang       string `help:"Filter code documents by programming language (e.g. go, python, typescript)"`
@@ -166,7 +167,7 @@ func (c *SearchCmd) buildFilters() *store.FilterSet {
 		colName = c.Repo
 	}
 
-	if colName == "" && c.DocType == "" && c.Lang == "" && c.After == "" && c.Before == "" && c.ChunkType == "" && c.Path == "" && c.Workspace == "" {
+	if colName == "" && c.DocType == "" && c.Lang == "" && c.Tag == "" && c.Repo == "" && c.After == "" && c.Before == "" && c.ChunkType == "" && c.Path == "" && c.Workspace == "" {
 		return nil
 	}
 
@@ -179,6 +180,12 @@ func (c *SearchCmd) buildFilters() *store.FilterSet {
 	}
 	if c.Lang != "" {
 		filters.Add(&store.FastFieldFilter{Field: "lang", Value: strings.ToLower(c.Lang)})
+	}
+	if c.Tag != "" {
+		filters.Add(&store.TagFilter{Tag: c.Tag})
+	}
+	if c.Repo != "" {
+		filters.Add(&store.FastFieldFilter{Field: "repo", Value: c.Repo})
 	}
 	if c.After != "" || c.Before != "" {
 		filters.Add(&store.DateRangeFilter{After: c.After, Before: c.Before})

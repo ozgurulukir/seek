@@ -132,3 +132,59 @@ func TestFilterSetComposition(t *testing.T) {
 		t.Errorf("expected 2 args, got %d", len(args))
 	}
 }
+
+func TestTagFilter(t *testing.T) {
+	f := &TagFilter{Tag: "go"}
+	clause, args := mustToSQL(t, f)
+	if clause == "" {
+		t.Error("expected non-empty clause")
+	}
+	if len(args) != 4 || args[0] != "go" || args[1] != "go" || args[2] != "go" || args[3] != "go" {
+		t.Errorf("unexpected args: %v", args)
+	}
+	if !strings.Contains(clause, "field_name = 'tags'") {
+		t.Errorf("clause should target tags field: %s", clause)
+	}
+}
+
+func TestTagFilter_MatchesCommaSeparatedValues(t *testing.T) {
+	// End-to-end: a doc tagged "go,rust" must match searches for "go",
+	// "rust", but not "g" or "oc".
+	s := newTestStore(t)
+	col, err := s.CreateCollection("notes", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "/tmp/note.md", "Note", "h", 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FastFields().Set(docID, "tags", "go,rust"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertFTS(docID, "Note", "note body content"); err != nil {
+		t.Fatal(err)
+	}
+
+	match := func(tag string) bool {
+		fs := NewFilterSet()
+		fs.Add(&TagFilter{Tag: tag})
+		results, err := s.SearchFTS("Note", 10, fs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(results) > 0
+	}
+	if !match("go") {
+		t.Error("tag 'go' should match 'go,rust'")
+	}
+	if !match("rust") {
+		t.Error("tag 'rust' should match 'go,rust'")
+	}
+	if match("g") {
+		t.Error("tag 'g' should not match 'go,rust' (prefix leak)")
+	}
+	if match("oc") {
+		t.Error("tag 'oc' should not match 'go,rust' (substring leak)")
+	}
+}

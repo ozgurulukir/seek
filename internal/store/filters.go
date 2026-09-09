@@ -47,6 +47,26 @@ func (fs *FilterSet) ToSQL() (string, []interface{}, error) {
 
 // --- Filter Types ---
 
+// TagFilter matches a single tag inside a comma-separated fast-field value
+// (e.g. the markdown frontmatter `tags` field, where "go,rust" must match a
+// search for "go"). FastFieldFilter only does exact equality, which cannot
+// express membership in a list.
+type TagFilter struct {
+	Tag string
+}
+
+func (f *TagFilter) ToSQL() (string, []interface{}, error) {
+	// Fast-field values are JSON-encoded on write ("go,rust" is stored as
+	// `"go,rust"`), so raw LIKE patterns against the raw column would need
+	// quote-aware boundaries. Simpler and exact: strip the JSON quotes in
+	// SQL with REPLACE, then match the tag as a whole comma-separated token
+	// (whole value, head, tail, or middle).
+	return `d.id IN (SELECT doc_id FROM fast_fields WHERE field_name = 'tags' AND
+		(REPLACE(field_value, '"', '') = ? OR REPLACE(field_value, '"', '') LIKE ? || ',%'
+		 OR REPLACE(field_value, '"', '') LIKE '%,' || ? OR REPLACE(field_value, '"', '') LIKE '%,' || ? || ',%'))`,
+		[]interface{}{f.Tag, f.Tag, f.Tag, f.Tag}, nil
+}
+
 // CollectionFilter filters by collection name.
 type CollectionFilter struct {
 	Name string

@@ -415,6 +415,14 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 
 		maxSize, overlap := idx.chunkSize()
 		idx.replaceIndexText(docID, f.Path, f.Title, f.Content, chunk.ChunkMarkdown(f.Content, maxSize, overlap), true)
+
+		// Metadata SSOT: frontmatter key/values go to fast_fields so they are
+		// filterable via FastFieldFilter (search --tag/--lang, faceting).
+		for field, value := range f.Metadata {
+			if err := idx.db.FastFields().Set(docID, field, value); err != nil {
+				idx.log.Printf("  WARN: metadata %s=%s: %v\n", field, value, err)
+			}
+		}
 		indexed++
 	}
 
@@ -653,7 +661,7 @@ func (idx *Indexer) syncCode(col *store.Collection) error {
 
 	var indexed, skipped, failed int
 	for _, f := range files {
-		isSkipped, err := idx.indexCodeFile(col.ID, f)
+		isSkipped, err := idx.indexCodeFile(col, f)
 		if err != nil {
 			idx.log.Printf("  WARN: %v\n", err)
 			failed++
@@ -728,8 +736,8 @@ func (idx *Indexer) cleanupStaleCodeDocuments(colID int64, files []source.CodeFi
 	idx.cleanupOrphans(colID, diskPaths, "documents")
 }
 
-func (idx *Indexer) indexCodeFile(colID int64, f source.CodeFileInfo) (bool, error) {
-	existing, err := idx.db.GetDocument(colID, f.Path)
+func (idx *Indexer) indexCodeFile(col *store.Collection, f source.CodeFileInfo) (bool, error) {
+	existing, err := idx.db.GetDocument(col.ID, f.Path)
 	if err == nil && existing.ContentHash == f.ContentHash {
 		if existing.Mtime != f.Mtime {
 			idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
@@ -737,7 +745,7 @@ func (idx *Indexer) indexCodeFile(colID int64, f source.CodeFileInfo) (bool, err
 		return true, nil
 	}
 
-	docID, err := idx.db.UpsertDocument(colID, f.Path, f.Title, f.ContentHash, f.Mtime, f.LineCount)
+	docID, err := idx.db.UpsertDocument(col.ID, f.Path, f.Title, f.ContentHash, f.Mtime, f.LineCount)
 	if err != nil {
 		return false, fmt.Errorf("upsert %s: %w", f.Path, err)
 	}
@@ -753,6 +761,7 @@ func (idx *Indexer) indexCodeFile(colID int64, f source.CodeFileInfo) (bool, err
 		{"ext", f.Extension},
 		{"filename", filepath.Base(f.Path)},
 		{"rel_path", f.RelativePath},
+		{"repo", col.Name},
 	}
 	for _, ff := range ffSets {
 		if err := idx.db.FastFields().Set(docID, ff.key, ff.value); err != nil {
