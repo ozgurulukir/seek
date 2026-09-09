@@ -53,10 +53,11 @@ seek search "conceptual question" --vec -l 10
 5. **Use filters** to narrow results:
    - `--repo <name>` / `--collection <name>`: target a specific repository or collection
    - `--lang <language>`: target a programming language (e.g. `go`, `python`, `typescript`, `rust`)
+   - `--tag <tag>`: filter markdown notes by YAML frontmatter tag (fast field)
    - `--doc-type <type>`: `code`, `markdown`, `claude`, `codex`, `images`, `pdf`, `documents`, `parser`
    - `--after/--before`, `--chunk-type`, `--path`, `--workspace`
 6. **Increase `-l 20`** if the first 10 results aren't enough.
-7. **Use `--aggs`** to get facet counts and statistics alongside search results.
+7. **Use `--aggs`** to get facet counts and statistics alongside search results — including metadata facets `tags:terms`, `lang:terms`, `repo:terms` (from frontmatter/code metadata):
 
 ## Reading Results
 
@@ -124,11 +125,20 @@ seek parsers list
 Only run sync/embed when user explicitly asks to update the index:
 
 ```bash
-# Sync new/changed files (incremental, fast)
+# Sync new/changed files (incremental, fast) — also embeds any new chunks
+# in the same pass, so you usually don't need a separate `seek embed`.
 seek sync
 
-# Generate embeddings for new chunks
+# Index only, leaving embeddings untouched (keyword-first workflow, or when
+# you want to defer semantic indexing)
+seek sync --no-embed
+
+# Embed with the realtime API instead of the async batch API
+seek sync --realtime
+
+# Generate embeddings for any remaining unembedded chunks (batch or realtime)
 seek embed
+seek embed -r          # realtime
 
 # Force re-embed all chunks (e.g. after model or dimensions change)
 seek embed -f
@@ -143,6 +153,11 @@ seek rm mycollection
 seek schema --show
 seek schema --validate
 ```
+
+If no embedding provider is configured (`~/.config/seek/config.yaml`), `seek
+sync` still succeeds — it prints a single "skip embeddings" hint, leaves chunks
+pending, and keyword (BM25) search keeps working fully. `privacy.offline_only:
+true` disables embeddings outright.
 
 ### Background Service
 

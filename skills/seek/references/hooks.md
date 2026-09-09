@@ -39,7 +39,8 @@ The installed hooks:
 1. On `Stop`, run `seek hooks sync --agent <agent>` for only that agent's collections.
 2. Debounce repeated stops for 15 seconds and record the last outcome; inspect it with `seek hooks status`.
 3. On `UserPromptSubmit`, search the local index and provide capped relevant context to the agent.
-4. With `seek hooks install --embed`, run a realtime embedding refresh for the same agent collection after sync.
+4. With `seek hooks install --embed`, the sync child also runs a realtime
+   embedding pass for the same agent collection as part of that same sync.
 
 ## What Gets Modified
 

@@ -1,6 +1,7 @@
 # Background Service
 
-The background service automatically runs `seek sync` and `seek embed` periodically to keep your index up-to-date.
+The background service automatically runs `seek sync` (which also embeds any
+new chunks in the same pass) periodically to keep your index up-to-date.
 
 ## Platform Support
 

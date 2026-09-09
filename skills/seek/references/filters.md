@@ -20,6 +20,20 @@ seek search "func Open" --lang go
 seek search "import React" --lang typescript
 ```
 
+## Tag (markdown frontmatter)
+
+Filter markdown notes by a `tags` list in their YAML frontmatter (a fast
+field). The match is a whole token — comma-separated lists work, substrings do
+not:
+
+```bash
+seek search "gradient" --tag go     # notes tagged "go" (also matches "go,py")
+seek search "note" --tag priority   # notes tagged "priority"
+```
+
+Frontmatter keys (e.g. `tags`, `date`, `author`) are indexed as fast fields,
+so they are also usable with `--aggs ...:terms`.
+
 ## Document Type
 
 Document types: `code`, `markdown`, `claude`, `codex`, `images`, `pdf`, `documents`, `parser`.

@@ -44,6 +44,16 @@ seek add ~/docs --documents --backend builtin   # use builtin (limited)
 
 **Note:** The builtin backend only supports markdown, PDF, and images. For docx/xlsx/pptx/epub/etc., use `--backend xberg` or set `extractor.backend: xberg` in your config.
 
+## Metadata (fast fields)
+
+Collections write lightweight key/value metadata per document at index time.
+These are stored in a `fast_fields` table and are filterable (`--tag`,
+`--lang`, `--repo`) and facetable (`--aggs ...:terms`).
+
+- **code** — always: `lang`, `ext`, `filename`, `rel_path`, `repo` (collection name)
+- **markdown** — YAML frontmatter keys, e.g. `tags` (comma-joined list),
+  `date`, `author`, or any other scalar in the frontmatter block
+
 ## Schema-driven parsers
 
 Some conversation platforms are indexed via declarative YAML schemas (no Go code per platform). These are `parser` collections — they support the `--workspace` filter for cross-platform project filtering.
