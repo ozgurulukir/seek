@@ -51,6 +51,17 @@ type TermAggregation struct {
 
 func (a *TermAggregation) SQL() (string, []interface{}) {
 	field := a.Field
+	// Fast-field facets live in fast_fields (key/value rows per document),
+	// not in a documents column — route them to a dedicated subquery.
+	switch strings.ToLower(field) {
+	case "lang", "tags", "repo", "ext", "filename", "rel_path", "workspace":
+		name := strings.ToLower(field)
+		return `SELECT REPLACE(ff.field_value, '"', '') as key, COUNT(*) as count
+			FROM documents d
+			JOIN fast_fields ff ON ff.doc_id = d.id AND ff.field_name = ?
+			GROUP BY ff.field_value ORDER BY count DESC`,
+			[]interface{}{name}
+	}
 	// Map common field names to actual columns
 	switch strings.ToLower(field) {
 	case "type", "doc_type":

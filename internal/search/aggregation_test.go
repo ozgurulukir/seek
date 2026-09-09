@@ -514,3 +514,60 @@ func TestParseAggregation_Aggs(t *testing.T) {
 		})
 	}
 }
+
+func TestTermAggregation_FastField(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	for _, stmt := range []string{
+		`CREATE TABLE collections (id INTEGER PRIMARY KEY, name TEXT, type TEXT, path TEXT, created_at TEXT)`,
+		`CREATE TABLE documents (id INTEGER PRIMARY KEY, collection_id INTEGER REFERENCES collections(id), path TEXT, line_count INTEGER, created_at TEXT)`,
+		`CREATE TABLE fast_fields (doc_id INTEGER, field_name TEXT, field_value TEXT)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+	if _, err := db.Exec(`
+		INSERT INTO collections (id, name, type, path) VALUES (1, 'src', 'code', '/src');
+		INSERT INTO documents (id, collection_id, path) VALUES (1, 1, 'main.go'), (2, 1, 'util.go'), (3, 1, 'test.py');
+		INSERT INTO fast_fields VALUES (1, 'lang', '"go"'), (2, 'lang', '"go"'), (3, 'lang', '"python"'),
+			(1, 'repo', '"myrepo"'), (2, 'repo', '"myrepo"'), (3, 'repo', '"myrepo"');
+	`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	rows, err := db.Query(`SELECT ff.field_value FROM documents d JOIN fast_fields ff ON ff.doc_id = d.id AND ff.field_name = 'lang'`)
+	if err != nil {
+		t.Fatalf("sanity query: %v", err)
+	}
+	rows.Close()
+
+	agg := &TermAggregation{Field: "lang"}
+	sqlStr, args := agg.SQL()
+	if len(args) != 1 || args[0] != "lang" {
+		t.Errorf("expected arg 'lang', got %v", args)
+	}
+	rows, err = db.Query(sqlStr, args...)
+	if err != nil {
+		t.Fatalf("agg SQL: %v (sql=%q)", err, sqlStr)
+	}
+	defer rows.Close()
+	a := &TermAggregation{Field: "lang"}
+	buckets, err := a.Scan(rows)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(buckets) != 2 {
+		t.Fatalf("expected 2 buckets, got %d: %v", len(buckets), buckets)
+	}
+	if buckets[0].Key != "go" || buckets[0].Count != 2 {
+		t.Errorf("first bucket = %v, want go/2", buckets[0])
+	}
+	if buckets[1].Key != "python" || buckets[1].Count != 1 {
+		t.Errorf("second bucket = %v, want python/1", buckets[1])
+	}
+}
