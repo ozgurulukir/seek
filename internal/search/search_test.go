@@ -329,8 +329,8 @@ func TestNewEngine(t *testing.T) {
 	if e == nil {
 		t.Fatal("NewEngine returned nil")
 	}
-	if e.store != nil {
-		t.Errorf("expected store to be nil, got %v", e.store)
+	if e.repository != nil {
+		t.Errorf("expected repository to be nil, got %v", e.repository)
 	}
 	if e.embedClient != nil {
 		t.Errorf("expected embedClient to be nil, got %v", e.embedClient)
@@ -346,8 +346,8 @@ func TestNewEngineWithVL(t *testing.T) {
 	if e == nil {
 		t.Fatal("NewEngineWithVL returned nil")
 	}
-	if e.store != nil {
-		t.Errorf("expected store to be nil, got %v", e.store)
+	if e.repository != nil {
+		t.Errorf("expected repository to be nil, got %v", e.repository)
 	}
 	if e.embedClient != nil {
 		t.Errorf("expected embedClient to be nil, got %v", e.embedClient)
@@ -361,7 +361,7 @@ func TestNewEngineWithVL(t *testing.T) {
 
 func TestRunAggregations(t *testing.T) {
 	s := newTestStore(t)
-	engine := NewEngine(s, nil)
+	engine := NewEngine(NewStoreRepository(s), nil)
 	ctx := context.Background()
 
 	// 1. Setup collections and documents.
@@ -458,7 +458,7 @@ func TestRunAggregations(t *testing.T) {
 
 func TestRangeAggregation_CustomField(t *testing.T) {
 	s := newTestStore(t)
-	engine := NewEngine(s, nil)
+	engine := NewEngine(NewStoreRepository(s), nil)
 	ctx := context.Background()
 
 	col, err := s.CreateCollection("test-col", "markdown", "/tmp", "*.md")
@@ -556,7 +556,7 @@ func TestSearchHybridBasic(t *testing.T) {
 		w.Write([]byte(`{"data":[{"embedding":[1.0, 0.0],"index":0}]}`))
 	})
 
-	engine := NewEngine(s, embedClient)
+	engine := NewEngine(NewStoreRepository(s), embedClient)
 
 	ctx := context.Background()
 	results, err := engine.SearchHybrid(ctx, "apple", 10, Options{})
@@ -591,7 +591,7 @@ func TestSearchHybridFallback(t *testing.T) {
 		w.Write([]byte(`"Internal Server Error"`))
 	})
 
-	engine := NewEngine(s, embedClient)
+	engine := NewEngine(NewStoreRepository(s), embedClient)
 
 	ctx := context.Background()
 	results, err := engine.SearchHybrid(ctx, "apple", 1, Options{})
@@ -620,7 +620,7 @@ func TestSearchHybridZeroLimit(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"data":[{"embedding":[1.0, 0.0],"index":0}]}`))
 	})
-	engine := NewEngine(s, embedClient)
+	engine := NewEngine(NewStoreRepository(s), embedClient)
 
 	// limit <= 0 should use DefaultLimit.
 	results, err := engine.SearchHybrid(context.Background(), "apple", 0, Options{})
@@ -647,7 +647,7 @@ func TestSearchHybridVLClient(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	vlClient := embed.NewVLClient("test-key", "test-model", 2, srv.URL, embed.TaskPrefix{})
-	engine := NewEngineWithVL(s, nil, vlClient)
+	engine := NewEngineWithVL(NewStoreRepository(s), nil, vlClient)
 
 	results, err := engine.SearchHybrid(context.Background(), "apple", 10, Options{})
 	if err != nil {
@@ -711,19 +711,19 @@ func testSearchVectorNoEmbedClients(t *testing.T, s *store.Store) {
 	}
 
 	// Plain nil interface.
-	assertDegrades(NewEngine(s, nil))
+	assertDegrades(NewEngine(NewStoreRepository(s), nil))
 
 	// Typed-nil: a factory returning a (*embed.Client)(nil) boxes a typed-nil
 	// into the interface, which `!= nil` cannot catch. The engine must still
 	// degrade cleanly instead of calling EmbedQuery on a nil receiver.
 	var typedNil embed.QueryEmbedder = (*embed.Client)(nil)
-	assertDegrades(NewEngine(s, typedNil))
+	assertDegrades(NewEngine(NewStoreRepository(s), typedNil))
 }
 
 func testSearchVectorWithEmbedClient(t *testing.T, s *store.Store, baseURL string) {
 	t.Helper()
 	client := embed.NewClient(baseURL, "key", "model", 3, embed.TaskPrefix{})
-	engine := NewEngine(s, client)
+	engine := NewEngine(NewStoreRepository(s), client)
 
 	results, err := engine.SearchVector(context.Background(), "query", 0, Options{})
 	if err != nil {
@@ -741,7 +741,7 @@ func testSearchVectorWithVLClientPrecedence(t *testing.T, s *store.Store, baseUR
 	badClient := embed.NewClient("http://127.0.0.1:0", "key", "model", 3, embed.TaskPrefix{})
 	vlClient := embed.NewVLClient("key", "model", 3, baseURL+"/vl-embeddings", embed.TaskPrefix{})
 
-	engine := NewEngineWithVL(s, badClient, vlClient)
+	engine := NewEngineWithVL(NewStoreRepository(s), badClient, vlClient)
 
 	results, err := engine.SearchVector(context.Background(), "query", 5, Options{})
 	if err != nil {
@@ -754,7 +754,7 @@ func testSearchVectorWithVLClientPrecedence(t *testing.T, s *store.Store, baseUR
 func testSearchVectorLimitDefaults(t *testing.T, s *store.Store, baseURL string) {
 	t.Helper()
 	client := embed.NewClient(baseURL, "key", "model", 3, embed.TaskPrefix{})
-	engine := NewEngine(s, client)
+	engine := NewEngine(NewStoreRepository(s), client)
 
 	// If limit is <= 0, it becomes DefaultLimit inside SearchVector.
 	_, err := engine.SearchVector(context.Background(), "query", -5, Options{})
@@ -773,7 +773,7 @@ func testSearchVectorEmbedClientError(t *testing.T, s *store.Store) {
 	defer brokenTs.Close()
 
 	client := embed.NewClient(brokenTs.URL, "key", "model", 3, embed.TaskPrefix{})
-	engine := NewEngine(s, client)
+	engine := NewEngine(NewStoreRepository(s), client)
 
 	_, err := engine.SearchVector(context.Background(), "query", 0, Options{})
 	if err == nil {
@@ -792,7 +792,7 @@ func testSearchVectorVLClientError(t *testing.T, s *store.Store) {
 
 	badClient := embed.NewClient("http://127.0.0.1:0", "key", "model", 3, embed.TaskPrefix{})
 	vlClient := embed.NewVLClient("key", "model", 3, brokenTs.URL+"/vl-embeddings", embed.TaskPrefix{})
-	engine := NewEngineWithVL(s, badClient, vlClient)
+	engine := NewEngineWithVL(NewStoreRepository(s), badClient, vlClient)
 
 	_, err := engine.SearchVector(context.Background(), "query", 0, Options{})
 	if err == nil {
@@ -840,7 +840,7 @@ func TestSearchBM25(t *testing.T) {
 	insertDoc(t, s, "/docs/2", "Python", "Python is a programming language that lets you work quickly and integrate systems more effectively.")
 	insertDoc(t, s, "/docs/3", "Rust Language", "Rust is a language empowering everyone to build reliable and efficient software.")
 
-	engine := NewEngine(s, nil)
+	engine := NewEngine(NewStoreRepository(s), nil)
 	ctx := context.Background()
 
 	t.Run("basic search", func(t *testing.T) {
@@ -975,7 +975,7 @@ func TestSearchHybrid_SingleRerankerCall(t *testing.T) {
 	})
 
 	reranker := &mockCountingReranker{}
-	engine := NewEngine(s, client).WithReranker(reranker)
+	engine := NewEngine(NewStoreRepository(s), client).WithReranker(reranker)
 
 	results, err := engine.SearchHybrid(context.Background(), "apple", 10, Options{})
 	if err != nil {
@@ -993,7 +993,7 @@ func TestSearchHybrid_SingleRerankerCall(t *testing.T) {
 func TestSearchHybrid_SortByFastField(t *testing.T) {
 	s := newTestStore(t)
 	col, _ := s.CreateCollection("docs", "code", "/docs", "*")
-	engine := NewEngine(s, nil)
+	engine := NewEngine(NewStoreRepository(s), nil)
 
 	doc1, _ := s.UpsertDocument(col.ID, "/docs/1", "Go Language", "hash1", 1, 1)
 	s.UpsertFTS(doc1, "Go Language", "Go is a compiled language.")
@@ -1045,7 +1045,7 @@ func TestSearchHybrid_SymmetricFallback(t *testing.T) {
 
 	t.Run("vector fails fallback to bm25", func(t *testing.T) {
 		// Vector client is nil -> vector search fails, but BM25 succeeds
-		engine := NewEngine(s, nil)
+		engine := NewEngine(NewStoreRepository(s), nil)
 		results, err := engine.SearchHybrid(context.Background(), "alpha", 10, Options{})
 		if err != nil {
 			t.Fatalf("SearchHybrid unexpected error: %v", err)
@@ -1056,7 +1056,7 @@ func TestSearchHybrid_SymmetricFallback(t *testing.T) {
 	})
 
 	t.Run("both fail returns error", func(t *testing.T) {
-		engine := NewEngine(s, nil)
+		engine := NewEngine(NewStoreRepository(s), nil)
 		// Query with unmatched double quotes causes FTS5 syntax error
 		_, err := engine.SearchHybrid(context.Background(), `"unclosed quote`, 10, Options{QueryMode: "raw"})
 		if err == nil {

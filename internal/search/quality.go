@@ -19,7 +19,11 @@ func ContentKind(r store.SearchResult) string {
 	return "snippet"
 }
 
-// EnrichContent normalizes result content for JSON/MCP output:
+// EnrichContent is a compatibility helper for callers that still own a Store.
+// Production search surfaces should use Engine.EnrichContent so content reads
+// remain behind the repository seam.
+//
+// It normalizes result content for JSON/MCP output:
 //
 //   - chunk-level hits (ChunkID > 0) are replaced with their full stored
 //     chunk content via GetChunkContent;

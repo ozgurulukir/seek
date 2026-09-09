@@ -2,6 +2,7 @@ package embed
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,6 +78,10 @@ func (c *Client) PrepareBatchJSONL(texts []string) ([]byte, error) {
 
 // UploadBatchFile uploads a JSONL file for batch processing.
 func (c *Client) UploadBatchFile(jsonlData []byte) (string, error) {
+	return c.UploadBatchFileContext(context.Background(), jsonlData)
+}
+
+func (c *Client) UploadBatchFileContext(ctx context.Context, jsonlData []byte) (string, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -92,7 +97,7 @@ func (c *Client) UploadBatchFile(jsonlData []byte) (string, error) {
 	}
 	writer.Close()
 
-	req, err := http.NewRequest("POST", c.baseURL+"/files", &body)
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/files", &body)
 	if err != nil {
 		return "", err
 	}
@@ -124,13 +129,17 @@ func (c *Client) UploadBatchFile(jsonlData []byte) (string, error) {
 
 // CreateBatch creates a batch job with the uploaded file.
 func (c *Client) CreateBatch(fileID string) (*BatchJob, error) {
+	return c.CreateBatchContext(context.Background(), fileID)
+}
+
+func (c *Client) CreateBatchContext(ctx context.Context, fileID string) (*BatchJob, error) {
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"input_file_id":     fileID,
 		"endpoint":          "/v1/embeddings",
 		"completion_window": "24h",
 	})
 
-	req, err := http.NewRequest("POST", c.baseURL+"/batches", bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/batches", bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
 	}
@@ -166,10 +175,17 @@ const maxBatchPollAttempts = 17280 // ~24 hours at 5s intervals
 // PollBatch polls until the batch job completes. Returns the final job state.
 // It caps at maxBatchPollAttempts to prevent infinite loops on unexpected statuses.
 func (c *Client) PollBatch(batchID string, onStatus func(status string, elapsed time.Duration)) (*BatchJob, error) {
+	return c.PollBatchContext(context.Background(), batchID, onStatus)
+}
+
+func (c *Client) PollBatchContext(ctx context.Context, batchID string, onStatus func(status string, elapsed time.Duration)) (*BatchJob, error) {
 	start := time.Now()
 
 	for attempt := 0; attempt < maxBatchPollAttempts; attempt++ {
-		req, err := http.NewRequest("GET", c.baseURL+"/batches/"+batchID, nil)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/batches/"+batchID, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -214,7 +230,11 @@ func (c *Client) PollBatch(batchID string, onStatus func(status string, elapsed 
 			return job, fmt.Errorf("batch %s: %s", result.Status, string(respBody))
 		}
 
-		time.Sleep(config.DefaultBatchPollInterval)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(config.DefaultBatchPollInterval):
+		}
 	}
 	return nil, fmt.Errorf("batch polling exceeded maximum attempts (%d)", maxBatchPollAttempts)
 }
@@ -222,7 +242,11 @@ func (c *Client) PollBatch(batchID string, onStatus func(status string, elapsed 
 // DownloadBatchResults downloads and parses the batch output file.
 // Returns a map of custom_id -> embedding.
 func (c *Client) DownloadBatchResults(fileID string) (map[string][]float32, error) {
-	req, err := http.NewRequest("GET", c.baseURL+"/files/"+fileID+"/content", nil)
+	return c.DownloadBatchResultsContext(context.Background(), fileID)
+}
+
+func (c *Client) DownloadBatchResultsContext(ctx context.Context, fileID string) (map[string][]float32, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/files/"+fileID+"/content", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -288,6 +312,10 @@ func (c *Client) DownloadBatchResults(fileID string) (map[string][]float32, erro
 // BatchEmbed runs the full batch embedding flow:
 // prepare JSONL → upload → create batch → poll → download → return embeddings.
 func (c *Client) BatchEmbedAsync(texts []string, onStatus func(status string, elapsed time.Duration)) ([][]float32, error) {
+	return c.BatchEmbedAsyncContext(context.Background(), texts, onStatus)
+}
+
+func (c *Client) BatchEmbedAsyncContext(ctx context.Context, texts []string, onStatus func(status string, elapsed time.Duration)) ([][]float32, error) {
 	if c.offline {
 		return nil, fmt.Errorf("offline_only is enabled: refusing to send %d text(s) to %q", len(texts), c.model)
 	}
@@ -302,19 +330,19 @@ func (c *Client) BatchEmbedAsync(texts []string, onStatus func(status string, el
 	}
 
 	// 2. Upload file
-	fileID, err := c.UploadBatchFile(jsonl)
+	fileID, err := c.UploadBatchFileContext(ctx, jsonl)
 	if err != nil {
 		return nil, fmt.Errorf("upload batch file: %w", err)
 	}
 
 	// 3. Create batch job
-	job, err := c.CreateBatch(fileID)
+	job, err := c.CreateBatchContext(ctx, fileID)
 	if err != nil {
 		return nil, fmt.Errorf("create batch job: %w", err)
 	}
 
 	// 4. Poll until done
-	job, err = c.PollBatch(job.ID, onStatus)
+	job, err = c.PollBatchContext(ctx, job.ID, onStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +352,7 @@ func (c *Client) BatchEmbedAsync(texts []string, onStatus func(status string, el
 	}
 
 	// 5. Download results
-	resultMap, err := c.DownloadBatchResults(job.OutputFileID)
+	resultMap, err := c.DownloadBatchResultsContext(ctx, job.OutputFileID)
 	if err != nil {
 		return nil, fmt.Errorf("download batch results: %w", err)
 	}

@@ -2,6 +2,7 @@ package embed
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -103,6 +104,10 @@ type embeddingResponse struct {
 // embed sends the raw texts to the embeddings endpoint without any
 // task-prefix transformation. Public methods layer prefixes on top.
 func (c *Client) embed(texts []string) ([][]float32, error) {
+	return c.embedContext(context.Background(), texts)
+}
+
+func (c *Client) embedContext(ctx context.Context, texts []string) ([][]float32, error) {
 	if c.offline {
 		return nil, fmt.Errorf("offline_only is enabled: refusing to send %d text(s) to %q", len(texts), c.model)
 	}
@@ -119,7 +124,7 @@ func (c *Client) embed(texts []string) ([][]float32, error) {
 		return nil, err
 	}
 
-	httpReq, err := http.NewRequest("POST", c.baseURL+"/embeddings", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/embeddings", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -177,10 +182,18 @@ func (c *Client) EmbedDocuments(texts []string) ([][]float32, error) {
 	return c.embed(c.taskPrefix.applyDocuments(texts))
 }
 
+func (c *Client) EmbedDocumentsContext(ctx context.Context, texts []string) ([][]float32, error) {
+	return c.embedContext(ctx, c.taskPrefix.applyDocuments(texts))
+}
+
 // EmbedQuery embeds a search query, prepending the configured query task
 // prefix (e.g. "search_query: " for Nomic models).
 func (c *Client) EmbedQuery(text string) ([]float32, error) {
-	results, err := c.embed([]string{c.taskPrefix.applyQuery(text)})
+	return c.EmbedQueryContext(context.Background(), text)
+}
+
+func (c *Client) EmbedQueryContext(ctx context.Context, text string) ([]float32, error) {
+	results, err := c.embedContext(ctx, []string{c.taskPrefix.applyQuery(text)})
 	if err != nil {
 		return nil, err
 	}

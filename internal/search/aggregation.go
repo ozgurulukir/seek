@@ -58,6 +58,7 @@ func (a *TermAggregation) SQL() (string, []interface{}) {
 		name := strings.ToLower(field)
 		return `SELECT REPLACE(ff.field_value, '"', '') as key, COUNT(*) as count
 			FROM documents d
+			JOIN collections c ON c.id = d.collection_id
 			JOIN fast_fields ff ON ff.doc_id = d.id AND ff.field_name = ?
 			GROUP BY ff.field_value ORDER BY count DESC`,
 			[]interface{}{name}

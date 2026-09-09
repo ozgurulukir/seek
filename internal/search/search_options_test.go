@@ -21,7 +21,7 @@ func TestEngine_SearchWithOptions(t *testing.T) {
 	}
 	defer s.Close()
 
-	engine := NewEngine(s, nil)
+	engine := NewEngine(NewStoreRepository(s), nil)
 
 	col, err := s.CreateCollection("test-col", "markdown", "/tmp", "**/*.md")
 	if err != nil {

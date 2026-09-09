@@ -48,20 +48,20 @@ type Logger interface {
 
 // Engine performs BM25, vector, and hybrid search with optional filters, aggregations, and reranking.
 type Engine struct {
-	store       *store.Store
+	repository  SearchRepository
 	embedClient embed.QueryEmbedder
 	vlClient    embed.VLQueryEmbedder
 	reranker    embed.Reranker
 	logger      Logger
 }
 
-func NewEngine(s *store.Store, ec embed.QueryEmbedder) *Engine {
-	return &Engine{store: s, embedClient: ec}
+func NewEngine(repository SearchRepository, ec embed.QueryEmbedder) *Engine {
+	return &Engine{repository: repository, embedClient: ec}
 }
 
 // NewEngineWithVL creates a search engine with a VL client for multimodal query embedding.
-func NewEngineWithVL(s *store.Store, ec embed.QueryEmbedder, vlc embed.VLQueryEmbedder) *Engine {
-	return &Engine{store: s, embedClient: ec, vlClient: vlc}
+func NewEngineWithVL(repository SearchRepository, ec embed.QueryEmbedder, vlc embed.VLQueryEmbedder) *Engine {
+	return &Engine{repository: repository, embedClient: ec, vlClient: vlc}
 }
 
 // WithReranker sets an optional cross-encoder reranker.
@@ -106,7 +106,7 @@ func (e *Engine) searchBM25Raw(ctx context.Context, query string, limit int, opt
 		// On parse error, fall back to raw query
 	}
 
-	return e.store.SearchFTS(ftsQuery, limit, opts.Filters)
+	return e.repository.SearchFTS(ctx, ftsQuery, limit, opts.Filters)
 }
 
 // searchVectorRaw executes the vector semantic query and returns raw candidate hits.
@@ -119,12 +119,20 @@ func (e *Engine) searchVectorRaw(ctx context.Context, query string, limit int, o
 	var qEmb []float32
 	var err error
 	if !isNilInterface(e.vlClient) {
-		qEmb, err = e.vlClient.EmbedText(query)
+		if contextual, ok := e.vlClient.(embed.ContextVLQueryEmbedder); ok {
+			qEmb, err = contextual.EmbedTextContext(ctx, query)
+		} else {
+			qEmb, err = e.vlClient.EmbedText(query)
+		}
 		if err != nil {
 			return nil, err
 		}
 	} else if !isNilInterface(e.embedClient) {
-		qEmb, err = e.embedClient.EmbedQuery(query)
+		if contextual, ok := e.embedClient.(embed.ContextQueryEmbedder); ok {
+			qEmb, err = contextual.EmbedQueryContext(ctx, query)
+		} else {
+			qEmb, err = e.embedClient.EmbedQuery(query)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -132,7 +140,7 @@ func (e *Engine) searchVectorRaw(ctx context.Context, query string, limit int, o
 		return nil, fmt.Errorf("vector search requires embedding client")
 	}
 
-	return e.store.SearchVector(qEmb, limit, opts.Filters)
+	return e.repository.SearchVector(ctx, qEmb, limit, opts.Filters)
 }
 
 // SearchBM25 performs BM25 full-text search with optional filters, reranking, and sorting.
@@ -152,7 +160,7 @@ func (e *Engine) SearchBM25(ctx context.Context, query string, limit int, opts O
 	}
 
 	if opts.SortBy != "" {
-		sorted, err := e.sortResults(results, opts)
+		sorted, err := e.sortResults(ctx, results, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -182,7 +190,7 @@ func (e *Engine) SearchVector(ctx context.Context, query string, limit int, opts
 	}
 
 	if opts.SortBy != "" {
-		sorted, err := e.sortResults(results, opts)
+		sorted, err := e.sortResults(ctx, results, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -231,7 +239,7 @@ func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts
 	}
 
 	if opts.SortBy != "" {
-		sorted, err := e.sortResults(fused, opts)
+		sorted, err := e.sortResults(ctx, fused, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -293,7 +301,7 @@ func (e *Engine) RunAggregations(ctx context.Context, specs []string, filters *s
 		if err != nil {
 			return nil, fmt.Errorf("parse aggregation %q: %w", spec, err)
 		}
-		buckets, err := ExecuteAggregation(e.store.DB(), agg)
+		buckets, err := e.repository.ExecuteAggregation(ctx, agg, filters)
 		if err != nil {
 			return nil, fmt.Errorf("execute aggregation %q: %w", spec, err)
 		}
@@ -359,7 +367,7 @@ func rrfFusionWithK(bm25, vec []store.SearchResult, limit int, k int) []store.Se
 }
 
 // sortResults sorts search results by a fast field if specified.
-func (e *Engine) sortResults(results []store.SearchResult, opts Options) ([]store.SearchResult, error) {
+func (e *Engine) sortResults(ctx context.Context, results []store.SearchResult, opts Options) ([]store.SearchResult, error) {
 	if opts.SortBy == "" || len(results) == 0 {
 		return results, nil
 	}
@@ -370,7 +378,7 @@ func (e *Engine) sortResults(results []store.SearchResult, opts Options) ([]stor
 		docIDs[i] = r.DocumentID
 	}
 
-	values, err := e.store.FastFields().BatchGet(docIDs, opts.SortBy)
+	values, err := e.repository.BatchGetFastFields(ctx, docIDs, opts.SortBy)
 	if err != nil {
 		// If fast field doesn't exist, return unsorted
 		return results, nil

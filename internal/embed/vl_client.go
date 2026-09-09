@@ -2,6 +2,7 @@ package embed
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -93,7 +94,11 @@ type vlResponse struct {
 // EmbedText embeds a search query via the VL API, prepending the configured
 // query task prefix.
 func (c *VLClient) EmbedText(text string) ([]float32, error) {
-	results, err := c.embedRaw([]EmbedItem{{Text: c.taskPrefix.applyQuery(text)}})
+	return c.EmbedTextContext(context.Background(), text)
+}
+
+func (c *VLClient) EmbedTextContext(ctx context.Context, text string) ([]float32, error) {
+	results, err := c.embedRawContext(ctx, []EmbedItem{{Text: c.taskPrefix.applyQuery(text)}})
 	if err != nil {
 		return nil, err
 	}
@@ -124,6 +129,10 @@ func (c *VLClient) EmbedImage(imageDataURI string, context string) ([]float32, e
 // splits into sub-batches respecting the 20-content and 5-image limits per
 // request.
 func (c *VLClient) EmbedBatch(items []EmbedItem) ([][]float32, error) {
+	return c.EmbedBatchContext(context.Background(), items)
+}
+
+func (c *VLClient) EmbedBatchContext(ctx context.Context, items []EmbedItem) ([][]float32, error) {
 	if c.taskPrefix.Document != "" {
 		prefixed := make([]EmbedItem, len(items))
 		copy(prefixed, items)
@@ -134,11 +143,15 @@ func (c *VLClient) EmbedBatch(items []EmbedItem) ([][]float32, error) {
 		}
 		items = prefixed
 	}
-	return c.embedRaw(items)
+	return c.embedRawContext(ctx, items)
 }
 
 // embedRaw batches and sends items without any task-prefix transformation.
 func (c *VLClient) embedRaw(items []EmbedItem) ([][]float32, error) {
+	return c.embedRawContext(context.Background(), items)
+}
+
+func (c *VLClient) embedRawContext(ctx context.Context, items []EmbedItem) ([][]float32, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}
@@ -150,7 +163,7 @@ func (c *VLClient) embedRaw(items []EmbedItem) ([][]float32, error) {
 
 	globalOffset := 0
 	for _, batch := range batches {
-		embeddings, err := c.doRequest(batch)
+		embeddings, err := c.doRequestContext(ctx, batch)
 		if err != nil {
 			return nil, fmt.Errorf("vl batch at offset %d: %w", globalOffset, err)
 		}
@@ -199,6 +212,10 @@ func splitIntoBatches(items []EmbedItem) [][]EmbedItem {
 
 // doRequest sends a single batch request to the VL API.
 func (c *VLClient) doRequest(items []EmbedItem) ([][]float32, error) {
+	return c.doRequestContext(context.Background(), items)
+}
+
+func (c *VLClient) doRequestContext(ctx context.Context, items []EmbedItem) ([][]float32, error) {
 	var contents []vlContent
 
 	for _, item := range items {
@@ -231,7 +248,7 @@ func (c *VLClient) doRequest(items []EmbedItem) ([][]float32, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", c.endpoint, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -319,6 +336,10 @@ func ImagePathToMediaType(path string) string {
 
 // EmbedTextsInBatches embeds text strings in batches with rate-limiting pauses.
 func (c *VLClient) EmbedTextsInBatches(texts []string, batchSize int, pause time.Duration, onBatch func(batchStart int, embeddings [][]float32) error) (int, error) {
+	return c.EmbedTextsInBatchesContext(context.Background(), texts, batchSize, pause, onBatch)
+}
+
+func (c *VLClient) EmbedTextsInBatchesContext(ctx context.Context, texts []string, batchSize int, pause time.Duration, onBatch func(batchStart int, embeddings [][]float32) error) (int, error) {
 	if batchSize <= 0 {
 		batchSize = 20
 	}
@@ -335,7 +356,10 @@ func (c *VLClient) EmbedTextsInBatches(texts []string, batchSize int, pause time
 			items[j-i] = EmbedItem{Text: texts[j]}
 		}
 
-		embeddings, err := c.EmbedBatch(items)
+		if err := ctx.Err(); err != nil {
+			return updated, err
+		}
+		embeddings, err := c.EmbedBatchContext(ctx, items)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("text batch %d-%d: %w", i, end, err)
@@ -355,7 +379,11 @@ func (c *VLClient) EmbedTextsInBatches(texts []string, batchSize int, pause time
 		}
 
 		if end < len(texts) && pause > 0 {
-			time.Sleep(pause)
+			select {
+			case <-ctx.Done():
+				return updated, ctx.Err()
+			case <-time.After(pause):
+			}
 		}
 	}
 	return updated, firstErr
@@ -369,12 +397,19 @@ type ImageBatchItem struct {
 
 // EmbedImagesInBatches reads images concurrently, formats data URIs, and embeds them in batches.
 func (c *VLClient) EmbedImagesInBatches(items []ImageBatchItem, batchSize int, pause time.Duration, onBatch func(batchStart int, embeddings [][]float32, validIndices []int) error) (int, error) {
+	return c.EmbedImagesInBatchesContext(context.Background(), items, batchSize, pause, onBatch)
+}
+
+func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []ImageBatchItem, batchSize int, pause time.Duration, onBatch func(batchStart int, embeddings [][]float32, validIndices []int) error) (int, error) {
 	if batchSize <= 0 {
 		batchSize = 5
 	}
 	updated := 0
 	var firstErr error
 	for i := 0; i < len(items); i += batchSize {
+		if err := ctx.Err(); err != nil {
+			return updated, err
+		}
 		end := i + batchSize
 		if end > len(items) {
 			end = len(items)
@@ -418,7 +453,7 @@ func (c *VLClient) EmbedImagesInBatches(items []ImageBatchItem, batchSize int, p
 			continue
 		}
 
-		embeddings, err := c.EmbedBatch(embedItems)
+		embeddings, err := c.EmbedBatchContext(ctx, embedItems)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("image batch %d-%d: %w", i, end, err)
@@ -438,7 +473,11 @@ func (c *VLClient) EmbedImagesInBatches(items []ImageBatchItem, batchSize int, p
 		}
 
 		if end < len(items) && pause > 0 {
-			time.Sleep(pause)
+			select {
+			case <-ctx.Done():
+				return updated, ctx.Err()
+			case <-time.After(pause):
+			}
 		}
 	}
 	return updated, firstErr
