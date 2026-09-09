@@ -150,6 +150,10 @@ seek mcp          # MCP server on stdio (JSON-RPC 2.0)
 }
 ```
 
+**Other agents** (Codex CLI, Cursor, Zed, VS Code, Cline, etc.) use the same
+stdio server with their own config path/section — see
+[**docs/mcp.md**](docs/mcp.md) for ready-made snippets for each.
+
 Reads only the local SQLite index; the `privacy.offline_only` setting applies unchanged (no network egress beyond your configured embedding provider, same as `seek search`).
 
 ---

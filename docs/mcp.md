@@ -12,7 +12,13 @@
 
 `content_kind` tells the agent what `content` holds: `"full"` (whole chunk text, chunk-level vector hits) or `"snippet"` (40-token FTS excerpt, document-level BM25/hybrid hits). See the [JSON output](#) contract in the README for details.
 
-## Wiring up Claude Code
+## Wiring up your agent
+
+`seek mcp` is a standard stdio MCP server, so any MCP client can register it.
+The block is the same everywhere; only the config file and (for Zed) the
+section key differ. Commands below assume `seek` is on `PATH`.
+
+### Claude Code
 
 Add to `~/.claude.json` (global) or a project's `.mcp.json`:
 
@@ -25,6 +31,67 @@ Add to `~/.claude.json` (global) or a project's `.mcp.json`:
 ```
 
 Restart Claude Code; the tools appear as `seek_search` / `seek_status` / `seek_autocomplete`.
+Alternatively `claude mcp add seek -- seek mcp`.
+
+### Codex CLI
+
+Add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.seek]
+command = "seek"
+args = ["mcp"]
+```
+
+Or register it once with `codex mcp add seek -- seek mcp`.
+
+### Cursor
+
+Add to `~/.cursor/mcp.json` (user) or `.cursor/mcp.json` (project), then
+restart and switch to **Agent mode** (tools don't show in plain chat):
+
+```json
+{
+  "mcpServers": {
+    "seek": { "command": "seek", "args": ["mcp"] }
+  }
+}
+```
+
+### Zed
+
+Add to `.config/zed/settings.json`. Note Zed uses the **`context_servers`**
+key, not `mcpServers`:
+
+```json
+{
+  "context_servers": {
+    "seek": { "command": "seek", "args": ["mcp"] }
+  }
+}
+```
+
+### VS Code / GitHub Copilot
+
+Add to `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "seek": { "type": "stdio", "command": "seek", "args": ["mcp"] }
+  }
+}
+```
+
+### Other agents
+
+Many other editors/agents speak MCP with the same `mcpServers` block in their
+own config path (e.g. **Cline** writes to `settings/cline_mcp_settings.json`
+under the Code/VS Code global storage, **OpenCode** reads `opencode.json`).
+These formats evolve quickly — check the agent's MCP docs if the exact path or
+key differs from the examples above. The server itself is transport-stdio, so
+a server config of `{ "command": "seek", "args": ["mcp"] }` is what every
+client ultimately needs.
 
 ## Raw protocol probe
 
