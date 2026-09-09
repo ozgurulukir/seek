@@ -142,27 +142,31 @@ func (idx *Indexer) WithLogger(l Logger) *Indexer {
 	return idx
 }
 
+// SourceHandler indexes one collection of a given type. Each format sync
+// method implements it; registration in syncHandlers replaces the hard-wired
+// switch so adding a new collection type is a single map entry (M6).
+// Method values carry the *Indexer receiver as their first argument.
+type SourceHandler func(idx *Indexer, col *store.Collection) error
+
+// syncHandlers is the single registration point for per-format sync. The
+// map keys mirror the 1:1 format dispatch previously expressed as a switch.
+var syncHandlers = map[store.CollectionType]SourceHandler{
+	store.CollectionTypeMarkdown:  (*Indexer).syncMarkdown,
+	store.CollectionTypeClaude:    (*Indexer).syncClaude,
+	store.CollectionTypeCodex:     (*Indexer).syncCodex,
+	store.CollectionTypeImages:    (*Indexer).syncImage,
+	store.CollectionTypePDF:       (*Indexer).syncPdf,
+	store.CollectionTypeDocuments: (*Indexer).syncDocuments,
+	store.CollectionTypeCode:      (*Indexer).syncCode,
+	store.CollectionTypeParser:    (*Indexer).syncParserDef,
+}
+
 func (idx *Indexer) SyncCollection(col *store.Collection) error {
-	switch col.Type {
-	case store.CollectionTypeMarkdown:
-		return idx.syncMarkdown(col)
-	case store.CollectionTypeClaude:
-		return idx.syncClaude(col)
-	case store.CollectionTypeCodex:
-		return idx.syncCodex(col)
-	case store.CollectionTypeImages:
-		return idx.syncImage(col)
-	case store.CollectionTypePDF:
-		return idx.syncPdf(col)
-	case store.CollectionTypeDocuments:
-		return idx.syncDocuments(col)
-	case store.CollectionTypeCode:
-		return idx.syncCode(col)
-	case store.CollectionTypeParser:
-		return idx.syncParserDef(col)
-	default:
+	h, ok := syncHandlers[col.Type]
+	if !ok {
 		return fmt.Errorf("unknown collection type: %s", col.Type)
 	}
+	return h(idx, col)
 }
 
 // syncConversation abstracts the heavily duplicated logic between Claude and Codex
@@ -418,11 +422,7 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 
 		// Metadata SSOT: frontmatter key/values go to fast_fields so they are
 		// filterable via FastFieldFilter (search --tag/--lang, faceting).
-		for field, value := range f.Metadata {
-			if err := idx.db.FastFields().Set(docID, field, value); err != nil {
-				idx.log.Printf("  WARN: metadata %s=%s: %v\n", field, value, err)
-			}
-		}
+		idx.writeFastFields(docID, f.Metadata)
 		indexed++
 	}
 
@@ -710,6 +710,20 @@ func (idx *Indexer) cleanupOrphans(colID int64, livePaths map[string]bool, label
 // FTS entry, deletes old chunks, and inserts the given chunks (with line spans
 // when withLines is true). FTS and chunk errors are logged, never fatal.
 // label identifies the source in WARN lines (usually the file path).
+// writeFastFields writes a metadata map to fast_fields, logging a WARN per
+// failing key. Single write path so format-specific sync functions do not
+// each reimplement the Set + WARN loop (M6).
+func (idx *Indexer) writeFastFields(docID int64, metadata map[string]string) {
+	for field, value := range metadata {
+		if value == "" {
+			continue
+		}
+		if err := idx.db.FastFields().Set(docID, field, value); err != nil {
+			idx.log.Printf("  WARN: metadata %s=%s: %v\n", field, value, err)
+		}
+	}
+}
+
 func (idx *Indexer) replaceIndexText(docID int64, label, title, text string, chunks []chunk.Chunk, withLines bool) {
 	if err := idx.db.UpsertFTS(docID, title, text); err != nil {
 		idx.log.Printf("  WARN: fts %s: %v\n", label, err)
@@ -756,18 +770,13 @@ func (idx *Indexer) indexCodeFile(col *store.Collection, f source.CodeFileInfo) 
 	// Fast field metadata. Errors are logged (pattern used elsewhere in the
 	// indexer) rather than silently swallowed so missing fastfields surface
 	// during sync instead of only at --aggs query time.
-	ffSets := []struct{ key, value string }{
-		{"lang", f.Language},
-		{"ext", f.Extension},
-		{"filename", filepath.Base(f.Path)},
-		{"rel_path", f.RelativePath},
-		{"repo", col.Name},
-	}
-	for _, ff := range ffSets {
-		if err := idx.db.FastFields().Set(docID, ff.key, ff.value); err != nil {
-			idx.log.Printf("  WARN: fastfield %s=%s %s: %v\n", ff.key, ff.value, f.Path, err)
-		}
-	}
+	idx.writeFastFields(docID, map[string]string{
+		"lang":     f.Language,
+		"ext":      f.Extension,
+		"filename": filepath.Base(f.Path),
+		"rel_path": f.RelativePath,
+		"repo":     col.Name,
+	})
 
 	return false, nil
 }
@@ -874,14 +883,7 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 		idx.replaceIndexText(docID, docPath, title, text, chunk.ChunkConversation(text, maxSize), false)
 
 		// Metadata enrichment (§6.13): write known fields to fast_fields.
-		for field, value := range sess.Metadata {
-			if value == "" {
-				continue
-			}
-			if err := idx.db.FastFields().Set(docID, field, value); err != nil {
-				idx.log.Printf("  WARN: metadata %s=%s: %v\n", field, value, err)
-			}
-		}
+		idx.writeFastFields(docID, sess.Metadata)
 
 		indexed++
 	}
