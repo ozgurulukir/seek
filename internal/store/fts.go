@@ -1,7 +1,9 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -177,16 +179,20 @@ func (s *Store) rebuildFTSFromDocuments() error {
 // --- FTS ---
 
 func (s *Store) UpsertFTS(docID int64, title, content string) error {
-	tx, err := s.db.Begin()
+	return s.UpsertFTSContext(context.Background(), docID, title, content)
+}
+
+func (s *Store) UpsertFTSContext(ctx context.Context, docID int64, title, content string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
 		return fmt.Errorf("delete fts entry: %w", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, title, content); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, title, content); err != nil {
 		return fmt.Errorf("insert fts entry: %w", err)
 	}
 	return tx.Commit()
@@ -194,32 +200,46 @@ func (s *Store) UpsertFTS(docID int64, title, content string) error {
 
 // AppendFTS appends content to an existing FTS entry, preserving earlier text and title.
 func (s *Store) AppendFTS(docID int64, newContent string) error {
-	tx, err := s.db.Begin()
+	return s.AppendFTSContext(context.Background(), docID, newContent)
+}
+
+func (s *Store) AppendFTSContext(ctx context.Context, docID int64, newContent string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
 	var existingTitle, existingContent string
-	err = tx.QueryRow(`SELECT title, content FROM documents_fts WHERE rowid = ?`, docID).Scan(&existingTitle, &existingContent)
+	err = tx.QueryRowContext(ctx, `SELECT title, content FROM documents_fts WHERE rowid = ?`, docID).Scan(&existingTitle, &existingContent)
 	if err != nil {
-		// No existing entry — just insert
-		if _, err := tx.Exec(`INSERT INTO documents_fts (rowid, title, content) VALUES (?, '', ?)`, docID, newContent); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("read existing fts entry: %w", err)
+		}
+		// No existing entry — just insert.
+		if _, err := tx.ExecContext(ctx, `INSERT INTO documents_fts (rowid, title, content) VALUES (?, '', ?)`, docID, newContent); err != nil {
 			return err
 		}
 		return tx.Commit()
 	}
 	combined := existingContent + "\n" + newContent
-	if _, err := tx.Exec(`DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
 		return fmt.Errorf("delete fts entry: %w", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, existingTitle, combined); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, existingTitle, combined); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]SearchResult, error) {
+	return s.SearchFTSContext(context.Background(), query, limit, filters)
+}
+
+// SearchFTSContext is the context-aware search seam used by the search
+// repository adapter. The legacy SearchFTS method remains for callers that do
+// not yet own a context.
+func (s *Store) SearchFTSContext(ctx context.Context, query string, limit int, filters *FilterSet) ([]SearchResult, error) {
 	// bm25 column weights follow the table's column order (title, content),
 	// so title matches (FTSTitleWeight=10.0) rank above body matches (1.0).
 	sqlQuery := `SELECT d.id, d.title, d.path, c.name, snippet(documents_fts, 1, '>>>', '<<<', '...', 40) as snip, bm25(documents_fts, ?, 1.0)
@@ -242,7 +262,7 @@ func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]Search
 	sqlQuery += " ORDER BY bm25(documents_fts, ?, 1.0) LIMIT ?"
 	args = append(args, FTSTitleWeight, limit)
 
-	rows, err := s.db.Query(sqlQuery, args...)
+	rows, err := s.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +295,7 @@ func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]Search
 				       ROW_NUMBER() OVER (PARTITION BY document_id ORDER BY seq ASC) as rn
 				FROM chunks WHERE document_id IN (%s)
 			) WHERE rn = 1`, strings.Join(placeholders, ","))
-		chunkRows, err := s.db.Query(chunkQuery, docArgs...)
+		chunkRows, err := s.db.QueryContext(ctx, chunkQuery, docArgs...)
 		if err != nil {
 			log.Printf("WARN: line-span query failed for %d documents: %v", len(docIDs), err)
 		} else {

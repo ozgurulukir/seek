@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -22,8 +23,12 @@ func (s *Store) DeleteChunksForDocument(docID int64) error {
 // conversation sync) use MaxChunkSeq+1 to continue the sequence instead of
 // restarting at 0 and colliding with earlier chunks.
 func (s *Store) MaxChunkSeq(docID int64) (int, error) {
+	return s.MaxChunkSeqContext(context.Background(), docID)
+}
+
+func (s *Store) MaxChunkSeqContext(ctx context.Context, docID int64) (int, error) {
 	var seq sql.NullInt64
-	if err := s.db.QueryRow(`SELECT MAX(seq) FROM chunks WHERE document_id = ?`, docID).Scan(&seq); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT MAX(seq) FROM chunks WHERE document_id = ?`, docID).Scan(&seq); err != nil {
 		return 0, err
 	}
 	if !seq.Valid {
@@ -56,6 +61,11 @@ func (s *Store) InsertChunkWithLines(docID int64, seq int, content string, start
 
 // GetSurroundingContext fetches adjacent chunks within radius for a document and returns the combined content with expanded line span.
 func (s *Store) GetSurroundingContext(docID int64, seq int, radius int) (string, int, int, error) {
+	return s.GetSurroundingContextWithContext(context.Background(), docID, seq, radius)
+}
+
+// GetSurroundingContextWithContext fetches adjacent chunks with cancellation.
+func (s *Store) GetSurroundingContextWithContext(ctx context.Context, docID int64, seq int, radius int) (string, int, int, error) {
 	if radius <= 0 {
 		radius = 0
 	}
@@ -65,7 +75,7 @@ func (s *Store) GetSurroundingContext(docID int64, seq int, radius int) (string,
 	}
 	maxSeq := seq + radius
 
-	rows, err := s.db.Query(
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT seq, content, content_zstd, COALESCE(start_line, 0), COALESCE(end_line, 0)
 		 FROM chunks
 		 WHERE document_id = ? AND seq >= ? AND seq <= ?
@@ -132,9 +142,14 @@ func (s *Store) InsertImageChunk(docID int64, seq int, context string, imagePath
 
 // GetChunkContent returns the content of a chunk, decompressing if necessary.
 func (s *Store) GetChunkContent(chunkID int64) (string, error) {
+	return s.GetChunkContentContext(context.Background(), chunkID)
+}
+
+// GetChunkContentContext returns a chunk body while honoring cancellation.
+func (s *Store) GetChunkContentContext(ctx context.Context, chunkID int64) (string, error) {
 	var content string
 	var contentZstd []byte
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT content, content_zstd FROM chunks WHERE id = ?`,
 		chunkID,
 	).Scan(&content, &contentZstd)
@@ -152,7 +167,11 @@ func (s *Store) GetChunkContent(chunkID int64) (string, error) {
 }
 
 func (s *Store) UpdateChunkEmbedding(chunkID int64, embedding []float32) error {
-	_, err := s.db.Exec(`UPDATE chunks SET embedding = ? WHERE id = ?`, encodeEmbedding(embedding), chunkID)
+	return s.UpdateChunkEmbeddingContext(context.Background(), chunkID, embedding)
+}
+
+func (s *Store) UpdateChunkEmbeddingContext(ctx context.Context, chunkID int64, embedding []float32) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`, encodeEmbedding(embedding), chunkID)
 	if err != nil {
 		return err
 	}
@@ -167,16 +186,28 @@ func (s *Store) UpdateChunkEmbedding(chunkID int64, embedding []float32) error {
 // GetChunksWithoutEmbedding returns chunks that don't have embeddings yet.
 // If force is true, returns all chunks.
 func (s *Store) GetChunksWithoutEmbedding(force bool) ([]Chunk, error) {
-	return s.getChunksWithoutEmbedding(force, "", false)
+	return s.GetChunksWithoutEmbeddingContext(context.Background(), force)
+}
+
+func (s *Store) GetChunksWithoutEmbeddingContext(ctx context.Context, force bool) ([]Chunk, error) {
+	return s.getChunksWithoutEmbeddingContext(ctx, force, "", false)
 }
 
 // GetChunksWithoutEmbeddingForCollectionType returns chunks from collections
 // of typ whose embeddings are missing (or all chunks when force is true).
 func (s *Store) GetChunksWithoutEmbeddingForCollectionType(typ CollectionType, force bool) ([]Chunk, error) {
-	return s.getChunksWithoutEmbedding(force, typ, true)
+	return s.GetChunksWithoutEmbeddingForCollectionTypeContext(context.Background(), typ, force)
+}
+
+func (s *Store) GetChunksWithoutEmbeddingForCollectionTypeContext(ctx context.Context, typ CollectionType, force bool) ([]Chunk, error) {
+	return s.getChunksWithoutEmbeddingContext(ctx, force, typ, true)
 }
 
 func (s *Store) getChunksWithoutEmbedding(force bool, typ CollectionType, filterType bool) ([]Chunk, error) {
+	return s.getChunksWithoutEmbeddingContext(context.Background(), force, typ, filterType)
+}
+
+func (s *Store) getChunksWithoutEmbeddingContext(ctx context.Context, force bool, typ CollectionType, filterType bool) ([]Chunk, error) {
 	query := `SELECT chunks.id, chunks.document_id, chunks.seq, chunks.content, chunks.content_zstd, COALESCE(chunks.chunk_type, ?), COALESCE(chunks.image_path, '') FROM chunks`
 	args := []interface{}{ChunkTypeText}
 	if filterType {
@@ -194,13 +225,16 @@ func (s *Store) getChunksWithoutEmbedding(force bool, typ CollectionType, filter
 		query += " c.type = ?"
 		args = append(args, typ)
 	}
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var chunks []Chunk
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var ch Chunk
 		var contentZstd []byte
 		if err := rows.Scan(&ch.ID, &ch.DocumentID, &ch.Seq, &ch.Content, &contentZstd, &ch.ChunkType, &ch.ImagePath); err != nil {

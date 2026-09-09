@@ -1,8 +1,10 @@
 package store
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -138,6 +140,117 @@ func TestNewVectorIndex_HNSWCorruption(t *testing.T) {
 	}
 }
 
+func TestStoreCloseFlushesPersistentHNSW(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	indexPath := filepath.Join(t.TempDir(), "vectors.hnsw")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	idx, err := newHNSWIndex(3, 16, 50)
+	if err != nil {
+		t.Fatalf("newHNSWIndex: %v", err)
+	}
+	idx.persistPath = indexPath
+	if err := idx.Add(42, []float32{0.1, 0.2, 0.3}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	s.SetVectorIndex(idx)
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := os.Stat(indexPath); err != nil {
+		t.Fatalf("expected flushed HNSW graph: %v", err)
+	}
+	if _, err := os.Stat(indexPath + ".meta.json"); err != nil {
+		t.Fatalf("expected flushed HNSW manifest: %v", err)
+	}
+
+	loaded, err := newHNSWIndex(3, 16, 50)
+	if err != nil {
+		t.Fatalf("reload flushed HNSW: %v", err)
+	}
+	if err := loaded.Load(indexPath); err != nil {
+		t.Fatalf("load flushed HNSW: %v", err)
+	}
+	if loaded.Len() != 1 || !loaded.Contains(42) {
+		t.Fatalf("reloaded HNSW = len %d, contains(42)=%v; want one persisted vector", loaded.Len(), loaded.Contains(42))
+	}
+
+	// Close is a public lifecycle boundary and must be safe to call again.
+	if err := s.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestStoreRecoverVectorIndexOnGenerationMismatch(t *testing.T) {
+	s := newTestStore(t)
+	col, err := s.CreateCollection("notes", CollectionTypeMarkdown, t.TempDir(), "*.md")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "note.md", "Note", "hash", 1, 1)
+	if err != nil {
+		t.Fatalf("UpsertDocument: %v", err)
+	}
+	if err := s.InsertChunk(docID, 0, "content", []float32{1, 0, 0}); err != nil {
+		t.Fatalf("InsertChunk: %v", err)
+	}
+	var chunkID int64
+	if err := s.db.QueryRow(`SELECT id FROM chunks WHERE document_id = ?`, docID).Scan(&chunkID); err != nil {
+		t.Fatalf("read chunk id: %v", err)
+	}
+
+	idx, err := newHNSWIndex(3, 16, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Add(chunkID, []float32{1, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	idx.generation = "old-generation"
+	idx.persistPath = filepath.Join(t.TempDir(), "vectors.hnsw")
+	if err := idx.Save(idx.persistPath); err != nil {
+		t.Fatalf("save stale index: %v", err)
+	}
+	if err := s.UpdateChunkEmbedding(chunkID, []float32{0, 1, 0}); err != nil {
+		t.Fatalf("UpdateChunkEmbedding: %v", err)
+	}
+	s.SetVectorIndex(idx)
+
+	if err := s.RecoverVectorIndex(context.Background()); err != nil {
+		t.Fatalf("RecoverVectorIndex: %v", err)
+	}
+	if !idx.Contains(chunkID) || idx.Warning() == "" {
+		t.Fatalf("recovered index contains=%v warning=%q, want rebuilt graph and warning", idx.Contains(chunkID), idx.Warning())
+	}
+}
+
+func TestStoreCloseReturnsVectorFlushError(t *testing.T) {
+	s := newTestStore(t)
+	idx, err := newHNSWIndex(3, 16, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx.persistPath = filepath.Join(t.TempDir(), "missing", "vectors.hnsw")
+	if err := idx.Add(1, []float32{1, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	s.SetVectorIndex(idx)
+
+	if err := s.Close(); err == nil {
+		t.Fatal("Close returned nil after vector flush failure")
+	}
+	if err := s.Close(); err == nil {
+		t.Fatal("second Close returned nil after the original flush failure")
+	}
+	if err := s.db.Ping(); err == nil {
+		t.Fatal("database remained open after Close returned a flush error")
+	}
+}
+
 func TestHNSWIndex_Add(t *testing.T) {
 	idx, err := newHNSWIndex(3, 16, 50)
 	if err != nil {
@@ -160,6 +273,55 @@ func TestHNSWIndex_Add(t *testing.T) {
 	err = idx.Add(2, []float32{0.1, 0.2})
 	if err == nil {
 		t.Errorf("expected error for dimension mismatch, got nil")
+	}
+}
+
+func TestHNSWIndexSaveLoadRoundTripWithManifest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vectors.hnsw")
+	idx, err := newHNSWIndex(3, 16, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Add(7, []float32{1, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := os.Stat(path + ".meta.json"); err != nil {
+		t.Fatalf("manifest missing: %v", err)
+	}
+
+	loaded, err := newHNSWIndex(3, 16, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loaded.Load(path); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.Len() != 1 || !loaded.Contains(7) {
+		t.Fatalf("loaded index = len %d, contains(7)=%v", loaded.Len(), loaded.Contains(7))
+	}
+}
+
+func TestHNSWIndexRejectsManifestDimensionMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vectors.hnsw")
+	idx, err := newHNSWIndex(3, 16, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Add(1, []float32{1, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	wrong, err := newHNSWIndex(4, 16, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wrong.Load(path); err == nil || !strings.Contains(err.Error(), "manifest mismatch") {
+		t.Fatalf("load error = %v, want manifest mismatch", err)
 	}
 }
 

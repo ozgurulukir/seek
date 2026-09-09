@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -81,6 +82,11 @@ func (f *FastFieldStore) Get(docID int64, fieldName string) (interface{}, error)
 
 // BatchGet retrieves fast field values for multiple documents.
 func (f *FastFieldStore) BatchGet(docIDs []int64, fieldName string) (map[int64]interface{}, error) {
+	return f.BatchGetContext(context.Background(), docIDs, fieldName)
+}
+
+// BatchGetContext retrieves fast fields while honoring query cancellation.
+func (f *FastFieldStore) BatchGetContext(ctx context.Context, docIDs []int64, fieldName string) (map[int64]interface{}, error) {
 	if err := f.ensureTable(); err != nil {
 		return nil, err
 	}
@@ -102,7 +108,7 @@ func (f *FastFieldStore) BatchGet(docIDs []int64, fieldName string) (map[int64]i
 	)
 	args = append(args, fieldName)
 
-	rows, err := f.db.Query(query, args...)
+	rows, err := f.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

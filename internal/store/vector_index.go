@@ -1,10 +1,16 @@
 package store
 
 import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/coder/hnsw"
@@ -31,15 +37,49 @@ type VectorIndex interface {
 	Contains(id int64) bool
 }
 
+// VectorIndexFlusher is implemented by persistent indexes that need an
+// explicit lifecycle flush before the owning Store closes.
+type VectorIndexFlusher interface {
+	Flush() error
+}
+
+// VectorIndexWarning exposes recoverable persistence problems to the runtime
+// so a fresh rebuild is visible instead of becoming a silent fallback.
+type VectorIndexWarning interface {
+	Warning() string
+}
+
+// VectorIndexMetadata is implemented by persistent indexes whose manifest is
+// tied to the current database vector generation.
+type VectorIndexMetadata interface {
+	ManifestGeneration() string
+	SetManifestGeneration(string)
+	SetWarning(string)
+}
+
 // --- HNSW Implementation ---
 
 type hnswIndex struct {
-	graph    *hnsw.Graph[int64]
-	dim      int
-	m        int
-	efSearch int
-	mu       sync.RWMutex
-	dirty    bool
+	graph             *hnsw.Graph[int64]
+	dim               int
+	m                 int
+	efSearch          int
+	mu                sync.RWMutex
+	dirty             bool
+	persistPath       string
+	warning           string
+	configFingerprint string
+	generation        string
+}
+
+type vectorManifest struct {
+	Backend           string `json:"backend"`
+	Version           int    `json:"version"`
+	Dimension         int    `json:"dimension"`
+	M                 int    `json:"m"`
+	EFSearch          int    `json:"ef_search"`
+	ConfigFingerprint string `json:"config_fingerprint,omitempty"`
+	VectorGeneration  string `json:"vector_generation,omitempty"`
 }
 
 func newHNSWIndex(dim, m, efSearch int) (*hnswIndex, error) {
@@ -135,23 +175,91 @@ func (h *hnswIndex) Save(path string) error {
 	if err := tmp.CloseAtomicallyReplace(); err != nil {
 		return fmt.Errorf("atomically replace hnsw index: %w", err)
 	}
+	manifest, err := json.Marshal(vectorManifest{
+		Backend:           "hnsw",
+		Version:           2,
+		Dimension:         h.dim,
+		M:                 h.m,
+		EFSearch:          h.efSearch,
+		ConfigFingerprint: h.configFingerprint,
+		VectorGeneration:  h.generation,
+	})
+	if err != nil {
+		return fmt.Errorf("encode hnsw manifest: %w", err)
+	}
+	if err := renameio.WriteFile(path+".meta.json", manifest, 0600); err != nil {
+		return fmt.Errorf("write hnsw manifest: %w", err)
+	}
 	h.dirty = false
+	h.persistPath = path
 	return nil
 }
 
 func (h *hnswIndex) Load(path string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	manifestBytes, err := os.ReadFile(path + ".meta.json")
+	if err != nil {
+		return fmt.Errorf("read hnsw manifest: %w", err)
+	}
+	var manifest vectorManifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		return fmt.Errorf("parse hnsw manifest: %w", err)
+	}
+	if manifest.Backend != "hnsw" || manifest.Version != 2 || manifest.Dimension != h.dim || manifest.M != h.m || manifest.EFSearch != h.efSearch || (h.configFingerprint != "" && manifest.ConfigFingerprint != h.configFingerprint) {
+		return fmt.Errorf("hnsw manifest mismatch: got backend=%q version=%d dimension=%d m=%d ef_search=%d fingerprint=%q, want backend=hnsw version=2 dimension=%d m=%d ef_search=%d fingerprint=%q", manifest.Backend, manifest.Version, manifest.Dimension, manifest.M, manifest.EFSearch, manifest.ConfigFingerprint, h.dim, h.m, h.efSearch, h.configFingerprint)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	if err := h.graph.Import(f); err != nil {
+	if err := h.graph.Import(bufio.NewReader(f)); err != nil {
 		return err
 	}
 	h.dirty = false
+	h.persistPath = path
+	h.generation = manifest.VectorGeneration
 	return nil
+}
+
+// Flush persists a dirty HNSW graph to the configured path. An in-memory test
+// index without a persistence path remains a valid non-persistent index.
+func (h *hnswIndex) Flush() error {
+	h.mu.RLock()
+	path := h.persistPath
+	h.mu.RUnlock()
+	if path == "" {
+		return nil
+	}
+	return h.Save(path)
+}
+
+func (h *hnswIndex) Warning() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.warning
+}
+
+func (h *hnswIndex) SetWarning(warning string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.warning = warning
+}
+
+func (h *hnswIndex) SetManifestGeneration(generation string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.generation != generation {
+		h.generation = generation
+		h.dirty = true
+	}
+}
+
+func (h *hnswIndex) ManifestGeneration() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.generation
 }
 
 func (h *hnswIndex) Len() int {
@@ -283,16 +391,23 @@ func NewVectorIndex(cfg *config.AppConfig) (VectorIndex, error) {
 		if err != nil {
 			return nil, err
 		}
+		idx.configFingerprint = vectorConfigFingerprint(cfg)
 		// Try to load existing index
 		path := cfg.Config.VectorIndex.HNSW.PersistPath
 		if path != "" {
+			idx.persistPath = path
 			if _, err := os.Stat(path); err == nil {
 				if err := idx.Load(path); err != nil {
-					// Corrupt index — fall back to fresh HNSW
+					// Corrupt, legacy, or dimension-mismatched index — fall back
+					// to a fresh HNSW, but retain a warning for the runtime.
+					warning := fmt.Sprintf("vector index %q was rebuilt: %v", path, err)
 					idx, err = newHNSWIndex(dim, m, efSearch)
 					if err != nil {
 						return nil, fmt.Errorf("rebuild hnsw index: %w", err)
 					}
+					idx.configFingerprint = vectorConfigFingerprint(cfg)
+					idx.persistPath = path
+					idx.warning = warning
 				}
 			}
 		}
@@ -302,4 +417,22 @@ func NewVectorIndex(cfg *config.AppConfig) (VectorIndex, error) {
 	default:
 		return newLinearIndex(dim), nil
 	}
+}
+
+func vectorConfigFingerprint(cfg *config.AppConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	e := cfg.Config.Embedding
+	h := sha256.Sum256([]byte(strings.Join([]string{
+		e.BaseURL,
+		e.Model,
+		strconv.Itoa(e.Dimensions),
+		e.VLBaseURL,
+		strconv.FormatBool(e.Multimodal),
+		e.TaskPrefix.Query,
+		e.TaskPrefix.Document,
+		strconv.FormatBool(e.TaskPrefix.DisableAutoDetect),
+	}, "\x00")))
+	return hex.EncodeToString(h[:])
 }

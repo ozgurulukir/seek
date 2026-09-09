@@ -1,8 +1,11 @@
 package store
 
 import (
+	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"github.com/viterin/vek/vek32"
 	"math"
@@ -15,11 +18,19 @@ import (
 // no changes.
 
 func (s *Store) SyncVectorIndex() error {
-	_, err := s.syncVectorIndexFull()
+	return s.SyncVectorIndexContext(context.Background())
+}
+
+func (s *Store) SyncVectorIndexContext(ctx context.Context) error {
+	_, err := s.syncVectorIndexFullContext(ctx)
 	return err
 }
 
 func (s *Store) syncVectorIndexFull() (int, error) {
+	return s.syncVectorIndexFullContext(context.Background())
+}
+
+func (s *Store) syncVectorIndexFullContext(ctx context.Context) (int, error) {
 	if s.vectorIndex == nil {
 		return 0, nil
 	}
@@ -29,7 +40,7 @@ func (s *Store) syncVectorIndexFull() (int, error) {
 		return 0, fmt.Errorf("clear vector index: %w", err)
 	}
 
-	rows, err := s.db.Query(`SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL`)
 	if err != nil {
 		return 0, err
 	}
@@ -37,6 +48,9 @@ func (s *Store) syncVectorIndexFull() (int, error) {
 
 	added := 0
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return added, err
+		}
 		var chunkID int64
 		var embBlob []byte
 		if err := rows.Scan(&chunkID, &embBlob); err != nil {
@@ -58,27 +72,31 @@ func (s *Store) syncVectorIndexFull() (int, error) {
 // If the vector index is empty or contains stale entries from deleted documents, it runs a full sync.
 // It scans only chunk IDs first to avoid loading megabytes of embedding BLOBs into memory.
 func (s *Store) SyncVectorIndexIncremental() (int, error) {
+	return s.SyncVectorIndexIncrementalContext(context.Background())
+}
+
+func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, error) {
 	if s.vectorIndex == nil {
 		return 0, nil
 	}
 
 	if s.vectorIndex.Len() == 0 {
-		return s.syncVectorIndexFull()
+		return s.syncVectorIndexFullContext(ctx)
 	}
 
 	var dbCount int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL`).Scan(&dbCount); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL`).Scan(&dbCount); err != nil {
 		return 0, err
 	}
 
 	// If index has more entries than DB has embedded chunks, chunks were deleted;
 	// perform full sync to purge stale entries from the HNSW graph.
 	if s.vectorIndex.Len() > dbCount {
-		return s.syncVectorIndexFull()
+		return s.syncVectorIndexFullContext(ctx)
 	}
 
 	// Fast ID-only scan: minimal RAM & I/O (does not read multi-megabyte BLOBs)
-	rows, err := s.db.Query(`SELECT id FROM chunks WHERE embedding IS NOT NULL`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM chunks WHERE embedding IS NOT NULL`)
 	if err != nil {
 		return 0, err
 	}
@@ -86,6 +104,9 @@ func (s *Store) SyncVectorIndexIncremental() (int, error) {
 
 	var missingIDs []int64
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		var chunkID int64
 		if err := rows.Scan(&chunkID); err != nil {
 			return 0, err
@@ -105,8 +126,11 @@ func (s *Store) SyncVectorIndexIncremental() (int, error) {
 	// Load and insert embeddings only for missing chunks
 	added := 0
 	for _, chunkID := range missingIDs {
+		if err := ctx.Err(); err != nil {
+			return added, err
+		}
 		var embBlob []byte
-		err := s.db.QueryRow(`SELECT embedding FROM chunks WHERE id = ?`, chunkID).Scan(&embBlob)
+		err := s.db.QueryRowContext(ctx, `SELECT embedding FROM chunks WHERE id = ?`, chunkID).Scan(&embBlob)
 		if err != nil || len(embBlob) == 0 {
 			continue
 		}
@@ -120,7 +144,40 @@ func (s *Store) SyncVectorIndexIncremental() (int, error) {
 	return added, nil
 }
 
+func (s *Store) vectorGenerationContext(ctx context.Context) (string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL ORDER BY id`)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	h := sha256.New()
+	var idBuf [8]byte
+	for rows.Next() {
+		var id int64
+		var embedding []byte
+		if err := rows.Scan(&id, &embedding); err != nil {
+			return "", err
+		}
+		binary.LittleEndian.PutUint64(idBuf[:], uint64(id))
+		_, _ = h.Write(idBuf[:])
+		_, _ = h.Write(embedding)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 func (s *Store) SearchVector(queryEmb []float32, limit int, filters *FilterSet) ([]SearchResult, error) {
+	return s.SearchVectorContext(context.Background(), queryEmb, limit, filters)
+}
+
+// SearchVectorContext performs vector search while honoring cancellation for
+// both the HNSW result fetch and the linear-scan fallback.
+func (s *Store) SearchVectorContext(ctx context.Context, queryEmb []float32, limit int, filters *FilterSet) ([]SearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Use HNSW index if available
 	if s.vectorIndex != nil {
 		// HNSW returns chunk IDs; we push filters into the SQL fetch query
@@ -132,7 +189,7 @@ func (s *Store) SearchVector(queryEmb []float32, limit int, filters *FilterSet) 
 		}
 		results, err := s.vectorIndex.Search(queryEmb, searchLimit)
 		if err == nil && len(results) > 0 {
-			fullResults, err := s.fetchSearchResults(results, filters)
+			fullResults, err := s.fetchSearchResultsContext(ctx, results, filters)
 			if err != nil {
 				return nil, err
 			}
@@ -144,7 +201,7 @@ func (s *Store) SearchVector(queryEmb []float32, limit int, filters *FilterSet) 
 		// Fall through to linear scan on error or empty results
 	}
 
-	return s.linearSearchVector(queryEmb, limit, filters)
+	return s.linearSearchVectorContext(ctx, queryEmb, limit, filters)
 }
 
 // chunkRow is the shared chunk projection used by the vector-search paths
@@ -228,6 +285,10 @@ func scanChunkRows(rows *sql.Rows, wantEmbedding bool) ([]chunkRow, [][]byte, er
 
 // linearSearchVector performs a linear scan over all embedded chunks with optional filters.
 func (s *Store) linearSearchVector(queryEmb []float32, limit int, filters *FilterSet) ([]SearchResult, error) {
+	return s.linearSearchVectorContext(context.Background(), queryEmb, limit, filters)
+}
+
+func (s *Store) linearSearchVectorContext(ctx context.Context, queryEmb []float32, limit int, filters *FilterSet) ([]SearchResult, error) {
 	sqlQuery := `SELECT ` + chunkRowColumns + `, ch.embedding
 		 FROM chunks ch
 		 JOIN documents d ON d.id = ch.document_id
@@ -239,7 +300,7 @@ func (s *Store) linearSearchVector(queryEmb []float32, limit int, filters *Filte
 		return nil, err
 	}
 
-	rows, err := s.db.Query(sqlQuery, args...)
+	rows, err := s.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -295,6 +356,10 @@ func (s *Store) linearSearchVector(queryEmb []float32, limit int, filters *Filte
 // fetchSearchResults fetches full SearchResult data for HNSW results.
 // Filters are pushed into the SQL WHERE clause so the DB handles filtering.
 func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) ([]SearchResult, error) {
+	return s.fetchSearchResultsContext(context.Background(), results, filters)
+}
+
+func (s *Store) fetchSearchResultsContext(ctx context.Context, results []VectorResult, filters *FilterSet) ([]SearchResult, error) {
 	if len(results) == 0 {
 		return nil, nil
 	}
@@ -329,7 +394,7 @@ func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) (
 		return nil, fmt.Errorf("fetch search results filters: %w", err)
 	}
 
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("fetch search results query: %w", err)
 	}

@@ -1,13 +1,17 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"github.com/ozgurulukir/seek/internal/config"
 	"os"
+	"strings"
+	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
-	"strings"
+
+	"github.com/ozgurulukir/seek/internal/config"
 )
 
 type Store struct {
@@ -16,6 +20,8 @@ type Store struct {
 	fastFields         *FastFieldStore
 	compressionEnabled bool
 	compressionLevel   int
+	closeOnce          sync.Once
+	closeErr           error
 }
 
 func Open(dbPath string) (*Store, error) {
@@ -44,12 +50,74 @@ func (s *Store) DB() *sql.DB {
 }
 
 func (s *Store) Close() error {
-	return s.db.Close()
+	s.closeOnce.Do(func() {
+		var errs []error
+		if err := s.FlushVectorIndex(context.Background()); err != nil {
+			errs = append(errs, err)
+		}
+		if s.db != nil {
+			if err := s.db.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close database: %w", err))
+			}
+		}
+		s.closeErr = errors.Join(errs...)
+	})
+	return s.closeErr
+}
+
+// FlushVectorIndex publishes the vector graph and its manifest before the
+// database is closed. The generation is calculated from the persisted
+// embeddings so a restart can reject a stale graph instead of returning ghost
+// vector hits.
+func (s *Store) FlushVectorIndex(ctx context.Context) error {
+	if s.vectorIndex == nil {
+		return nil
+	}
+	var errs []error
+	if metadata, ok := s.vectorIndex.(VectorIndexMetadata); ok {
+		generation, err := s.vectorGenerationContext(ctx)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("calculate vector generation: %w", err))
+		} else {
+			metadata.SetManifestGeneration(generation)
+		}
+	}
+	if flusher, ok := s.vectorIndex.(VectorIndexFlusher); ok {
+		if err := flusher.Flush(); err != nil {
+			errs = append(errs, fmt.Errorf("flush vector index: %w", err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // SetVectorIndex sets the vector index backend (HNSW or linear scan).
 func (s *Store) SetVectorIndex(idx VectorIndex) {
 	s.vectorIndex = idx
+}
+
+// RecoverVectorIndex validates the loaded manifest against the current
+// persisted embeddings. A mismatch is a safe stale state: clear the graph,
+// rebuild from SQLite, and expose the repair through the warning interface.
+func (s *Store) RecoverVectorIndex(ctx context.Context) error {
+	metadata, ok := s.vectorIndex.(VectorIndexMetadata)
+	if !ok || metadata.ManifestGeneration() == "" {
+		return nil
+	}
+	current, err := s.vectorGenerationContext(ctx)
+	if err != nil {
+		return fmt.Errorf("read vector generation: %w", err)
+	}
+	if current == metadata.ManifestGeneration() {
+		return nil
+	}
+	if err := s.vectorIndex.Clear(); err != nil {
+		return fmt.Errorf("clear stale vector index: %w", err)
+	}
+	metadata.SetWarning(fmt.Sprintf("vector index rebuilt because persisted embeddings changed (generation %s -> %s)", metadata.ManifestGeneration(), current))
+	if _, err := s.syncVectorIndexFullContext(ctx); err != nil {
+		return fmt.Errorf("rebuild stale vector index: %w", err)
+	}
+	return nil
 }
 
 // FastFields returns the fast field store for sorting and aggregation.
@@ -66,6 +134,13 @@ func (s *Store) SetCompression(enabled bool, level int) {
 		level = 3
 	}
 	s.compressionLevel = level
+}
+
+// ConfigureCompression applies the persisted compression setting using one
+// consistent interpretation of the empty and "none" values.
+func (s *Store) ConfigureCompression(cfg config.CompressionConfig) {
+	algorithm := strings.ToLower(strings.TrimSpace(cfg.Algorithm))
+	s.SetCompression(algorithm != "" && algorithm != "none", cfg.Level)
 }
 
 // SyncVectorIndex adds all embedded chunks to the vector index.
