@@ -119,16 +119,20 @@ func EmbedPending(cfg *config.AppConfig, db *store.Store, opts Options, log Logg
 			log.Printf("  skip embeddings: text client unavailable — check embedding.api_key")
 			return nil
 		}
-		texts := make([]string, len(textChunks))
-		for i, ch := range textChunks {
-			texts[i] = ch.Content
+		// Nothing to embed text-wise (only image chunks, non-multimodal):
+		// skip the embed call entirely rather than round-trip an empty batch.
+		if len(textChunks) > 0 {
+			texts := make([]string, len(textChunks))
+			for i, ch := range textChunks {
+				texts[i] = ch.Content
+			}
+			if opts.Realtime || !opts.Batch {
+				updated = embedRealtime(db, embedClient, textChunks, texts, log)
+			} else {
+				updated = embedBatch(db, embedClient, textChunks, texts, log)
+			}
+			log.Printf("Embedded %d/%d text chunks", updated, len(textChunks))
 		}
-		if opts.Realtime || !opts.Batch {
-			updated = embedRealtime(db, embedClient, textChunks, texts, log)
-		} else {
-			updated = embedBatch(db, embedClient, textChunks, texts, log)
-		}
-		log.Printf("Embedded %d/%d text chunks", updated, len(textChunks))
 	}
 
 	if opts.VectorIndex {

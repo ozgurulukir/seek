@@ -699,14 +699,25 @@ func newMockVectorServer(t *testing.T) *httptest.Server {
 
 func testSearchVectorNoEmbedClients(t *testing.T, s *store.Store) {
 	t.Helper()
-	engine := NewEngine(s, nil)
-	_, err := engine.SearchVector(context.Background(), "query", 10, Options{})
-	if err == nil {
-		t.Fatal("expected error when no embed client is provided")
+	assertDegrades := func(engine *Engine) {
+		t.Helper()
+		_, err := engine.SearchVector(context.Background(), "query", 10, Options{})
+		if err == nil {
+			t.Fatal("expected error when no embed client is provided")
+		}
+		if err.Error() != "vector search requires embedding client" {
+			t.Errorf("unexpected error: %v", err)
+		}
 	}
-	if err.Error() != "vector search requires embedding client" {
-		t.Errorf("unexpected error: %v", err)
-	}
+
+	// Plain nil interface.
+	assertDegrades(NewEngine(s, nil))
+
+	// Typed-nil: a factory returning a (*embed.Client)(nil) boxes a typed-nil
+	// into the interface, which `!= nil` cannot catch. The engine must still
+	// degrade cleanly instead of calling EmbedQuery on a nil receiver.
+	var typedNil embed.QueryEmbedder = (*embed.Client)(nil)
+	assertDegrades(NewEngine(s, typedNil))
 }
 
 func testSearchVectorWithEmbedClient(t *testing.T, s *store.Store, baseURL string) {

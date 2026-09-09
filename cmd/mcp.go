@@ -29,6 +29,11 @@ type mcpSearchArgs struct {
 	Collection string `json:"collection,omitempty" jsonschema:"filter by collection name"`
 }
 
+// maxMCPResults caps how many results a single MCP search may return, so a
+// hostile or buggy client cannot force the server to materialize the whole
+// index (huge JSON, memory pressure).
+const maxMCPResults = 100
+
 // mcpSearchResult mirrors the `seek search --json` result fields so agents
 // get the same shape over both surfaces.
 type mcpSearchResult struct {
@@ -95,6 +100,8 @@ func buildMCPServer(db *store.Store, cfg *config.AppConfig) (*mcp.Server, error)
 		limit := args.Limit
 		if limit <= 0 {
 			limit = 10
+		} else if limit > maxMCPResults {
+			limit = maxMCPResults
 		}
 		results, err := runMCPSearch(ctx, engine, cfg, &args, limit)
 		if err != nil {
