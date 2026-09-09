@@ -187,3 +187,53 @@ func TestEmbeddingCapability(t *testing.T) {
 		}
 	})
 }
+
+func TestEmbedPending_BatchFlagSelectsPath(t *testing.T) {
+	var batchHits, realtimeHits int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/files":
+			batchHits++
+			json.NewEncoder(w).Encode(map[string]any{"id": "file-1"})
+		case strings.Contains(r.URL.Path, "/embeddings/batches"):
+			batchHits++
+			json.NewEncoder(w).Encode(map[string]any{"id": "batch-1"})
+		case r.URL.Path == "/embeddings" && r.Method == http.MethodPost:
+			realtimeHits++
+			var body struct {
+				Input []string `json:"input"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			data := make([]map[string]any, len(body.Input))
+			for i := range body.Input {
+				data[i] = map[string]any{"embedding": []float32{0.1}, "index": i}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": data})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+
+	db := newPipelineStore(t)
+	cfg := appConfigFor(t, func(c *config.Config) {
+		c.Embedding.BaseURL = ts.URL
+		c.Embedding.Model = "text-embedding-3-small"
+		c.Embedding.APIKey = "test-key"
+		c.Embedding.Dimensions = 1
+	})
+
+	// Batch=false must take the realtime path (this is what --no-batch means).
+	var log captureLogger
+	if err := EmbedPending(cfg, db, Options{Batch: false}, &log); err != nil {
+		t.Fatalf("embed pending: %v", err)
+	}
+	if realtimeHits == 0 {
+		t.Errorf("Batch=false must use the realtime /embeddings endpoint, hits: realtime=%d batch=%d", realtimeHits, batchHits)
+	}
+	remaining, _ := db.GetChunksWithoutEmbedding(false)
+	if len(remaining) != 0 {
+		t.Errorf("chunk not embedded: %d remaining", len(remaining))
+	}
+}

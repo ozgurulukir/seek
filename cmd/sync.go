@@ -16,6 +16,7 @@ type SyncCmd struct {
 	Collection string `arg:"" optional:"" help:"Sync a specific collection (default: all)"`
 	Type       string `help:"Sync only collections of this type"`
 	NoEmbed    bool   `help:"Skip embedding newly synced chunks (keyword-only)"`
+	Realtime   bool   `help:"Embed with the realtime API instead of the async batch API"`
 	NoLock     bool   `hidden:""`
 }
 
@@ -84,6 +85,8 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) error {
 			}
 		}
 		if err := pipeline.EmbedPending(cfg, db, pipeline.Options{
+			Batch:       true, // default batch API, same as `seek embed`
+			Realtime:    c.Realtime,
 			Type:        c.Type,
 			VectorIndex: vectorIndex,
 		}, pipeline.NewStdoutLogger(os.Stdout)); err != nil {

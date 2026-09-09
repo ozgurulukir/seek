@@ -51,6 +51,7 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
 	return pipeline.EmbedPending(cfg, db, pipeline.Options{
 		Force:       c.Force,
 		Realtime:    c.Realtime,
+		Batch:       c.Batch,
 		Type:        c.Type,
 		VectorIndex: vectorIndex,
 	}, pipeline.NewStdoutLogger(os.Stdout))

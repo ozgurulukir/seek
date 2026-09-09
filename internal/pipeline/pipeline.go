@@ -39,6 +39,10 @@ type Options struct {
 	// Realtime uses the synchronous per-batch API instead of the async
 	// batch API.
 	Realtime bool
+	// Batch, when false, forces the realtime API (mirrors `seek embed
+	// --no-batch`). Zero value is false, so callers that want the default
+	// batch behaviour must set it explicitly.
+	Batch bool
 	// Type restricts embedding to collections of this type ("" = all).
 	Type string
 	// VectorIndex, when true, refreshes the HNSW index after embedding
@@ -119,7 +123,7 @@ func EmbedPending(cfg *config.AppConfig, db *store.Store, opts Options, log Logg
 		for i, ch := range textChunks {
 			texts[i] = ch.Content
 		}
-		if opts.Realtime {
+		if opts.Realtime || !opts.Batch {
 			updated = embedRealtime(db, embedClient, textChunks, texts, log)
 		} else {
 			updated = embedBatch(db, embedClient, textChunks, texts, log)
@@ -248,7 +252,6 @@ func embedRealtime(db *store.Store, client *embed.Client, chunks []store.Chunk, 
 		}
 		log.Printf("\r  %d/%d", updated, len(chunks))
 	}
-	log.Printf("\nEmbedded %d/%d chunks", updated, len(chunks))
 	return updated
 }
 
