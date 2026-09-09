@@ -3,14 +3,14 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
-	"github.com/ozgurulukir/seek/internal/store"
 )
 
 type StatusCmd struct{}
 
 func (c *StatusCmd) Run(cfg *config.AppConfig) error {
-	db, err := store.Open(cfg.DBPath)
+	db, err := app.OpenStore(cfg)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}

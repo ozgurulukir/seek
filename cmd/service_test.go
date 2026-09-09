@@ -1,10 +1,53 @@
 package cmd
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestServiceTemplates_RunSyncOnce(t *testing.T) {
+	data := struct {
+		Label    string
+		Binary   string
+		Interval int
+		LogPath  string
+	}{
+		Label:    serviceLabel,
+		Binary:   "/path with spaces/seek",
+		Interval: 3600,
+		LogPath:  "/tmp/seek.log",
+	}
+
+	var plist bytes.Buffer
+	if err := plistTemplate.Execute(&plist, data); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plist.String(), "&&") {
+		t.Fatalf("launchd template still chains a second child command:\n%s", plist.String())
+	}
+	if got := strings.Count(plist.String(), " sync"); got != 1 {
+		t.Fatalf("launchd template contains %d sync commands, want 1", got)
+	}
+
+	var systemd bytes.Buffer
+	if err := systemdServiceTemplate.Execute(&systemd, data); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(systemd.String(), "\nExecStart=\""+data.Binary+"\" embed") {
+		t.Fatalf("systemd template still starts a child embed command:\n%s", systemd.String())
+	}
+	if got := strings.Count(systemd.String(), "ExecStart="); got != 1 {
+		t.Fatalf("systemd template contains %d ExecStart entries, want 1", got)
+	}
+
+	if got, want := fmt.Sprintf(`cmd.exe /c ""%s" sync"`, data.Binary), `cmd.exe /c ""/path with spaces/seek" sync"`; got != want {
+		t.Fatalf("windows task command = %q, want %q", got, want)
+	}
+}
 
 func TestServiceStartCmd_Helpers(t *testing.T) {
 	// Test shellQuote function

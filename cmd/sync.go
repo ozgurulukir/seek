@@ -2,14 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
-	"github.com/ozgurulukir/seek/internal/indexer"
 	"github.com/ozgurulukir/seek/internal/pipeline"
-	"github.com/ozgurulukir/seek/internal/store"
 )
 
 type SyncCmd struct {
@@ -20,26 +20,34 @@ type SyncCmd struct {
 	NoLock     bool   `hidden:""`
 }
 
-func (c *SyncCmd) Run(cfg *config.AppConfig) error {
+func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 	if c.NoLock && os.Getenv(hookLockEnv) != "1" {
 		return fmt.Errorf("--no-lock is reserved for internal hook execution")
 	}
+	ctx := context.Background()
 	if !c.NoLock {
-		ctx, cancel := context.WithTimeout(context.Background(), hookLockWaitTimeout)
+		lockCtx, cancel := context.WithTimeout(ctx, hookLockWaitTimeout)
 		defer cancel()
-		lock, err := acquireHookLock(ctx, hookSyncLockPath(cfg))
-		if err != nil {
-			return fmt.Errorf("acquire writer lock: %w", err)
+		lock, lockErr := acquireHookLock(lockCtx, hookSyncLockPath(cfg))
+		if lockErr != nil {
+			return fmt.Errorf("acquire writer lock: %w", lockErr)
 		}
 		defer lock.Close()
 	}
-	db, err := store.Open(cfg.DBPath)
+	runtime, err := app.Open(cfg)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
-	defer db.Close()
+	defer func() {
+		if closeErr := runtime.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
+	for _, warning := range runtime.Warnings {
+		fmt.Fprintf(os.Stderr, "WARN: %s\n", warning)
+	}
 
-	collections, err := db.ListCollections()
+	collections, err := runtime.Store.ListCollections()
 	if err != nil {
 		return err
 	}
@@ -49,7 +57,7 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) error {
 		return nil
 	}
 
-	idx := indexer.New(cfg, db)
+	idx := runtime.Indexer.WithContext(ctx)
 	var failedNames []string
 
 	for i := range collections {
@@ -63,7 +71,7 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) error {
 
 		fmt.Printf("Syncing %q (%s)...\n", col.Name, col.Type)
 
-		if err := idx.SyncCollection(col); err != nil {
+		if err := idx.SyncCollectionContext(ctx, col); err != nil {
 			failedNames = append(failedNames, col.Name)
 			fmt.Printf("  ERROR [%s]: %v\n", col.Name, err)
 		}
@@ -77,18 +85,11 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) error {
 	// embedding capability is a configuration state, not a failure — the
 	// pipeline warns once and leaves chunks pending (keyword search works).
 	if !c.NoEmbed {
-		vectorIndex := false
-		if cfg.Config.VectorIndex.Backend != "" && cfg.Config.VectorIndex.Backend != "linear" {
-			if vi, err := store.NewVectorIndex(cfg); err == nil {
-				db.SetVectorIndex(vi)
-				vectorIndex = true
-			}
-		}
-		if err := pipeline.EmbedPending(cfg, db, pipeline.Options{
+		if err := runtime.EmbedPending(ctx, pipeline.Options{
 			Batch:       true, // default batch API, same as `seek embed`
 			Realtime:    c.Realtime,
 			Type:        c.Type,
-			VectorIndex: vectorIndex,
+			VectorIndex: true,
 		}, pipeline.NewStdoutLogger(os.Stdout)); err != nil {
 			return fmt.Errorf("embed pending chunks: %w", err)
 		}

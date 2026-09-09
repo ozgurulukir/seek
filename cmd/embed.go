@@ -2,12 +2,13 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
+	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/pipeline"
-	"github.com/ozgurulukir/seek/internal/store"
 )
 
 type EmbedCmd struct {
@@ -18,7 +19,7 @@ type EmbedCmd struct {
 	NoLock   bool   `hidden:""`
 }
 
-func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
+func (c *EmbedCmd) Run(cfg *config.AppConfig) (err error) {
 	if c.NoLock && os.Getenv(hookLockEnv) != "1" {
 		return fmt.Errorf("--no-lock is reserved for internal hook execution")
 	}
@@ -31,28 +32,26 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) error {
 		}
 		defer lock.Close()
 	}
-	db, err := store.Open(cfg.DBPath)
+	runtime, err := app.Open(cfg)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
-	defer db.Close()
-
-	vectorIndex := false
-	if cfg.Config.VectorIndex.Backend != "" && cfg.Config.VectorIndex.Backend != "linear" {
-		if vi, err := store.NewVectorIndex(cfg); err == nil {
-			db.SetVectorIndex(vi)
-			vectorIndex = true
+	defer func() {
+		if closeErr := runtime.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
 		}
+	}()
+	for _, warning := range runtime.Warnings {
+		fmt.Fprintf(os.Stderr, "WARN: %s\n", warning)
 	}
-	db.SetCompression(cfg.Config.Compression.Algorithm != "", cfg.Config.Compression.Level)
 
 	// M4: the full embed pass lives in internal/pipeline so `seek sync` and
 	// stop hooks can run it in-process. This command is a thin wrapper.
-	return pipeline.EmbedPending(cfg, db, pipeline.Options{
+	return runtime.EmbedPending(context.Background(), pipeline.Options{
 		Force:       c.Force,
 		Realtime:    c.Realtime,
 		Batch:       c.Batch,
 		Type:        c.Type,
-		VectorIndex: vectorIndex,
+		VectorIndex: true,
 	}, pipeline.NewStdoutLogger(os.Stdout))
 }

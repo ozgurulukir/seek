@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
-	"github.com/ozgurulukir/seek/internal/store"
 )
 
 type RmCmd struct {
@@ -21,7 +21,7 @@ func (c *RmCmd) Run(cfg *config.AppConfig) error {
 	}
 	defer lock.Close()
 
-	db, err := store.Open(cfg.DBPath)
+	db, err := app.OpenStore(cfg)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}

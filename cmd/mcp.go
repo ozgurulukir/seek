@@ -3,11 +3,13 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/search"
@@ -52,14 +54,21 @@ type mcpSearchResult struct {
 	EndLine     int     `json:"end_line"`
 }
 
-func (c *McpCmd) Run(cfg *config.AppConfig) error {
-	db, err := store.Open(cfg.DBPath)
+func (c *McpCmd) Run(cfg *config.AppConfig) (err error) {
+	runtime, err := app.Open(cfg)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
-	defer db.Close()
+	defer func() {
+		if closeErr := runtime.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
+	for _, warning := range runtime.Warnings {
+		fmt.Fprintf(os.Stderr, "WARN: %s\n", warning)
+	}
 
-	server, err := buildMCPServer(db, cfg)
+	server, err := buildMCPServerWithServices(runtime.Store, runtime.Search, cfg)
 	if err != nil {
 		return err
 	}
@@ -74,21 +83,31 @@ func (c *McpCmd) Run(cfg *config.AppConfig) error {
 // the three seek tools. Separated from Run so tests can drive it over an
 // in-memory transport.
 func buildMCPServer(db *store.Store, cfg *config.AppConfig) (*mcp.Server, error) {
-	if cfg.Config.VectorIndex.Backend != "" && cfg.Config.VectorIndex.Backend != "linear" {
-		if vi, err := store.NewVectorIndex(cfg); err == nil {
-			db.SetVectorIndex(vi)
-		}
+	backend := strings.ToLower(strings.TrimSpace(cfg.Config.VectorIndex.Backend))
+	if backend != "" && backend != "linear" && backend != "hnsw" {
+		return nil, fmt.Errorf("unsupported vector index backend %q", cfg.Config.VectorIndex.Backend)
 	}
-	db.SetCompression(cfg.Config.Compression.Algorithm != "", cfg.Config.Compression.Level)
+	if backend == "hnsw" {
+		vi, err := store.NewVectorIndex(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("open vector index: %w", err)
+		}
+		db.SetVectorIndex(vi)
+	}
+	db.ConfigureCompression(cfg.Config.Compression)
 
 	embedClient := embed.NewClientFromConfig(cfg)
 	vlClient := embed.NewVLClientFromConfig(cfg)
 	var engine *search.Engine
 	if vlClient != nil {
-		engine = search.NewEngineWithVL(db, embedClient, vlClient)
+		engine = search.NewEngineWithVL(search.NewStoreRepository(db), embedClient, vlClient)
 	} else {
-		engine = search.NewEngine(db, embedClient)
+		engine = search.NewEngine(search.NewStoreRepository(db), embedClient)
 	}
+	return buildMCPServerWithServices(db, engine, cfg)
+}
+
+func buildMCPServerWithServices(db *store.Store, engine *search.Engine, cfg *config.AppConfig) (*mcp.Server, error) {
 	engine.WithLogger(mcpLogger{})
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "seek", Version: "dev"}, nil)
@@ -110,7 +129,7 @@ func buildMCPServer(db *store.Store, cfg *config.AppConfig) (*mcp.Server, error)
 		// Parity with `seek search --json` (single source of truth in
 		// internal/search/quality.go): chunk-level hits get full content,
 		// document-level hits get markers stripped.
-		enrichJSONContent(db, results)
+		engine.EnrichContent(ctx, results)
 		out := make([]mcpSearchResult, 0, len(results))
 		for _, r := range results {
 			mr := mcpSearchResult{

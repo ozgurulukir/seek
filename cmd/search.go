@@ -3,10 +3,12 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/search"
@@ -50,7 +52,7 @@ type SearchCmd struct {
 	JSON            bool   `help:"Emit machine-readable JSON instead of human-formatted output"`
 }
 
-func (c *SearchCmd) Run(cfg *config.AppConfig) error {
+func (c *SearchCmd) Run(cfg *config.AppConfig) (err error) {
 	ctx := context.Background()
 
 	// Handle analyze mode
@@ -63,24 +65,26 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 		return c.runAutocomplete(cfg)
 	}
 
-	db, err := store.Open(cfg.DBPath)
+	runtime, err := app.Open(cfg)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
-	defer db.Close()
-
-	// Set up vector index if configured
-	if cfg.Config.VectorIndex.Backend != "" && cfg.Config.VectorIndex.Backend != "linear" {
-		vi, err := store.NewVectorIndex(cfg)
-		if err == nil {
-			db.SetVectorIndex(vi)
+	defer func() {
+		if closeErr := runtime.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
 		}
+	}()
+	for _, warning := range runtime.Warnings {
+		fmt.Fprintf(os.Stderr, "WARN: %s\n", warning)
 	}
 
-	// Set up compression
-	db.SetCompression(cfg.Config.Compression.Algorithm != "none", cfg.Config.Compression.Level)
-
-	engine, embedClient, vlClient := c.buildEngine(db, cfg)
+	engine := runtime.Search
+	engine.WithLogger(searchLogger{})
+	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.APIKey != "" && !cfg.Config.OfflineOnly() {
+		reranker := embed.NewRerankClient(cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.APIKey, cfg.Config.Rerank.Model)
+		engine.WithReranker(reranker)
+	}
+	embedClient, vlClient := runtime.EmbedClient, runtime.VLClient
 	filters := c.buildFilters()
 
 	// Build analyzer if tokenization is enabled
@@ -109,7 +113,7 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 	// context expansion. Content is emitted in full (the FTS snippet carries
 	// >>> markers and 40-token truncation; agents decide how much to read).
 	if c.JSON {
-		enrichJSONContent(db, results)
+		engine.EnrichContent(ctx, results)
 		aggs, err := c.computeAggregations(ctx, engine, filters)
 		if err != nil {
 			return fmt.Errorf("aggregations: %w", err)
@@ -129,7 +133,7 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) error {
 		return nil
 	}
 
-	c.expandContext(db, results)
+	c.expandContext(runtime.Store, results)
 	c.printResults(results)
 
 	return nil
@@ -139,26 +143,6 @@ type searchLogger struct{}
 
 func (searchLogger) Printf(format string, v ...interface{}) {
 	fmt.Fprintf(os.Stderr, format, v...)
-}
-
-func (c *SearchCmd) buildEngine(db *store.Store, cfg *config.AppConfig) (*search.Engine, *embed.Client, *embed.VLClient) {
-	embedClient := embed.NewClientFromConfig(cfg)
-	vlClient := embed.NewVLClientFromConfig(cfg)
-
-	var engine *search.Engine
-	if vlClient != nil {
-		engine = search.NewEngineWithVL(db, embedClient, vlClient)
-	} else {
-		engine = search.NewEngine(db, embedClient)
-	}
-	engine.WithLogger(searchLogger{})
-
-	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.APIKey != "" && !cfg.Config.OfflineOnly() {
-		reranker := embed.NewRerankClient(cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.APIKey, cfg.Config.Rerank.Model)
-		engine.WithReranker(reranker)
-	}
-
-	return engine, embedClient, vlClient
 }
 
 func (c *SearchCmd) buildFilters() *store.FilterSet {
@@ -421,7 +405,7 @@ func effectiveAnalyzeLang(flagLang string, cfg *config.AppConfig) string {
 
 // runAutocomplete handles the --autocomplete flag: shows prefix completions.
 func (c *SearchCmd) runAutocomplete(cfg *config.AppConfig) error {
-	db, err := store.Open(cfg.DBPath)
+	db, err := app.OpenStore(cfg)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}

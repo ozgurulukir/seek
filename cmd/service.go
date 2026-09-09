@@ -30,7 +30,7 @@ var plistTemplate = template.Must(template.New("plist").Funcs(template.FuncMap{
 	<array>
 		<string>/bin/sh</string>
 		<string>-c</string>
-		<string>{{shellQuote .Binary}} sync && {{shellQuote .Binary}} embed</string>
+		<string>{{shellQuote .Binary}} sync</string>
 	</array>
 	<key>StartInterval</key>
 	<integer>{{.Interval}}</integer>
@@ -52,19 +52,18 @@ func shellQuote(s string) string {
 }
 
 var systemdServiceTemplate = template.Must(template.New("systemdService").Parse(`[Unit]
-Description=Seek periodic sync and embed
+Description=Seek periodic sync (including in-process embedding)
 After=network.target
 
 [Service]
 Type=oneshot
 ExecStart="{{.Binary}}" sync
-ExecStart="{{.Binary}}" embed
 StandardOutput=append:{{.LogPath}}
 StandardError=append:{{.LogPath}}
 `))
 
 var systemdTimerTemplate = template.Must(template.New("systemdTimer").Parse(`[Unit]
-Description=Run seek periodic sync and embed
+Description=Run seek periodic sync (including in-process embedding)
 
 [Timer]
 OnBootSec=1min
@@ -76,8 +75,8 @@ WantedBy=timers.target
 `))
 
 type ServiceCmd struct {
-	Start  ServiceStartCmd  `cmd:"" help:"Start periodic sync+embed (Task Scheduler / systemd / launchd)"`
-	Stop   ServiceStopCmd   `cmd:"" help:"Stop periodic sync+embed"`
+	Start  ServiceStartCmd  `cmd:"" help:"Start periodic sync (with in-process embedding)"`
+	Stop   ServiceStopCmd   `cmd:"" help:"Stop periodic sync service"`
 	Status ServiceStatusCmd `cmd:"" help:"Show service status"`
 }
 
@@ -148,7 +147,7 @@ func startWindowsService(bin string, interval int) error {
 	if minutes < 1 {
 		minutes = 1
 	}
-	trArg := fmt.Sprintf(`cmd.exe /c ""%s" sync && "%s" embed"`, bin, bin)
+	trArg := fmt.Sprintf(`cmd.exe /c ""%s" sync"`, bin)
 	out, err := exec.Command("schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO", fmt.Sprintf("%d", minutes), "/TN", windowsTask, "/TR", trArg).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("schtasks create: %s (%w)", string(out), err)

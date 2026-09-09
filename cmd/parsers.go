@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/source/parserdef"
 	"github.com/ozgurulukir/seek/internal/store"
@@ -26,7 +27,7 @@ func (c *ParsersListCmd) Run(cfg *config.AppConfig) error {
 	}
 
 	// Load collections to show which schemas are linked.
-	collections, colErr := loadCollectionsByParser(cfg.DBPath)
+	collections, colErr := loadCollectionsByParser(cfg)
 	if colErr != nil {
 		// Collection lookup is best-effort — don't block the entire listing.
 		fmt.Fprintf(os.Stderr, "warning: could not read collections: %v\n", colErr)
@@ -84,12 +85,12 @@ func detectSummary(def *parserdef.ParserDef) (version, detect string) {
 // loadCollectionsByParser groups parser collection names by their parser_name.
 // If the DB doesn't exist yet (fresh install), returns an empty map without
 // creating one — `parsers list` is a read-only introspection command.
-func loadCollectionsByParser(dbPath string) (map[string][]string, error) {
-	if _, err := os.Stat(dbPath); err != nil {
+func loadCollectionsByParser(cfg *config.AppConfig) (map[string][]string, error) {
+	if _, err := os.Stat(cfg.DBPath); err != nil {
 		return make(map[string][]string), nil // DB doesn't exist yet
 	}
 
-	db, err := store.Open(dbPath)
+	db, err := app.OpenStore(cfg)
 	if err != nil {
 		return nil, err
 	}

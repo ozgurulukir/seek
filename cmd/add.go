@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/chunk"
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/indexer"
@@ -58,7 +59,7 @@ func (c *AddCmd) Run(cfg *config.AppConfig) error {
 	}
 	defer lock.Close()
 
-	db, err := store.Open(cfg.DBPath)
+	db, err := app.OpenStore(cfg)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}

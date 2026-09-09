@@ -31,18 +31,16 @@ func (l defaultLogger) Printf(format string, v ...interface{}) {
 }
 
 type Indexer struct {
-	cfg *config.AppConfig
-	db  *store.Store
-	log Logger
+	cfg      *config.AppConfig
+	db       *store.Store
+	log      Logger
+	ctxValue context.Context
 	// ext is an explicit override for the extraction backend, taking precedence
 	// over both per-collection backend and the config default. Set via
 	// WithExtractor (e.g. from a --backend flag). When nil, the backend is
 	// resolved per collection (see extractorFor).
-	ext extractor.Extractor
-	// extCache memoizes extractors by backend name so repeated syncs of
-	// collections with the same backend don't rebuild (and, for xberg,
-	// re-probe health) on every collection.
-	extCache map[string]extractor.Extractor
+	ext      extractor.Extractor
+	resolver ExtractorResolver
 }
 
 func New(cfg *config.AppConfig, db *store.Store) *Indexer {
@@ -50,7 +48,8 @@ func New(cfg *config.AppConfig, db *store.Store) *Indexer {
 		cfg:      cfg,
 		db:       db,
 		log:      defaultLogger{},
-		extCache: make(map[string]extractor.Extractor),
+		ctxValue: context.Background(),
+		resolver: NewConfigExtractorResolver(cfg),
 	}
 }
 
@@ -58,6 +57,13 @@ func New(cfg *config.AppConfig, db *store.Store) *Indexer {
 // a --backend flag). Pass nil to revert to per-collection / config resolution.
 func (idx *Indexer) WithExtractor(ext extractor.Extractor) *Indexer {
 	idx.ext = ext
+	return idx
+}
+
+// WithExtractorResolver injects backend construction so the indexer does not
+// need to know how the composition root obtains extractors.
+func (idx *Indexer) WithExtractorResolver(resolver ExtractorResolver) *Indexer {
+	idx.resolver = resolver
 	return idx
 }
 
@@ -73,25 +79,15 @@ func (idx *Indexer) chunkSize() (int, int) {
 //  2. col.Backend (per-collection override persisted at add time);
 //  3. cfg.Config.Extractor.Backend (global config default).
 //
-// Empty backend strings fall through to the config default. Extractors are
-// memoized by backend name so the xberg health probe runs at most once.
+// Empty backend strings fall through to the configured resolver default.
 func (idx *Indexer) extractorFor(col *store.Collection) (extractor.Extractor, error) {
 	if idx.ext != nil {
 		return idx.ext, nil
 	}
-	backend := col.Backend
-	if backend == "" {
-		backend = idx.cfg.Config.Extractor.Backend
+	if idx.resolver == nil {
+		return nil, fmt.Errorf("extractor resolver is not configured")
 	}
-	if cached, ok := idx.extCache[backend]; ok {
-		return cached, nil
-	}
-	ext, err := NewExtractor(idx.cfg, backend)
-	if err != nil {
-		return nil, err
-	}
-	idx.extCache[backend] = ext
-	return ext, nil
+	return idx.resolver.Resolve(col)
 }
 
 // NewExtractor builds the extractor named by backend. An empty backend selects
@@ -132,50 +128,81 @@ func NewExtractor(cfg *config.AppConfig, backend string) (extractor.Extractor, e
 	}
 }
 
-// ctx returns the context for extraction calls. Today this is Background; the
-// indirection leaves room to plumb a command-level cancellation context later
-// without touching every call site.
-func (idx *Indexer) ctx() context.Context { return context.Background() }
+// WithContext attaches the caller-owned cancellation context to disk,
+// extraction, and persistence work performed by this indexer.
+func (idx *Indexer) WithContext(ctx context.Context) *Indexer {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	idx.ctxValue = ctx
+	return idx
+}
+
+func (idx *Indexer) ctx() context.Context {
+	if idx.ctxValue == nil {
+		return context.Background()
+	}
+	return idx.ctxValue
+}
+
+// writeFastFields is retained for package-level helpers and older callers;
+// production document paths use DocumentIndex.FastFields so metadata commits
+// in the same transaction as the document and chunks.
+func (idx *Indexer) writeFastFields(docID int64, label string, metadata map[string]string) {
+	for field, value := range metadata {
+		if value == "" {
+			continue
+		}
+		if err := idx.db.FastFields().Set(docID, field, value); err != nil {
+			if label != "" {
+				idx.log.Printf("  WARN: fastfield %s=%s %s: %v\n", field, value, label, err)
+			} else {
+				idx.log.Printf("  WARN: metadata %s=%s: %v\n", field, value, err)
+			}
+		}
+	}
+}
 
 func (idx *Indexer) WithLogger(l Logger) *Indexer {
 	idx.log = l
 	return idx
 }
 
-// SourceHandler indexes one collection of a given type. Each format sync
-// method implements it; registration in syncHandlers replaces the hard-wired
-// switch so adding a new collection type is a single map entry (M6).
-// Method values carry the *Indexer receiver as their first argument.
-type SourceHandler func(idx *Indexer, col *store.Collection) error
-
-// syncHandlers is the single registration point for per-format sync. The
-// map keys mirror the 1:1 format dispatch previously expressed as a switch.
-var syncHandlers = map[store.CollectionType]SourceHandler{
-	store.CollectionTypeMarkdown:  (*Indexer).syncMarkdown,
-	store.CollectionTypeClaude:    (*Indexer).syncClaude,
-	store.CollectionTypeCodex:     (*Indexer).syncCodex,
-	store.CollectionTypeImages:    (*Indexer).syncImage,
-	store.CollectionTypePDF:       (*Indexer).syncPdf,
-	store.CollectionTypeDocuments: (*Indexer).syncDocuments,
-	store.CollectionTypeCode:      (*Indexer).syncCode,
-	store.CollectionTypeParser:    (*Indexer).syncParserDef,
+func (idx *Indexer) SyncCollection(col *store.Collection) error {
+	return idx.SyncCollectionContext(context.Background(), col)
 }
 
-func (idx *Indexer) SyncCollection(col *store.Collection) error {
+// SyncCollectionContext syncs one collection with the supplied cancellation
+// context. The compatibility method above keeps existing command/test call
+// sites source-compatible during the runtime migration.
+func (idx *Indexer) SyncCollectionContext(ctx context.Context, col *store.Collection) error {
+	if col == nil {
+		return fmt.Errorf("sync collection: nil collection")
+	}
+	idx.WithContext(ctx)
 	h, ok := syncHandlers[col.Type]
 	if !ok {
 		return fmt.Errorf("unknown collection type: %s", col.Type)
 	}
-	return h(idx, col)
+	return h(idx.ctx(), idx, col)
+}
+
+// ConversationBatch is the normalized output of Claude/Codex parsers. The
+// format-specific message types stop at the parser adapter; the shared sync
+// path only handles the text, title, session identity, and saved images it
+// needs to persist.
+type ConversationBatch struct {
+	Text      string
+	Title     string
+	SessionID string
+	Images    []source.ConversationImage
 }
 
 // syncConversation abstracts the heavily duplicated logic between Claude and Codex
 func (idx *Indexer) syncConversation(
 	col *store.Collection,
 	scanFiles func() ([]source.ConversationFile, error),
-	parseFile func(path string, fromLine int) (map[string]interface{}, string, []source.ConversationImage, error),
-	toText func(map[string]interface{}) string,
-	extractTitle func(map[string]interface{}) string,
+	parseFile func(path string, fromLine int) (ConversationBatch, error),
 	getTitle func(sessionID, defaultTitle string) string,
 ) error {
 	files, err := scanFiles()
@@ -187,12 +214,17 @@ func (idx *Indexer) syncConversation(
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-	idx.cleanupOrphans(col.ID, diskPaths, "conversations")
+	if _, err := idx.cleanupOrphans(col.ID, diskPaths, "conversations"); err != nil {
+		return fmt.Errorf("cleanup conversations: %w", err)
+	}
 
 	var indexed, skipped, totalImages, failed int
 
 	for _, f := range files {
-		existing, err := idx.db.GetDocument(col.ID, f.Path)
+		if err := idx.ctx().Err(); err != nil {
+			return err
+		}
+		existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, f.Path)
 		if err == nil && existing.Mtime >= f.Mtime {
 			skipped++
 			continue
@@ -215,14 +247,14 @@ func (idx *Indexer) syncConversation(
 			fromLine = existing.LineCount
 		}
 
-		messages, sessionID, images, err := parseFile(f.Path, fromLine)
+		batch, err := parseFile(f.Path, fromLine)
 		if err != nil {
 			idx.log.Printf("  WARN: parse %s: %v\n", f.Path, err)
 			failed++
 			continue
 		}
 
-		if messages == nil && len(images) == 0 {
+		if batch.Text == "" && len(batch.Images) == 0 {
 			if existing != nil {
 				if fromLine == 0 {
 					// A full re-parse that yields nothing means the file no
@@ -230,12 +262,16 @@ func (idx *Indexer) syncConversation(
 					// empty or to metadata-only lines). Remove the stale
 					// document so its FTS entry and chunks go with it,
 					// mirroring deleted files.
-					idx.db.DeleteDocument(existing.ID)
+					if err := idx.db.DeleteDocumentContext(idx.ctx(), existing.ID); err != nil {
+						return fmt.Errorf("delete empty document %s: %w", f.Path, err)
+					}
 				} else {
 					// Append that produced no new content: just record the
 					// mtime so subsequent syncs skip this file without
 					// re-parsing it.
-					idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
+					if err := idx.db.UpdateDocumentMtimeContext(idx.ctx(), existing.ID, f.Mtime); err != nil {
+						return fmt.Errorf("update mtime %s: %w", f.Path, err)
+					}
 				}
 			}
 			skipped++
@@ -243,20 +279,11 @@ func (idx *Indexer) syncConversation(
 		}
 
 		title := filepath.Base(f.Path)
-		if fromLine == 0 && extractTitle != nil {
-			if t := extractTitle(messages); t != "" {
-				title = t
-			}
+		if fromLine == 0 && batch.Title != "" {
+			title = batch.Title
 		}
 		if getTitle != nil {
-			title = getTitle(sessionID, title)
-		}
-
-		docID, err := idx.db.UpsertDocument(col.ID, f.Path, title, "", f.Mtime, lineCount)
-		if err != nil {
-			idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
-			failed++
-			continue
+			title = getTitle(batch.SessionID, title)
 		}
 
 		// On an append, new chunks must continue after the seqs from the
@@ -265,26 +292,23 @@ func (idx *Indexer) syncConversation(
 		// chunk text and its line numbers are relative to the delta.
 		baseSeq := 0
 		if fromLine > 0 {
-			if ms, err := idx.db.MaxChunkSeq(docID); err != nil {
+			if existing == nil {
+				idx.log.Printf("  WARN: append %s: document state is missing\n", f.Path)
+				failed++
+				continue
+			}
+			if ms, err := idx.db.MaxChunkSeqContext(idx.ctx(), existing.ID); err != nil {
 				idx.log.Printf("  WARN: chunk seq %s: %v\n", f.Path, err)
+				failed++
+				continue
 			} else {
 				baseSeq = ms + 1
 			}
 		}
 		nextSeq := baseSeq
-		if messages != nil {
-			text := toText(messages)
-			if fromLine > 0 {
-				if err := idx.db.AppendFTS(docID, text); err != nil {
-					idx.log.Printf("  WARN: fts %s: %v\n", f.Path, err)
-				}
-			} else {
-				if err := idx.db.UpsertFTS(docID, title, text); err != nil {
-					idx.log.Printf("  WARN: fts %s: %v\n", f.Path, err)
-				}
-				idx.db.DeleteChunksForDocument(docID)
-			}
-
+		var indexChunks []store.IndexChunk
+		text := batch.Text
+		if text != "" {
 			maxSize, _ := idx.chunkSize()
 			chunks := chunk.ChunkConversation(text, maxSize)
 			for i := range chunks {
@@ -293,20 +317,45 @@ func (idx *Indexer) syncConversation(
 					chunks[i].StartLine += fromLine
 					chunks[i].EndLine += fromLine
 				}
-				if err := idx.db.InsertChunkWithLines(docID, chunks[i].Seq, chunks[i].Content, chunks[i].StartLine, chunks[i].EndLine, nil); err != nil {
-					idx.log.Printf("  WARN: embed %s: %v\n", f.Path, err)
-				}
+				indexChunks = append(indexChunks, store.IndexChunk{
+					Seq:       chunks[i].Seq,
+					Content:   chunks[i].Content,
+					StartLine: chunks[i].StartLine,
+					EndLine:   chunks[i].EndLine,
+				})
 			}
 			nextSeq = baseSeq + len(chunks)
 		}
 
-		for _, img := range images {
-			if err := idx.db.InsertImageChunk(docID, nextSeq, img.Context, img.SavedPath, nil); err != nil {
-				idx.log.Printf("  WARN: image chunk %s: %v\n", img.SavedPath, err)
-				continue
-			}
+		for _, img := range batch.Images {
+			indexChunks = append(indexChunks, store.IndexChunk{
+				Seq:       nextSeq,
+				Content:   img.Context,
+				ChunkType: store.ChunkTypeImage,
+				ImagePath: img.SavedPath,
+			})
 			nextSeq++
 			totalImages++
+		}
+
+		request := store.DocumentIndex{
+			CollectionID: col.ID,
+			Path:         f.Path,
+			Title:        title,
+			Mtime:        f.Mtime,
+			LineCount:    lineCount,
+			FTSContent:   text,
+			Chunks:       indexChunks,
+		}
+		if fromLine == 0 {
+			_, err = idx.db.UpsertAndReplaceIndex(idx.ctx(), request)
+		} else {
+			_, err = idx.db.UpsertAndAppendIndex(idx.ctx(), request)
+		}
+		if err != nil {
+			idx.log.Printf("  WARN: index %s: %v\n", f.Path, err)
+			failed++
+			continue
 		}
 
 		indexed++
@@ -325,26 +374,20 @@ func (idx *Indexer) syncConversation(
 
 func (idx *Indexer) syncClaude(col *store.Collection) error {
 	return idx.syncConversation(col, source.ScanClaudeFiles,
-		func(path string, fromLine int) (map[string]interface{}, string, []source.ConversationImage, error) {
+		func(path string, fromLine int) (ConversationBatch, error) {
 			convID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 			msgs, imgs, err := source.ParseClaudeFileWithImages(path, fromLine, convID)
-			if len(msgs) == 0 {
-				return nil, convID, imgs, err
-			}
-			return map[string]interface{}{"msgs": msgs}, convID, imgs, err
-		},
-		func(m map[string]interface{}) string {
-			msgs, _ := m["msgs"].([]source.ClaudeMessage)
-			return source.ClaudeConversationToText(msgs)
-		},
-		func(m map[string]interface{}) string {
-			msgs, _ := m["msgs"].([]source.ClaudeMessage)
-			for _, msg := range msgs {
-				if msg.Role == source.RoleUser {
-					return source.Truncate(msg.Content, source.TitleMaxLen)
+			batch := ConversationBatch{SessionID: convID, Images: imgs}
+			if len(msgs) > 0 {
+				batch.Text = source.ClaudeConversationToText(msgs)
+				for _, msg := range msgs {
+					if msg.Role == source.RoleUser {
+						batch.Title = source.Truncate(msg.Content, source.TitleMaxLen)
+						break
+					}
 				}
 			}
-			return ""
+			return batch, err
 		},
 		nil)
 }
@@ -352,25 +395,19 @@ func (idx *Indexer) syncClaude(col *store.Collection) error {
 func (idx *Indexer) syncCodex(col *store.Collection) error {
 	threadNames := source.LoadCodexThreadNames()
 	return idx.syncConversation(col, source.ScanCodexFiles,
-		func(path string, fromLine int) (map[string]interface{}, string, []source.ConversationImage, error) {
+		func(path string, fromLine int) (ConversationBatch, error) {
 			msgs, sessionID, imgs, err := source.ParseCodexFileWithImages(path, fromLine)
-			if len(msgs) == 0 {
-				return nil, sessionID, imgs, err
-			}
-			return map[string]interface{}{"msgs": msgs}, sessionID, imgs, err
-		},
-		func(m map[string]interface{}) string {
-			msgs, _ := m["msgs"].([]source.CodexMessage)
-			return source.ConversationToText(msgs)
-		},
-		func(m map[string]interface{}) string {
-			msgs, _ := m["msgs"].([]source.CodexMessage)
-			for _, msg := range msgs {
-				if msg.Role == source.RoleUser {
-					return source.Truncate(msg.Content, source.TitleMaxLen)
+			batch := ConversationBatch{SessionID: sessionID, Images: imgs}
+			if len(msgs) > 0 {
+				batch.Text = source.ConversationToText(msgs)
+				for _, msg := range msgs {
+					if msg.Role == source.RoleUser {
+						batch.Title = source.Truncate(msg.Content, source.TitleMaxLen)
+						break
+					}
 				}
 			}
-			return ""
+			return batch, err
 		},
 		func(sessionID, defaultTitle string) string {
 			if name, ok := threadNames[sessionID]; ok && name != "" {
@@ -391,7 +428,9 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 		diskPaths[f.Path] = true
 	}
 	if len(scanIssues) == 0 {
-		idx.cleanupOrphans(col.ID, diskPaths, "documents")
+		if _, err := idx.cleanupOrphans(col.ID, diskPaths, "documents"); err != nil {
+			return fmt.Errorf("cleanup markdown documents: %w", err)
+		}
 	} else {
 		for _, issue := range scanIssues {
 			idx.log.Printf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
@@ -401,28 +440,37 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 	var indexed, skipped, failed int
 	failed += len(scanIssues)
 	for _, f := range files {
-		existing, err := idx.db.GetDocument(col.ID, f.Path)
+		if err := idx.ctx().Err(); err != nil {
+			return err
+		}
+		existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, f.Path)
 		if err == nil && existing.ContentHash == f.ContentHash {
 			if existing.Mtime != f.Mtime {
-				idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
+				if err := idx.db.UpdateDocumentMtimeContext(idx.ctx(), existing.ID, f.Mtime); err != nil {
+					return fmt.Errorf("update markdown mtime: %w", err)
+				}
 			}
 			skipped++
 			continue
 		}
 
-		docID, err := idx.db.UpsertDocument(col.ID, f.Path, f.Title, f.ContentHash, f.Mtime, f.LineCount)
+		maxSize, overlap := idx.chunkSize()
+		_, err = idx.db.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+			CollectionID: col.ID,
+			Path:         f.Path,
+			Title:        f.Title,
+			ContentHash:  f.ContentHash,
+			Mtime:        f.Mtime,
+			LineCount:    f.LineCount,
+			FTSContent:   f.Content,
+			Chunks:       toIndexChunks(chunk.ChunkMarkdown(f.Content, maxSize, overlap), true),
+			FastFields:   f.Metadata,
+		})
 		if err != nil {
-			idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
+			idx.log.Printf("  WARN: index %s: %v\n", f.Path, err)
 			failed++
 			continue
 		}
-
-		maxSize, overlap := idx.chunkSize()
-		idx.replaceIndexText(docID, f.Path, f.Title, f.Content, chunk.ChunkMarkdown(f.Content, maxSize, overlap), true)
-
-		// Metadata SSOT: frontmatter key/values go to fast_fields so they are
-		// filterable via FastFieldFilter (search --tag/--lang, faceting).
-		idx.writeFastFields(docID, f.Path, f.Metadata)
 		indexed++
 	}
 
@@ -445,7 +493,9 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 		diskPaths[f.Path] = true
 	}
 	if len(scanIssues) == 0 {
-		idx.cleanupOrphans(col.ID, diskPaths, "images")
+		if _, err := idx.cleanupOrphans(col.ID, diskPaths, "images"); err != nil {
+			return fmt.Errorf("cleanup images: %w", err)
+		}
 	} else {
 		for _, issue := range scanIssues {
 			idx.log.Printf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
@@ -455,21 +505,35 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 	var indexed, skipped, failed int
 	failed += len(scanIssues)
 	for _, f := range files {
-		existing, err := idx.db.GetDocument(col.ID, f.Path)
+		if err := idx.ctx().Err(); err != nil {
+			return err
+		}
+		existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, f.Path)
 		if err == nil && existing.ContentHash == f.ContentHash {
 			skipped++
 			continue
 		}
 
-		docID, err := idx.db.UpsertDocument(col.ID, f.Path, f.Name, f.ContentHash, f.Mtime, 0)
+		_, err = idx.db.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+			CollectionID: col.ID,
+			Path:         f.Path,
+			Title:        f.Name,
+			ContentHash:  f.ContentHash,
+			Mtime:        f.Mtime,
+			LineCount:    0,
+			FTSContent:   f.Name,
+			Chunks: []store.IndexChunk{{
+				Seq:       0,
+				Content:   f.Name,
+				ChunkType: store.ChunkTypeImage,
+				ImagePath: f.Path,
+			}},
+		})
 		if err != nil {
-			idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
+			idx.log.Printf("  WARN: index %s: %v\n", f.Path, err)
 			failed++
 			continue
 		}
-
-		idx.db.DeleteChunksForDocument(docID)
-		idx.db.InsertImageChunk(docID, 0, f.Name, f.Path, nil)
 		indexed++
 	}
 
@@ -492,7 +556,9 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 		diskPaths[f.Path] = true
 	}
 	if len(scanIssues) == 0 {
-		idx.cleanupOrphans(col.ID, diskPaths, "PDFs")
+		if _, err := idx.cleanupOrphans(col.ID, diskPaths, "PDFs"); err != nil {
+			return fmt.Errorf("cleanup PDFs: %w", err)
+		}
 	} else {
 		for _, issue := range scanIssues {
 			idx.log.Printf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
@@ -507,7 +573,10 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 	var indexed, skipped, failed int
 	failed += len(scanIssues)
 	for _, f := range files {
-		existing, err := idx.db.GetDocument(col.ID, f.Path)
+		if err := idx.ctx().Err(); err != nil {
+			return err
+		}
+		existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, f.Path)
 		if err == nil && existing.ContentHash == f.ContentHash {
 			skipped++
 			continue
@@ -525,18 +594,10 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 		}
 
 		pageCount := len(res.Pages)
-		docID, err := idx.db.UpsertDocument(col.ID, f.Path, f.Name, f.ContentHash, f.Mtime, pageCount)
-		if err != nil {
-			idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
-			failed++
-			continue
-		}
-
-		idx.db.DeleteChunksForDocument(docID)
-
+		var pageText strings.Builder
+		var indexChunks []store.IndexChunk
 		if pageCount > 0 {
 			// Page-oriented result (builtin PDF path): one image chunk per page.
-			var pageText strings.Builder
 			for _, pg := range res.Pages {
 				var cb strings.Builder
 				seqStr := strconv.Itoa(pg.Seq + 1)
@@ -559,15 +620,34 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 					pageText.WriteString("\n")
 				}
 				content := cb.String()
-				idx.db.InsertImageChunk(docID, pg.Seq, content, pg.Path, nil)
-			}
-			if pageText.Len() > 0 {
-				idx.db.UpsertFTS(docID, f.Name, pageText.String())
+				indexChunks = append(indexChunks, store.IndexChunk{
+					Seq:       pg.Seq,
+					Content:   content,
+					ChunkType: store.ChunkTypeImage,
+					ImagePath: pg.Path,
+				})
 			}
 		} else if res.Content != "" {
 			// Text-only result (e.g. xberg backend for PDF): chunk as markdown.
 			maxSize, overlap := idx.chunkSize()
-			idx.replaceIndexText(docID, f.Path, f.Name, res.Content, chunk.ChunkMarkdown(res.Content, maxSize, overlap), false)
+			indexChunks = toIndexChunks(chunk.ChunkMarkdown(res.Content, maxSize, overlap), false)
+			pageText.WriteString(res.Content)
+		}
+
+		_, err = idx.db.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+			CollectionID: col.ID,
+			Path:         f.Path,
+			Title:        f.Name,
+			ContentHash:  f.ContentHash,
+			Mtime:        f.Mtime,
+			LineCount:    pageCount,
+			FTSContent:   pageText.String(),
+			Chunks:       indexChunks,
+		})
+		if err != nil {
+			idx.log.Printf("  WARN: index %s: %v\n", f.Path, err)
+			failed++
+			continue
 		}
 
 		indexed++
@@ -606,7 +686,9 @@ func (idx *Indexer) syncDocuments(col *store.Collection) error {
 		diskPaths[f.Path] = true
 	}
 	if len(scanIssues) == 0 {
-		idx.cleanupOrphans(col.ID, diskPaths, "documents")
+		if _, err := idx.cleanupOrphans(col.ID, diskPaths, "documents"); err != nil {
+			return fmt.Errorf("cleanup documents: %w", err)
+		}
 	} else {
 		for _, issue := range scanIssues {
 			idx.log.Printf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
@@ -657,10 +739,20 @@ func (idx *Indexer) syncCode(col *store.Collection) error {
 		idx.log.Printf("  WARN: scan skipped %s (unreadable)\n", p)
 	}
 
-	idx.cleanupStaleCodeDocuments(col.ID, files)
+	if len(skippedPaths) == 0 {
+		if err := idx.cleanupStaleCodeDocuments(col.ID, files); err != nil {
+			return fmt.Errorf("cleanup code documents: %w", err)
+		}
+	} else {
+		idx.log.Printf("  WARN: skipping code orphan cleanup due to %d scan issue(s)\n", len(skippedPaths))
+	}
 
 	var indexed, skipped, failed int
+	failed += len(skippedPaths)
 	for _, f := range files {
+		if err := idx.ctx().Err(); err != nil {
+			return err
+		}
 		isSkipped, err := idx.indexCodeFile(col, f)
 		if err != nil {
 			idx.log.Printf("  WARN: %v\n", err)
@@ -688,17 +780,9 @@ func (idx *Indexer) syncCode(col *store.Collection) error {
 // cleanup as best-effort may ignore it (removed is 0 then). label is used
 // in the log line "Removed %d stale <label>"; an empty label disables logging.
 func (idx *Indexer) cleanupOrphans(colID int64, livePaths map[string]bool, label string) (int, error) {
-	existingPaths, err := idx.db.ListDocumentPaths(colID)
+	removed, err := idx.db.DeleteOrphansContext(idx.ctx(), colID, livePaths)
 	if err != nil {
 		return 0, err
-	}
-	removed := 0
-	for path, docID := range existingPaths {
-		if livePaths[path] {
-			continue
-		}
-		idx.db.DeleteDocument(docID)
-		removed++
 	}
 	if removed > 0 && label != "" {
 		idx.log.Printf("  Removed %d stale %s\n", removed, label)
@@ -706,83 +790,60 @@ func (idx *Indexer) cleanupOrphans(colID int64, livePaths map[string]bool, label
 	return removed, nil
 }
 
-// replaceIndexText rewrites the searchable content of a document: upserts the
-// FTS entry, deletes old chunks, and inserts the given chunks (with line spans
-// when withLines is true). FTS and chunk errors are logged, never fatal.
-// label identifies the source in WARN lines (usually the file path).
-// writeFastFields writes a metadata map to fast_fields, logging a WARN per
-// failing key. Single write path so format-specific sync functions do not
-// each reimplement the Set + WARN loop (M6). label identifies the source
-// file in WARN lines ("" hides it); empty values are skipped — an empty
-// fast-field value is never meaningful to filter or facet on.
-func (idx *Indexer) writeFastFields(docID int64, label string, metadata map[string]string) {
-	for field, value := range metadata {
-		if value == "" {
-			continue
-		}
-		if err := idx.db.FastFields().Set(docID, field, value); err != nil {
-			if label != "" {
-				idx.log.Printf("  WARN: fastfield %s=%s %s: %v\n", field, value, label, err)
-			} else {
-				idx.log.Printf("  WARN: metadata %s=%s: %v\n", field, value, err)
-			}
-		}
-	}
-}
-
-func (idx *Indexer) replaceIndexText(docID int64, label, title, text string, chunks []chunk.Chunk, withLines bool) {
-	if err := idx.db.UpsertFTS(docID, title, text); err != nil {
-		idx.log.Printf("  WARN: fts %s: %v\n", label, err)
-	}
-	idx.db.DeleteChunksForDocument(docID)
+func toIndexChunks(chunks []chunk.Chunk, withLines bool) []store.IndexChunk {
+	out := make([]store.IndexChunk, 0, len(chunks))
 	for _, c := range chunks {
-		var err error
+		indexed := store.IndexChunk{Seq: c.Seq, Content: c.Content}
 		if withLines {
-			err = idx.db.InsertChunkWithLines(docID, c.Seq, c.Content, c.StartLine, c.EndLine, nil)
-		} else {
-			err = idx.db.InsertChunk(docID, c.Seq, c.Content, nil)
+			indexed.StartLine = c.StartLine
+			indexed.EndLine = c.EndLine
 		}
-		if err != nil {
-			idx.log.Printf("  WARN: chunk %s: %v\n", label, err)
-		}
+		out = append(out, indexed)
 	}
+	return out
 }
 
-func (idx *Indexer) cleanupStaleCodeDocuments(colID int64, files []source.CodeFileInfo) {
+func (idx *Indexer) cleanupStaleCodeDocuments(colID int64, files []source.CodeFileInfo) error {
 	diskPaths := make(map[string]bool, len(files))
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-	idx.cleanupOrphans(colID, diskPaths, "documents")
+	_, err := idx.cleanupOrphans(colID, diskPaths, "documents")
+	return err
 }
 
 func (idx *Indexer) indexCodeFile(col *store.Collection, f source.CodeFileInfo) (bool, error) {
-	existing, err := idx.db.GetDocument(col.ID, f.Path)
+	existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, f.Path)
 	if err == nil && existing.ContentHash == f.ContentHash {
 		if existing.Mtime != f.Mtime {
-			idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
+			if err := idx.db.UpdateDocumentMtimeContext(idx.ctx(), existing.ID, f.Mtime); err != nil {
+				return false, fmt.Errorf("update code mtime: %w", err)
+			}
 		}
 		return true, nil
 	}
 
-	docID, err := idx.db.UpsertDocument(col.ID, f.Path, f.Title, f.ContentHash, f.Mtime, f.LineCount)
-	if err != nil {
-		return false, fmt.Errorf("upsert %s: %w", f.Path, err)
-	}
-
 	maxSize, overlap := idx.chunkSize()
-	idx.replaceIndexText(docID, f.Path, f.Title, f.Content, chunk.ChunkCode(f.Content, f.Language, maxSize, overlap), true)
-
-	// Fast field metadata. Errors are logged (pattern used elsewhere in the
-	// indexer) rather than silently swallowed so missing fastfields surface
-	// during sync instead of only at --aggs query time.
-	idx.writeFastFields(docID, f.Path, map[string]string{
-		"lang":     f.Language,
-		"ext":      f.Extension,
-		"filename": filepath.Base(f.Path),
-		"rel_path": f.RelativePath,
-		"repo":     col.Name,
+	_, err = idx.db.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+		CollectionID: col.ID,
+		Path:         f.Path,
+		Title:        f.Title,
+		ContentHash:  f.ContentHash,
+		Mtime:        f.Mtime,
+		LineCount:    f.LineCount,
+		FTSContent:   f.Content,
+		Chunks:       toIndexChunks(chunk.ChunkCode(f.Content, f.Language, maxSize, overlap), true),
+		FastFields: map[string]string{
+			"lang":     f.Language,
+			"ext":      f.Extension,
+			"filename": filepath.Base(f.Path),
+			"rel_path": f.RelativePath,
+			"repo":     col.Name,
+		},
 	})
+	if err != nil {
+		return false, fmt.Errorf("index %s: %w", f.Path, err)
+	}
 
 	return false, nil
 }
@@ -812,7 +873,7 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 		if err := idx.reindexParserCollection(col); err != nil {
 			return fmt.Errorf("reindex: %w", err)
 		}
-		if err := idx.db.UpdateCollectionParserVersion(col.ID, ver.Version); err != nil {
+		if err := idx.db.UpdateCollectionParserVersionContext(idx.ctx(), col.ID, ver.Version); err != nil {
 			return fmt.Errorf("update parser version: %w", err)
 		}
 		col.ParserVersion = ver.Version
@@ -821,7 +882,10 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 		// Incremental: only sessions with cursor > max(existing mtime).
 		// We store cursors as milliseconds (see write path below) so sub-second
 		// precision is preserved — critical for epoch_ms cursors (opencode).
-		maxMtime, _ := idx.db.MaxDocumentMtime(col.ID)
+		maxMtime, err := idx.db.MaxDocumentMtimeContext(idx.ctx(), col.ID)
+		if err != nil {
+			return fmt.Errorf("read parser cursor: %w", err)
+		}
 		if maxMtime > 0 {
 			since = time.UnixMilli(int64(maxMtime))
 		}
@@ -840,6 +904,9 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 	var indexed, skipped, failed int
 	seenPaths := make(map[string]bool)
 	for _, sess := range sessions {
+		if err := idx.ctx().Err(); err != nil {
+			return err
+		}
 		docPath := sess.SrcPath + "#" + sess.ID
 		seenPaths[docPath] = true
 
@@ -877,19 +944,23 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 			cursorUnix = float64(sess.Cursor.UnixMilli())
 		}
 
-		docID, err := idx.db.UpsertDocument(col.ID, docPath, title, "", cursorUnix, len(sess.Messages))
+		// FTS + chunks: full rewrite (sessions are non-append-only).
+		maxSize, _ := idx.chunkSize()
+		_, err = idx.db.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+			CollectionID: col.ID,
+			Path:         docPath,
+			Title:        title,
+			Mtime:        cursorUnix,
+			LineCount:    len(sess.Messages),
+			FTSContent:   text,
+			Chunks:       toIndexChunks(chunk.ChunkConversation(text, maxSize), false),
+			FastFields:   sess.Metadata,
+		})
 		if err != nil {
-			idx.log.Printf("  WARN: upsert %s: %v\n", docPath, err)
+			idx.log.Printf("  WARN: index %s: %v\n", docPath, err)
 			failed++
 			continue
 		}
-
-		// FTS + chunks: full rewrite (sessions are non-append-only).
-		maxSize, _ := idx.chunkSize()
-		idx.replaceIndexText(docID, docPath, title, text, chunk.ChunkConversation(text, maxSize), false)
-
-		// Metadata enrichment (§6.13): write known fields to fast_fields.
-		idx.writeFastFields(docID, "", sess.Metadata)
 
 		indexed++
 	}
@@ -899,7 +970,9 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 	// timeout, locked DB) would otherwise cause us to delete sessions that are
 	// still present but couldn't be read this cycle.
 	if len(sErrs) == 0 {
-		idx.cleanupOrphans(col.ID, seenPaths, "sessions")
+		if _, err := idx.cleanupOrphans(col.ID, seenPaths, "sessions"); err != nil {
+			return fmt.Errorf("cleanup sessions: %w", err)
+		}
 	} else {
 		idx.log.Printf("  Skipping orphan cleanup due to %d scan error(s)\n", len(sErrs))
 	}
@@ -940,10 +1013,12 @@ const (
 )
 
 func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFile, ext extractor.Extractor) docSyncStatus {
-	existing, err := idx.db.GetDocument(col.ID, f.Path)
+	existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, f.Path)
 	if err == nil && existing.ContentHash == f.ContentHash {
 		if existing.Mtime != f.Mtime {
-			idx.db.UpdateDocumentMtime(existing.ID, f.Mtime)
+			if err := idx.db.UpdateDocumentMtimeContext(idx.ctx(), existing.ID, f.Mtime); err != nil {
+				return docStatusFailed
+			}
 		}
 		return docStatusSkipped
 	}
@@ -962,14 +1037,20 @@ func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFil
 	}
 
 	lineCount := strings.Count(res.Content, "\n") + 1
-	docID, err := idx.db.UpsertDocument(col.ID, f.Path, res.Title, f.ContentHash, f.Mtime, lineCount)
-	if err != nil {
-		idx.log.Printf("  WARN: upsert %s: %v\n", f.Path, err)
+	maxSize, overlap := idx.chunkSize()
+	if _, err := idx.db.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+		CollectionID: col.ID,
+		Path:         f.Path,
+		Title:        res.Title,
+		ContentHash:  f.ContentHash,
+		Mtime:        f.Mtime,
+		LineCount:    lineCount,
+		FTSContent:   res.Content,
+		Chunks:       toIndexChunks(chunk.ChunkMarkdown(res.Content, maxSize, overlap), true),
+	}); err != nil {
+		idx.log.Printf("  WARN: index %s: %v\n", f.Path, err)
 		return docStatusFailed
 	}
-
-	maxSize, overlap := idx.chunkSize()
-	idx.replaceIndexText(docID, f.Path, res.Title, res.Content, chunk.ChunkMarkdown(res.Content, maxSize, overlap), true)
 
 	return docStatusIndexed
 }
