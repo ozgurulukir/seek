@@ -144,10 +144,76 @@ func TestMCPSearchResult_Shape(t *testing.T) {
 }
 
 func TestMCPContentKind(t *testing.T) {
-	if got := mcpContentKind(store.SearchResult{ChunkID: 5}, &mcpSearchResult{ChunkID: 5}); got != "full" {
+	if got := mcpContentKind(&mcpSearchResult{ChunkID: 5}); got != "full" {
 		t.Errorf("chunk-level = %q, want full", got)
 	}
-	if got := mcpContentKind(store.SearchResult{ChunkID: 0}, &mcpSearchResult{}); got != "snippet" {
+	if got := mcpContentKind(&mcpSearchResult{}); got != "snippet" {
 		t.Errorf("document-level = %q, want snippet", got)
+	}
+}
+
+func TestMCPSearch_CollectionFilter(t *testing.T) {
+	db := newMCPTestStore(t)
+	col, err := db.CreateCollection("zigcol", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if _, err := db.UpsertDocument(col.ID, "/tmp/zig.md", "Zig Patterns", "h", 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertChunk(1, 0, "Zig comptime is powerful and the language is simple.", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertFTS(1, "Zig Patterns", "Zig comptime is powerful and the language is simple."); err != nil {
+		t.Fatal(err)
+	}
+	col2, err := db.CreateCollection("rustcol", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if _, err := db.UpsertDocument(col2.ID, "/tmp/rust.md", "Rust Patterns", "h2", 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertChunk(2, 0, "Rust borrow checker rules.", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertFTS(2, "Rust Patterns", "Rust borrow checker rules."); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.AppConfig{}
+	server, err := buildMCPServer(db, cfg)
+	if err != nil {
+		t.Fatalf("buildMCPServer: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+	ctx := context.Background()
+	st, ct := mcp.NewInMemoryTransports()
+	go server.Run(ctx, st)
+	session, err := client.Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer session.Close()
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "seek_search",
+		Arguments: map[string]any{"query": "patterns", "limit": 5, "collection": "zigcol"},
+	})
+	if err != nil {
+		t.Fatalf("seek_search: %v", err)
+	}
+	tc := res.Content[0].(*mcp.TextContent)
+	var results []mcpSearchResult
+	if err := json.Unmarshal([]byte(tc.Text), &results); err != nil {
+		t.Fatalf("parse: %v (%s)", err, tc.Text)
+	}
+	for _, r := range results {
+		if r.Collection != "zigcol" {
+			t.Errorf("collection filter leaked %q result", r.Collection)
+		}
+	}
+	if len(results) == 0 {
+		t.Error("filtered search returned no results")
 	}
 }

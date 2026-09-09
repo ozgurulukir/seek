@@ -95,7 +95,7 @@ func buildMCPServer(db *store.Store, cfg *config.AppConfig) (*mcp.Server, error)
 		if limit <= 0 {
 			limit = 10
 		}
-		results, err := runMCPSearch(ctx, db, engine, cfg, &args, limit)
+		results, err := runMCPSearch(ctx, engine, cfg, &args, limit)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -115,7 +115,17 @@ func buildMCPServer(db *store.Store, cfg *config.AppConfig) (*mcp.Server, error)
 				StartLine:  r.StartLine,
 				EndLine:    r.EndLine,
 			}
-			mr.ContentKind = mcpContentKind(r, &mr)
+			// Parity with `seek search --json`: chunk-level hits get the full
+			// chunk content instead of the 40-token FTS snippet.
+			if mr.ChunkID > 0 {
+				if content, err := db.GetChunkContent(mr.ChunkID); err == nil {
+					mr.Content = content
+				}
+			} else {
+				mr.Content = strings.ReplaceAll(mr.Content, ">>>", "")
+				mr.Content = strings.ReplaceAll(mr.Content, "<<<", "")
+			}
+			mr.ContentKind = mcpContentKind(&mr)
 			out = append(out, mr)
 		}
 		payload, err := json.Marshal(out)
@@ -190,14 +200,22 @@ func buildMCPServer(db *store.Store, cfg *config.AppConfig) (*mcp.Server, error)
 }
 
 // runMCPSearch dispatches like SearchCmd.executeSearch: lex, vec, or hybrid.
-func runMCPSearch(ctx context.Context, db *store.Store, engine *search.Engine, cfg *config.AppConfig, args *mcpSearchArgs, limit int) ([]store.SearchResult, error) {
+func runMCPSearch(ctx context.Context, engine *search.Engine, cfg *config.AppConfig, args *mcpSearchArgs, limit int) ([]store.SearchResult, error) {
 	filters := store.NewFilterSet()
 	if args.Collection != "" {
 		filters.Add(&store.CollectionFilter{Name: args.Collection})
 	}
+	// Analyzer mirrors SearchCmd: tokenization unless query mode is "raw".
+	var analyzer *search.Analyzer
+	if cfg.Config.Search.QueryMode != "raw" {
+		analyzer = search.NewAnalyzer(effectiveAnalyzeLang("", cfg), true, true)
+	}
 	opts := search.Options{
-		Limit: limit,
-		RRFK:  cfg.Config.Search.RRFK,
+		Filters:   filters,
+		QueryMode: cfg.Config.Search.QueryMode,
+		Limit:     limit,
+		RRFK:      cfg.Config.Search.RRFK,
+		Analyzer:  analyzer,
 	}
 	if opts.RRFK <= 0 {
 		opts.RRFK = search.DefaultRRFK
@@ -212,8 +230,10 @@ func runMCPSearch(ctx context.Context, db *store.Store, engine *search.Engine, c
 	}
 }
 
-// mcpContentKind classifies content the same way `seek search --json` does.
-func mcpContentKind(r store.SearchResult, m *mcpSearchResult) string {
+// mcpContentKind classifies content the same way `seek search --json` does:
+// chunk-level hits carry full content, document-level (BM25/hybrid) hits an
+// FTS snippet.
+func mcpContentKind(m *mcpSearchResult) string {
 	if m.ChunkID > 0 {
 		return "full"
 	}
