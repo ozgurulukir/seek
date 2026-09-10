@@ -51,15 +51,23 @@ document's chunks to `POST /tag` and stores four fast fields on the document
 
 - `tags`, `topics`, `entities`, `language`
 
-`tags` is a first-class filter (`--tag`); `topics`, `entities` and
-`language` are facetable (no dedicated filter flag). All four facet with
-`--aggs`:
+All four are filterable with the generic fast-field flag `--field
+<name>:<value>`, and facetable with `--aggs`:
 
 ```bash
-seek search "query" --tag <t>                    # tags (frontmatter + semantic)
+seek search "query" --field tags:go                      # comma-list membership
+seek search "query" --field "topics:ownership and compile free"
+seek search "query" --field "entities:ORG:OpenAI"
+seek search "query" --field language:en                  # exact (single value)
+
 seek search "query" --aggs tags:terms --aggs topics:terms \
   --aggs entities:terms --aggs language:terms
 ```
+
+Match semantics are per field type: `tags`/`topics`/`entities` are
+comma-list membership (match a whole comma-separated token), while
+`language` and the code fields (`lang`, `repo`, ...) match exactly. The old
+`--tag` flag was removed; `--field tags:<value>` gives identical behaviour.
 
 Enrichment is always optional and degrades gracefully: if the service is down
 or the capability is disabled, seek emits a WARN and proceeds without tags —

@@ -52,8 +52,8 @@ seek add ~/docs --documents --backend builtin   # use builtin (limited)
 ## Metadata (fast fields)
 
 Collections write lightweight key/value metadata per document at index time.
-These are stored in a `fast_fields` table and are filterable (`--tag`,
-`--lang`, `--repo`) and facetable (`--aggs ...:terms`).
+These are stored in a `fast_fields` table and are filterable via `--field
+<name>:<value>` and facetable via `--aggs ...:terms`.
 
 - **code** — always: `lang`, `ext`, `filename`, `rel_path`, `repo` (collection name)
 - **markdown** — YAML frontmatter keys, e.g. `tags` (comma-joined list),
@@ -62,9 +62,8 @@ These are stored in a `fast_fields` table and are filterable (`--tag`,
   optional local semantic tag service when `semantic.enabled: true`:
   `tags` (keyphrases + topic labels), `topics` (BERTopic), `entities`
   (`TYPE:Text` NER), `language` (detected ISO 639-1). All comma-joined and
-  facetable via `--aggs <field>:terms`; only `tags` also has a first-class
-  `--tag` filter flag. Without the service these collections have none of
-  these fields.
+  facetable via `--aggs <field>:terms`, and filterable via `--field`.
+  Without the service these collections have none of these fields.
 
 ## Schema-driven parsers
 

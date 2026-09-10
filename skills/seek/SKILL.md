@@ -53,7 +53,7 @@ seek search "conceptual question" --vec -l 10
 5. **Use filters** to narrow results:
    - `--repo <name>` / `--collection <name>`: target a specific repository or collection
    - `--lang <language>`: target a programming language (e.g. `go`, `python`, `typescript`, `rust`)
-   - `--tag <tag>`: filter by tags — markdown frontmatter tags, or semantic-generated tags (fast field)
+   - `--field <name>:<value>`: filter by any fast field. `--field tags:go` filters tags (comma-list membership); exact for single-value fields (`--field language:en`); comma-list membership for `tags`/`topics`/`entities`
    - `--doc-type <type>`: `code`, `markdown`, `claude`, `codex`, `images`, `pdf`, `documents`, `parser`
    - `--after/--before`, `--chunk-type`, `--path`, `--workspace`
 6. **Increase `-l 20`** if the first 10 results aren't enough.

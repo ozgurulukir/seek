@@ -123,11 +123,16 @@ at index time: markdown notes expose their YAML frontmatter keys (e.g.
 `tags`, `date`), code files expose language and repository, and the optional
 semantic service (see [docs/semantic.md](semantic.md)) adds `topics`,
 `entities` and `language` for pdf/documents/conversations. They are
-filterable too:
+filterable too via the generic `--field <name>:<value>` flag (exact for
+single-value fields, comma-list membership for `tags`/`topics`/`entities`):
 
 ```bash
-# Filter to documents tagged in frontmatter
-seek search "gradient" --tag go
+# Filter to documents tagged in frontmatter / semantic tags
+seek search "gradient" --field tags:go
+
+# Semantic enrichment fields
+seek search "rust" --field "topics:ownership"          # full topic label token
+seek search "sql"  --field language:en
 
 # Combined filters
 seek search "error" --lang go --repo myrepo

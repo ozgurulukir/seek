@@ -20,43 +20,44 @@ seek search "func Open" --lang go
 seek search "import React" --lang typescript
 ```
 
-## Tag (frontmatter + semantic)
+## Fast-field filter (`--field`)
 
-Filter by a `tags` fast field. Tags come from two sources: markdown YAML
-frontmatter, or automatic generation by the optional local semantic tag
-service for pdf/documents/conversation collections (see
-[docs/semantic.md](docs/semantic.md)). The match is a whole token —
-comma-separated lists work, substrings do not:
+The generic `--field <name>:<value>` flag filters by any fast field. Match
+semantics depend on the field type:
+
+- **Exact** (single-value fields): `lang`, `ext`, `filename`, `rel_path`,
+  `repo`, `workspace`, `language`.
+- **Comma-list membership** (multi-value fields): `tags`, `topics`,
+  `entities` — a whole comma-separated token matches (substrings do not).
 
 ```bash
-seek search "gradient" --tag go     # notes tagged "go" (also matches "go,py")
-seek search "note" --tag priority   # notes tagged "priority"
+seek search "gradient" --field tags:go        # tags list contains "go" (not "golang")
+seek search "note" --field tags:priority      # tags fast field (frontmatter + semantic)
+seek search "rust" --field "topics:ownership and compile free"  # full topic token
+seek search "sql"  --field language:en        # exact
+seek search "x"    --field repo:myproject --field lang:go
 ```
 
-Both sources are also facetable with `--aggs tags:terms`.
+`tags` comes from markdown YAML frontmatter or the optional semantic tag
+service; all tagged sources are facetable with `--aggs tags:terms`. The old
+`--tag` flag was removed — `--field tags:<value>` gives identical behaviour.
 
 ## Semantic enrichment fields
 
 For pdf / documents / conversation collections, the optional local semantic
 tag service (see [docs/semantic.md](docs/semantic.md)) adds three more fast
-fields alongside `tags`. All are whole-token-matching lists, facetable with
-`--aggs <field>:terms`:
+fields alongside `tags`. All are facetable with `--aggs <field>:terms` and
+filterable with `--field`:
 
 ```bash
-seek search "lang" --aggs topics:terms     # topics: e.g. "goroutines, ownership"
-seek search "rust" --aggs entities:terms   # entities: "TYPE:Text", e.g. "LOC:Go,PER:Rust"
-seek search "file" --aggs language:terms   # language: ISO 639-1 per document
-seek search "x" --aggs tags:terms          # tags: frontmatter + semantic
+seek search "lang" --aggs topics:terms             # topics
+seek search "rust" --field "topics:ownership and compile free"
+seek search "file" --aggs language:terms           # language
+seek search "x"    --field language:en
 ```
 
 These fields exist only when `semantic.enabled: true`; without the service
 they are absent (no error, no empty facets).
-
-> Note: only `tags` is a first-class filter (`--tag X`). `topics`,
-> `entities`, and `language` are facetable via `--aggs` but have no
-> dedicated filter flag — there is no generic fast-field filter. To find
-> documents about a topic, facet with `--aggs topics:terms` first, then
-> describe the document in the query.
 
 ## Document Type
 

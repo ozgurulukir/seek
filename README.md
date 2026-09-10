@@ -183,7 +183,7 @@ seek search "<query>" --vec        # Vector semantic search only
 seek search "<query>" -C 1         # expand surrounding chunk context
 seek search "<query>" --repo <r>   # filter by repository/collection
 seek search "<query>" --lang <l>   # filter by code language (go, rust, python, ts, etc.)
-seek search "<query>" --tag <t>    # filter by tags (markdown frontmatter, or semantic-generated for pdf/documents/conversations)
+seek search "<query>" --field tags:<t>  # filter by fast field tags (comma-list membership; frontmatter or semantic)
 seek search "<query>" --path <p>   # filter by file path pattern (GLOB)
 seek search "<query>" --aggs "type:terms"  # faceted aggregations (also lang:terms, repo:terms, tags:terms, topics:terms, entities:terms, language:terms)
 
