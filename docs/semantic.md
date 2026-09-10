@@ -1,0 +1,78 @@
+# Semantic tag service
+
+The semantic tag service (`tools/semantic/`) is a local NLP endpoint that
+enriches text chunks with automatic metadata: **tags** (keyphrases + topic
+labels), **entities** (NER) and **topics** (topic modeling). It is an
+**optional capability** — seek works fully without it; keyword search is
+unaffected.
+
+## What it does
+
+For each chunk it returns a stable JSON envelope (contract-first: internal
+model formats never leak into the contract):
+
+```jsonc
+// POST /tag
+{
+  "chunks": [
+    {"id": 1, "text": "In Go, the concurrency model is goroutines...", "lang": "en"}
+    // "lang" is optional — omit to run language detection
+  ],
+  "max_tags": 5
+}
+// ->
+{
+  "results": [
+    {
+      "id": 1,
+      "tags": ["goroutines and channels", "concurrency model", "channels"],
+      "topics": [{"label": "...", "score": 0.82}],
+      "entities": [{"text": "OpenAI", "type": "MISC"}, {"text": "Go", "type": "LOC"}]
+    }
+  ],
+  "errors": []   // per-chunk failures are isolated; a bad chunk never sinks the batch
+}
+```
+
+| Facet | Component | Notes |
+|---|---|---|
+| `tags` | YAKE keyphrases (+ BERTopic labels when available) | merged, deduped, capped at `max_tags` |
+| `entities` | spaCy NER (`xx_ent_wiki_sm`; `tr_core_news_sm` for Turkish when installed) | multilingual (50+ languages) |
+| `topics` | BERTopic (multilingual embedding) | empty for single isolated chunks; meaningful over documents/batches |
+| language | `fasttext-langdetect` | runs when `lang` is omitted |
+
+## Run it
+
+The service is a monorepo component (like `tools/xberg_server/`). It binds to
+`127.0.0.1:8003` by default. Two ways to run it:
+
+**Degraded (no setup, keyphrases only):**
+```bash
+uv run tools/semantic/server.py
+```
+
+**Full pipeline (LID + NER + keyphrases + topics):**
+```bash
+tools/semantic/setup.sh                  # one-time: venv + models
+source tools/semantic/.venv/bin/activate
+python tools/semantic/server.py
+```
+
+`setup.sh` is idempotent. Model weights are downloaded on first run, not
+vendored into the repo (D9). The Turkish spaCy model (`tr_core_news_sm`) is
+optional — only published for spaCy 3.4–3.5; on newer spaCy the service falls
+back to the multilingual `xx_ent_wiki_sm`.
+
+Environment: `SEMANTIC_HOST` (default `127.0.0.1`), `SEMANTIC_PORT` (default `8003`).
+
+## Endpoints
+
+- `GET /health` → `{"status": "ok", "version": "...", "models": {"lid", "ner", "keyphrase", "topic"}}` — which capabilities are active.
+- `POST /tag` → the envelope above.
+
+## Design (ADR)
+
+Full architecture rationale: `.nova/plans/2026-09-10-semantic-tag-adr.md`.
+Key decisions: monorepo, contract-first, provider-agnostic (switch `backend` +
+`base_url` without code changes), we do not host the model runtime (we ship
+docs + setup scripts + permissively-licensed deps only, `vendor-LICENSES.md`).

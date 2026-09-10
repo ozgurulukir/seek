@@ -79,6 +79,13 @@ uv run tools/flashrank_server/server.py
 
 # Terminal 2: Start xberg Rich Document Extractor (Port 8001, optional)
 uv run tools/xberg_server/server.py
+
+# Terminal 3: Start semantic tag service (Port 8003, optional)
+# Degraded mode (keyphrases only, no setup):
+uv run tools/semantic/server.py
+# Full pipeline (LID + NER + keyphrases + topics) — see docs/semantic.md:
+tools/semantic/setup.sh && source tools/semantic/.venv/bin/activate && \
+  python tools/semantic/server.py
 ```
 
 The xberg backend is useful for rich document conversion, but `seek` refuses
