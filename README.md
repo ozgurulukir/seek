@@ -30,10 +30,10 @@ instead of being reported as success. To verify the download yourself before
 running (download–hash–verify–run):
 
 ```bash
-curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.3.1/seek_v0.3.1_linux-amd64.tar.gz
-curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.3.1/SHA256SUMS.txt
-grep seek_v0.3.1_linux-amd64.tar.gz SHA256SUMS.txt | sha256sum -c -
-tar -xzf seek_v0.3.1_linux-amd64.tar.gz && ./seek --version
+curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.3.2/seek_v0.3.2_linux-amd64.tar.gz
+curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.3.2/SHA256SUMS.txt
+grep seek_v0.3.2_linux-amd64.tar.gz SHA256SUMS.txt | sha256sum -c -
+tar -xzf seek_v0.3.2_linux-amd64.tar.gz && ./seek --version
 ```
 
 **Windows (PowerShell):**

@@ -467,6 +467,15 @@ func TestJSONL_RecursiveDiscovery(t *testing.T) {
 	}
 }
 
+func TestWalkJSONLFilesReturnsStatErrors(t *testing.T) {
+	// A NUL byte is rejected by os.Stat on every supported platform. It is
+	// distinct from a missing path and must not be silently treated as absent.
+	_, err := walkJSONLFiles([]string{"\x00"}, nil)
+	if err == nil {
+		t.Fatal("walkJSONLFiles succeeded for an invalid path")
+	}
+}
+
 // ---- Embedded schema validation tests ----
 
 func TestEmbeddedSchemas_LoadAllWithJSONL(t *testing.T) {

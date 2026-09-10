@@ -15,6 +15,12 @@ import (
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
+type typedNilCustomQueryEmbedder struct{}
+
+func (*typedNilCustomQueryEmbedder) EmbedQuery(string) ([]float32, error) {
+	return nil, nil
+}
+
 func mkResult(docID int64, title string) Result {
 	return Result{DocumentID: docID, Title: title}
 }
@@ -710,6 +716,11 @@ func testSearchVectorNoEmbedClients(t *testing.T, s *store.Store) {
 	// degrade cleanly instead of calling EmbedQuery on a nil receiver.
 	var typedNil embed.QueryEmbedder = (*embed.Client)(nil)
 	assertDegrades(NewEngine(NewStoreRepository(s), typedNil))
+
+	// Custom providers must receive the same protection at the capability
+	// boundary; search should not need to know their concrete type.
+	var customTypedNil embed.QueryEmbedder = (*typedNilCustomQueryEmbedder)(nil)
+	assertDegrades(NewEngine(NewStoreRepository(s), customTypedNil))
 }
 
 func testSearchVectorWithEmbedClient(t *testing.T, s *store.Store, baseURL string) {

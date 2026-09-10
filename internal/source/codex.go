@@ -45,12 +45,12 @@ func ScanCodexFilesContext(ctx context.Context) ([]ConversationFile, error) {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			continue
 		}
-		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		err := filepath.Walk(dir, func(path string, info os.FileInfo, walkErr error) error {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			if err != nil {
-				return nil
+			if walkErr != nil {
+				return fmt.Errorf("walk %s: %w", path, walkErr)
 			}
 			if info.IsDir() || filepath.Ext(path) != ".jsonl" {
 				return nil
@@ -65,7 +65,7 @@ func ScanCodexFilesContext(ctx context.Context) ([]ConversationFile, error) {
 			return nil
 		})
 		if err != nil {
-			return nil, err
+			return files, fmt.Errorf("scan Codex conversations in %s: %w", dir, err)
 		}
 	}
 

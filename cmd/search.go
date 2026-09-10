@@ -189,7 +189,7 @@ func (c *SearchCmd) buildFilters() *search.FilterSet {
 	return filters
 }
 
-func (c *SearchCmd) executeSearch(ctx context.Context, engine *search.Engine, embedClient *embed.Client, vlClient *embed.VLClient, opts search.Options) ([]search.Result, error) {
+func (c *SearchCmd) executeSearch(ctx context.Context, engine *search.Engine, embedClient embed.QueryEmbedder, vlClient embed.VLQueryEmbedder, opts search.Options) ([]search.Result, error) {
 	switch {
 	case c.Lex:
 		return engine.SearchBM25(ctx, c.Query, c.Limit, opts)

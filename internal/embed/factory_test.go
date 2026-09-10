@@ -6,6 +6,12 @@ import (
 	"github.com/ozgurulukir/seek/internal/config"
 )
 
+type typedNilQueryEmbedder struct{}
+
+func (*typedNilQueryEmbedder) EmbedQuery(string) ([]float32, error) {
+	return nil, nil
+}
+
 func TestClientFromConfigTable(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -86,6 +92,22 @@ func TestProviderRegistryUsesCapabilityFactory(t *testing.T) {
 	}
 }
 
+func TestProviderRegistryNormalizesTypedNilCapabilities(t *testing.T) {
+	registry := NewProviderRegistry()
+	registry.Register("typed-nil", func(*config.AppConfig) (Provider, error) {
+		var query *typedNilQueryEmbedder
+		return Provider{Query: query}, nil
+	})
+
+	provider, err := registry.Build("typed-nil", &config.AppConfig{})
+	if err != nil {
+		t.Fatalf("Build(typed-nil): %v", err)
+	}
+	if provider.Query != nil {
+		t.Fatal("typed-nil query capability was not normalized")
+	}
+}
+
 func TestNewProviderFromConfigBuildsConfiguredBundle(t *testing.T) {
 	cfg := &config.AppConfig{Config: config.Config{}}
 	cfg.Config.Privacy.OfflineOnly = true
@@ -100,5 +122,18 @@ func TestNewProviderFromConfigBuildsConfiguredBundle(t *testing.T) {
 	}
 	if provider.VLQuery != nil || provider.VLText != nil || provider.VLImage != nil {
 		t.Fatalf("offline configured provider unexpectedly exposes VL capabilities")
+	}
+}
+
+func TestNewProviderFromConfigWithoutKeyHasNilTextCapabilities(t *testing.T) {
+	cfg := &config.AppConfig{Config: config.Config{}}
+	cfg.Config.Embedding.Model = "text-embedding-3-small"
+
+	provider, err := NewProviderFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("NewProviderFromConfig: %v", err)
+	}
+	if provider.Query != nil || provider.Document != nil || provider.Batch != nil {
+		t.Fatalf("missing-key provider exposes text capabilities: %#v", provider)
 	}
 }

@@ -73,7 +73,8 @@ func detectJSONLSourceContext(ctx context.Context, def *ParserDef) (*SourceSpec,
 }
 
 // walkJSONLFiles recursively walks the given directories and returns all .jsonl files,
-// applying exclude filters. This mirrors the native ScanClaudeFiles/ScanCodexFiles behavior.
+// applying exclude filters. Missing roots are ignored, while other filesystem
+// errors are returned so a source cannot be indexed only partially.
 func walkJSONLFiles(paths, excludes []string) ([]string, error) {
 	return walkJSONLFilesContext(context.Background(), paths, excludes)
 }
@@ -89,7 +90,10 @@ func walkJSONLFilesContext(ctx context.Context, paths, excludes []string) ([]str
 		root := expandTilde(p)
 		info, err := os.Stat(root)
 		if err != nil {
-			continue // path doesn't exist, skip
+			if os.IsNotExist(err) {
+				continue // path doesn't exist, skip
+			}
+			return result, fmt.Errorf("stat parser path %q: %w", root, err)
 		}
 		if !info.IsDir() {
 			// A single file path — include if it's a .jsonl (or any file for jsonfiles driver).
@@ -99,15 +103,14 @@ func walkJSONLFilesContext(ctx context.Context, paths, excludes []string) ([]str
 			}
 			continue
 		}
-		// Walk the directory tree. Per-file traversal errors are skipped (the
-		// walk continues to other subtrees). This matches the native parser
-		// pattern (ScanClaudeFiles/ScanCodexFiles).
-		walkErr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		// Walk the directory tree. Traversal errors are returned so callers do
+		// not silently index an incomplete conversation source.
+		walkErr := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			if err != nil {
-				return nil // skip unreadable paths, continue walking
+			if walkErr != nil {
+				return fmt.Errorf("walk %s: %w", path, walkErr)
 			}
 			if info.IsDir() {
 				return nil

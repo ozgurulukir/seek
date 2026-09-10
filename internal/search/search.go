@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"sort"
 
 	"github.com/ozgurulukir/seek/internal/embed"
@@ -54,17 +53,24 @@ type Engine struct {
 }
 
 func NewEngine(repository SearchRepository, ec embed.QueryEmbedder) *Engine {
-	return &Engine{repository: repository, embedClient: ec}
+	provider := (embed.Provider{Query: ec}).NormalizeCapabilities()
+	return &Engine{repository: repository, embedClient: provider.Query}
 }
 
 // NewEngineWithVL creates a search engine with a VL client for multimodal query embedding.
 func NewEngineWithVL(repository SearchRepository, ec embed.QueryEmbedder, vlc embed.VLQueryEmbedder) *Engine {
-	return &Engine{repository: repository, embedClient: ec, vlClient: vlc}
+	provider := (embed.Provider{Query: ec, VLQuery: vlc}).NormalizeCapabilities()
+	return &Engine{
+		repository:  repository,
+		embedClient: provider.Query,
+		vlClient:    provider.VLQuery,
+	}
 }
 
 // NewEngineWithProvider builds the engine from the runtime-owned capability
 // bundle, keeping provider construction out of commands and search logic.
 func NewEngineWithProvider(repository SearchRepository, provider embed.Provider) *Engine {
+	provider = provider.NormalizeCapabilities()
 	e := NewEngine(repository, provider.Query)
 	e.vlClient = provider.VLQuery
 	e.reranker = provider.Reranker
@@ -125,7 +131,7 @@ func (e *Engine) searchVectorRaw(ctx context.Context, query string, limit int, o
 	// Prefer VL client if available (unified vector space for multimodal)
 	var qEmb []float32
 	var err error
-	if !isNilInterface(e.vlClient) {
+	if e.vlClient != nil {
 		if contextual, ok := e.vlClient.(embed.ContextVLQueryEmbedder); ok {
 			qEmb, err = contextual.EmbedTextContext(ctx, query)
 		} else {
@@ -134,7 +140,7 @@ func (e *Engine) searchVectorRaw(ctx context.Context, query string, limit int, o
 		if err != nil {
 			return nil, err
 		}
-	} else if !isNilInterface(e.embedClient) {
+	} else if e.embedClient != nil {
 		if contextual, ok := e.embedClient.(embed.ContextQueryEmbedder); ok {
 			qEmb, err = contextual.EmbedQueryContext(ctx, query)
 		} else {
@@ -405,20 +411,4 @@ func compareFastFieldValues(a, b interface{}) int {
 		}
 		return 0
 	}
-}
-
-// isNilInterface reports whether an interface holds a nil value, including
-// the typed-nil case (e.g. a (*embed.Client)(nil) boxed into an interface).
-// Comparing an interface to nil directly is false for a typed nil, which is
-// how a *Client returned from a factory as nil slips past `!= nil` checks.
-func isNilInterface(i interface{}) bool {
-	if i == nil {
-		return true
-	}
-	v := reflect.ValueOf(i)
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Map, reflect.Ptr, reflect.Interface, reflect.Slice:
-		return v.IsNil()
-	}
-	return false
 }

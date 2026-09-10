@@ -43,7 +43,11 @@ func (r *ProviderRegistry) Build(name string, cfg *config.AppConfig) (Provider, 
 	if factory == nil {
 		return Provider{}, fmt.Errorf("embedding provider %q is not registered", name)
 	}
-	return factory(cfg)
+	provider, err := factory(cfg)
+	if err != nil {
+		return Provider{}, err
+	}
+	return provider.NormalizeCapabilities(), nil
 }
 
 func NewProviderFromConfig(cfg *config.AppConfig) (Provider, error) {
@@ -54,8 +58,15 @@ func configuredProvider(cfg *config.AppConfig) (Provider, error) {
 	if cfg == nil {
 		return Provider{}, fmt.Errorf("embedding provider: nil config")
 	}
-	client := NewClientFromConfig(cfg)
-	p := Provider{Query: client, Document: client, Batch: client}
+	p := Provider{}
+	if client := NewClientFromConfig(cfg); client != nil {
+		// Assign only a real client. Boxing a nil *Client into an interface
+		// produces a non-nil typed-nil interface and makes capability checks
+		// incorrectly report that embeddings are available.
+		p.Query = client
+		p.Document = client
+		p.Batch = client
+	}
 	if vl := NewVLClientFromConfig(cfg); vl != nil {
 		p.VLQuery = vl
 		p.VLText = vl

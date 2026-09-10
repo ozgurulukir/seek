@@ -48,12 +48,12 @@ func ScanClaudeFilesContext(ctx context.Context) ([]ConversationFile, error) {
 
 	var files []ConversationFile
 
-	err := filepath.Walk(projectsDir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(projectsDir, func(path string, info os.FileInfo, walkErr error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		if err != nil {
-			return nil
+		if walkErr != nil {
+			return fmt.Errorf("walk %s: %w", path, walkErr)
 		}
 		if info.IsDir() || filepath.Ext(path) != ".jsonl" {
 			return nil
@@ -65,7 +65,10 @@ func ScanClaudeFilesContext(ctx context.Context) ([]ConversationFile, error) {
 		return nil
 	})
 
-	return files, err
+	if err != nil {
+		return files, fmt.Errorf("scan Claude conversations: %w", err)
+	}
+	return files, nil
 }
 
 // ParseClaudeFile parses a single Claude JSONL file starting from a line offset.

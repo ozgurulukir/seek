@@ -23,8 +23,8 @@ type Runtime struct {
 	Indexer            *indexer.Indexer
 	Pipeline           *pipeline.Pipeline
 	Search             *search.Engine
-	EmbedClient        *embed.Client
-	VLClient           *embed.VLClient
+	EmbedClient        embed.QueryEmbedder
+	VLClient           embed.VLQueryEmbedder
 	VectorIndexEnabled bool
 	Warnings           []string
 	cfgValue           *config.AppConfig
@@ -59,8 +59,8 @@ func Open(cfg *config.AppConfig) (*Runtime, error) {
 		return closeOnError(fmt.Errorf("build embedding provider: %w", err))
 	}
 	r.Indexer = indexer.NewWithDependencies(cfg, s, indexer.NewConfigExtractorResolver(cfg), s)
-	r.EmbedClient, _ = provider.Document.(*embed.Client)
-	r.VLClient, _ = provider.VLQuery.(*embed.VLClient)
+	r.EmbedClient = provider.Query
+	r.VLClient = provider.VLQuery
 	r.Search = search.NewEngineWithProvider(NewStoreSearchRepository(s), provider)
 	r.Pipeline = pipeline.New(cfg, s, r.Indexer, provider)
 	return r, nil

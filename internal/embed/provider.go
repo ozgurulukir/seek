@@ -2,6 +2,7 @@ package embed
 
 import (
 	"context"
+	"reflect"
 	"time"
 )
 
@@ -16,6 +17,52 @@ type Provider struct {
 	VLText   VLTextBatcher
 	VLImage  VLImageBatcher
 	Reranker Reranker
+}
+
+// NormalizeCapabilities converts typed-nil capability values into nil
+// interfaces. Provider factories are extensible, so checking only
+// capability != nil is insufficient: a nil pointer stored in an interface is
+// itself non-nil and would otherwise panic when invoked.
+//
+// Keep this defensive check at the provider boundary. Consumers can use
+// ordinary interface nil checks and do not need to know concrete provider
+// implementations.
+func (p Provider) NormalizeCapabilities() Provider {
+	if isNilCapability(p.Query) {
+		p.Query = nil
+	}
+	if isNilCapability(p.Document) {
+		p.Document = nil
+	}
+	if isNilCapability(p.Batch) {
+		p.Batch = nil
+	}
+	if isNilCapability(p.VLQuery) {
+		p.VLQuery = nil
+	}
+	if isNilCapability(p.VLText) {
+		p.VLText = nil
+	}
+	if isNilCapability(p.VLImage) {
+		p.VLImage = nil
+	}
+	if isNilCapability(p.Reranker) {
+		p.Reranker = nil
+	}
+	return p
+}
+
+func isNilCapability(capability any) bool {
+	if capability == nil {
+		return true
+	}
+	value := reflect.ValueOf(capability)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // Capability interfaces for the embedding subsystem. Consumers (search
