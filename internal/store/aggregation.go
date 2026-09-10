@@ -175,20 +175,9 @@ func quoteQualifiedIdentifier(column string) string {
 	return strings.Join(parts, ".")
 }
 
-// ValidFastField reports whether field is a known fast-field name that may
-// be filtered and aggregated on. Kept central here so both aggregation and
-// the --field filter share the same whitelist.
-func ValidFastField(field string) bool {
-	switch field {
-	case "lang", "tags", "repo", "ext", "filename", "rel_path", "workspace":
-		return true
-	// semantic enrichment fast fields (tools/semantic); "language" is
-	// distinct from code "lang" (programming language).
-	case "topics", "entities", "language":
-		return true
-	default:
-		return false
-	}
+func isFastField(field string) bool {
+	// Delegate to the central whitelist/match-mode table in filters.go.
+	return ValidFastField(field)
 }
 
 func applyAggregationFilters(query string, args []interface{}, filters *FilterSet) (string, []interface{}, error) {

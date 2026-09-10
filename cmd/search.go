@@ -23,7 +23,6 @@ type SearchCmd struct {
 
 	// New filter flags
 	Collection string   `help:"Filter by collection name"`
-	Tag        string   `help:"Filter by tag (markdown frontmatter tags, fast field)"`
 	Repo       string   `help:"Filter by repository or collection name (alias for --collection)"`
 	DocType    string   `help:"Filter by document type (markdown, claude, codex, images, pdf, documents, parser, code)"`
 	Lang       string   `help:"Filter code documents by programming language (e.g. go, python, typescript)"`
@@ -153,7 +152,7 @@ func (c *SearchCmd) buildFilters() (*search.FilterSet, error) {
 		colName = c.Repo
 	}
 
-	if colName == "" && c.DocType == "" && c.Lang == "" && c.Tag == "" && c.Repo == "" && c.After == "" && c.Before == "" && c.ChunkType == "" && c.Path == "" && c.Workspace == "" && len(c.Field) == 0 {
+	if colName == "" && c.DocType == "" && c.Lang == "" && c.Repo == "" && c.After == "" && c.Before == "" && c.ChunkType == "" && c.Path == "" && c.Workspace == "" && len(c.Field) == 0 {
 		return nil, nil
 	}
 
@@ -166,9 +165,6 @@ func (c *SearchCmd) buildFilters() (*search.FilterSet, error) {
 	}
 	if c.Lang != "" {
 		filters.Add(search.LanguageFilter(strings.ToLower(c.Lang)))
-	}
-	if c.Tag != "" {
-		filters.Add(search.TagFilter(c.Tag))
 	}
 	if c.Repo != "" {
 		filters.Add(search.RepositoryFilter(c.Repo))

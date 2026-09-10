@@ -128,19 +128,69 @@ func (f *PathFilter) ToSQL() (string, []interface{}, error) {
 	return "replace(d.path, '\\', '/') GLOB ?", []interface{}{cleaned}, nil
 }
 
+// FastFieldMatchMode controls how a FastFieldFilter matches a value.
+type FastFieldMatchMode int
+
+const (
+	// FastFieldExact matches the whole value exactly (single-value fields:
+	// lang, repo, ext, filename, rel_path, workspace, language).
+	FastFieldExact FastFieldMatchMode = iota
+	// FastFieldMembership matches membership in a comma-separated list
+	// (multi-value fields: tags, topics, entities).
+	FastFieldMembership
+)
+
+// fastFieldMatchMode returns the match mode for a known fast field, and
+// whether the field is known at all. Single source of truth for filtering
+// semantics, shared by FastFieldFilter and the ValidFastField whitelist.
+func fastFieldMatchMode(field string) (FastFieldMatchMode, bool) {
+	switch field {
+	case "tags", "topics", "entities":
+		return FastFieldMembership, true
+	case "lang", "ext", "filename", "rel_path", "repo", "workspace", "language":
+		return FastFieldExact, true
+	default:
+		return FastFieldExact, false
+	}
+}
+
+// ValidFastField reports whether field is a known fast-field name that may
+// be filtered and aggregated on. Kept central so aggregation, the --field
+// filter, and FastFieldFilter share the same whitelist.
+func ValidFastField(field string) bool {
+	_, ok := fastFieldMatchMode(field)
+	return ok
+}
+
 // FastFieldFilter filters documents by a fast-field value (e.g. workspace).
 // Uses the fast_fields table for indexed lookups.
 type FastFieldFilter struct {
-	Field string // fast field name (e.g. "workspace")
-	Value string // fast field value
+	Field string // fast field name (e.g. "topics")
+	Value string // fast field value (single value, or a comma-list member)
 }
 
+// ToSQL selects the match strategy from the field's type: exact equality
+// for single-value fields, comma-list membership for multi-value fields.
+// The field name is always a bound parameter and the mode is derived from a
+// fixed table (never user input), so it cannot inject SQL.
 func (f *FastFieldFilter) ToSQL() (string, []interface{}, error) {
-	// Fast field values are JSON-encoded on write (see encodeFastFieldValue),
-	// so we must JSON-encode the comparison value too.
+	mode, ok := fastFieldMatchMode(f.Field)
+	if !ok {
+		return "", nil, fmt.Errorf("fast field filter: unknown field %q", f.Field)
+	}
 	encoded, err := encodeFastFieldValue(f.Value)
 	if err != nil {
 		return "", nil, fmt.Errorf("fast field filter %q: %w", f.Field, err)
+	}
+	if mode == FastFieldMembership {
+		// Values are JSON-encoded on write (e.g. `"go,rust"`); strip the
+		// quotes and match the value as a whole comma-separated token (head,
+		// tail, or middle). Same token semantics as TagFilter but on any
+		// multi-value fast field. The value is a bound parameter.
+		return `d.id IN (SELECT doc_id FROM fast_fields WHERE field_name = ? AND
+			(REPLACE(field_value, '"', '') = ? OR REPLACE(field_value, '"', '') LIKE ? || ',%'
+			 OR REPLACE(field_value, '"', '') LIKE '%,' || ? OR REPLACE(field_value, '"', '') LIKE '%,' || ? || ',%'))`,
+			[]interface{}{f.Field, f.Value, f.Value, f.Value, f.Value}, nil
 	}
 	return "d.id IN (SELECT doc_id FROM fast_fields WHERE field_name = ? AND field_value = ?)",
 		[]interface{}{f.Field, encoded}, nil

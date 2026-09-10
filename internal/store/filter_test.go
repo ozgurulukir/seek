@@ -208,20 +208,37 @@ func TestValidFastField(t *testing.T) {
 }
 
 func TestFastFieldFilterToSQL(t *testing.T) {
+	// topics is a multi-value (membership) field: SQL uses token matching.
 	f := &FastFieldFilter{Field: "topics", Value: "concurrency"}
+	mode, ok := fastFieldMatchMode("topics")
+	if !ok || mode != FastFieldMembership {
+		t.Fatalf("topics should be membership field, got mode=%v ok=%v", mode, ok)
+	}
 	sql, args, err := f.ToSQL()
 	if err != nil {
 		t.Fatalf("ToSQL: %v", err)
 	}
-	if len(args) != 2 || args[0] != "topics" {
-		t.Fatalf("ToSQL args = %v, want [topics <encoded>]", args)
+	if len(args) != 5 || args[0] != "topics" {
+		t.Fatalf("membership ToSQL args = %v, want [topics, value*4]", args)
 	}
-	// Field name must come through as a bound parameter, never inline, so an
-	// unknown field cannot inject SQL.
-	if strings.Contains(sql, "topics") && !strings.Contains(sql, "?") {
-		// At minimum the field_name must be a bound parameter.
+	if !strings.Contains(sql, "LIKE") {
+		t.Fatalf("membership SQL should use LIKE token matching, got: %s", sql)
 	}
-	if !strings.Contains(sql, "field_name = ?") {
-		t.Fatalf("expected bound field_name, got SQL: %s", sql)
+
+	// language is a single-value (exact) field: exact equality.
+	fe := &FastFieldFilter{Field: "language", Value: "en"}
+	me, ok := fastFieldMatchMode("language")
+	if !ok || me != FastFieldExact {
+		t.Fatalf("language should be exact field, got mode=%v", me)
+	}
+	sqlE, argsE, err := fe.ToSQL()
+	if err != nil {
+		t.Fatalf("ToSQL exact: %v", err)
+	}
+	if len(argsE) != 2 || argsE[0] != "language" {
+		t.Fatalf("exact ToSQL args = %v, want [language <encoded>]", argsE)
+	}
+	if !strings.Contains(sqlE, "field_value = ?") {
+		t.Fatalf("exact SQL should use equality, got: %s", sqlE)
 	}
 }
