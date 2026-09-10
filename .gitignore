@@ -20,3 +20,4 @@ _plans/
 
 # Python virtual environments (tools/* services)
 .venv/
+__pycache__/
