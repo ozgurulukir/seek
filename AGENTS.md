@@ -39,6 +39,32 @@ root (main.go) ──> cmd ──> internal/{chunk,config,embed,extractor,indexe
 
 Keep the layering: `cmd/` orchestrates; `internal/` has no imports from `cmd/` or `root`. Do not introduce cross-boundary imports.
 
+### External / optional services (monorepo principle)
+
+Some capabilities (currently `semantic` tag enrichment, and the `xberg` rich-document
+extractor) are served by an **external process that this repo does not fully own**.
+Treat every such integration the same way:
+
+- **Monorepo** — the service's code and setup live *inside this repo* (see the
+  existing `tools/xberg_server/` pattern; a planned `tools/semantic/` follows suit),
+  not in a separate repository. A capability's absence must never break `seek`; it is
+  always **optional**.
+- **Contract-first** — `seek` talks to the service via a stable JSON envelope (see
+  `internal/extractor`; a planned `internal/semantic` will follow the same pattern),
+  never its internal model/runtime formats. Switch backend via config (`backend` +
+  `base_url`), not code; producers may change without touching consumers.
+- **We do not host the model/LLM runtime.** `seek` does not embed or run the heavy
+  inference runtime. We ship:
+  - **docs** — how a user or agent brings up the endpoint themselves (wiki),
+  - **scripts** — setup/bootstrap that downloads & launches the service,
+  - **vendored deps** — only where the license permits (MIT/Apache-2.0/BSD). Copyleft
+    (GPL/AGPL) deps are never vendored, only referenced.
+- **Local-first** — default target is a loopback endpoint (`127.0.0.0/8`, `[::1]`),
+  aligned with `privacy.offline_only`. Remote/cloud backends remain possible via
+  `backend`/`base_url` but are never the default or a hard dependency.
+- User/agent brings the endpoint up from the docs; `seek` degrades gracefully while it
+  is down (warn + no tags, keyword search unaffected).
+
 - `internal/store` — SQLite persistence: collections, documents, chunks, embeddings, FTS5 index, vector search. **All SQL lives here** (incl. `fastfield.go`, `vector_index.go`, `compression.go`). Vector search uses an HNSW index (`VectorIndex` interface, `coder/hnsw`) with a linear-scan fallback; cosine uses SIMD via `viterin/vek`. FTS5 tokenizer is `unicode61 remove_diacritics 2` (Turkish-aware); BM25 weights title 10× content. Migrate-time logic auto-rebuilds the FTS table when the tokenizer config changes.
 - `internal/indexer` — orchestrates per-format sync: scans sources, upserts documents/chunks/FTS, writes fast-field metadata, runs orphan cleanup. This is the layer that knows about collection types (markdown/code/claude/codex/images/pdf/parser/documents); `store` and `source` stay format-agnostic.
 - `internal/extractor` — file extraction domain (`builtin` for native markdown/PDF/images and `xberg` for 100+ rich document formats via remote service).
