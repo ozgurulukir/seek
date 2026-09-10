@@ -73,6 +73,9 @@ type tagError struct {
 type Response struct {
 	Results []TagResult `json:"results"`
 	Errors  []tagError  `json:"errors"`
+	// CorpusLang is the detected ISO 639-1 for the whole document
+	// (contract v0.2.0); empty when detection is unavailable.
+	CorpusLang string `json:"corpus_lang,omitempty"`
 }
 
 // Models reports which service capabilities are active.

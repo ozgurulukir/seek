@@ -179,6 +179,10 @@ func isFastField(field string) bool {
 	switch field {
 	case "lang", "tags", "repo", "ext", "filename", "rel_path", "workspace":
 		return true
+	// semantic enrichment fast fields (tools/semantic); "language" is
+	// distinct from code "lang" (programming language).
+	case "topics", "entities", "language":
+		return true
 	default:
 		return false
 	}

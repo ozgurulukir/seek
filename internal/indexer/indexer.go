@@ -413,7 +413,7 @@ func (idx *Indexer) syncConversation(
 		// the initial tags survive; they are refreshed on the next full
 		// sync of the session.
 		if fromLine == 0 && text != "" {
-			request.FastFields = semanticTagMap(idx.semanticTags(idx.ctx(), f.Path, text))
+			request.FastFields = idx.semanticFastFields(idx.ctx(), f.Path, indexChunks)
 		}
 		if fromLine == 0 {
 			_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), request)

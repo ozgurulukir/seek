@@ -20,7 +20,7 @@ func TestClientTagRoundtrip(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&gotReq); err != nil {
 				t.Fatalf("decode req: %v", err)
 			}
-			w.Write([]byte(`{"results":[{"id":0,"tags":["go","concurrency"],"topics":[{"label":"concurrency","score":0.8}],"entities":[{"text":"Go","type":"LOC"}]}],"errors":[]}`))
+			w.Write([]byte(`{"results":[{"id":0,"tags":["go","concurrency"],"topics":[{"label":"concurrency","score":0.8}],"entities":[{"text":"Go","type":"LOC"}]}],"errors":[],"corpus_lang":"en"}`))
 			return
 		}
 		if r.URL.Path == "/health" {
@@ -52,6 +52,9 @@ func TestClientTagRoundtrip(t *testing.T) {
 	r := resp.Results[0]
 	if r.ID != 0 || len(r.Tags) != 2 || r.Tags[0] != "go" || len(r.Topics) != 1 || len(r.Entities) != 1 {
 		t.Fatalf("unexpected result: %+v", r)
+	}
+	if resp.CorpusLang != "en" {
+		t.Fatalf("corpus_lang = %q, want en", resp.CorpusLang)
 	}
 	if gotReq.MaxTags != 5 {
 		t.Fatalf("max_tags not forwarded: %+v", gotReq)

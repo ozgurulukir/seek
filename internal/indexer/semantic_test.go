@@ -14,13 +14,26 @@ import (
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
-// startFakeSemantic returns a fake semantic service and its URL.
-func startFakeSemantic(t *testing.T, tags []string) *httptest.Server {
+// startFakeSemantic returns a fake semantic service (contract v0.2.0) and
+// its URL. It returns the same tags/topics/entities for every chunk and a
+// fixed corpus_lang.
+func startFakeSemantic(t *testing.T, tags []string, corpusLang string) *httptest.Server {
 	t.Helper()
+	type topicT struct {
+		Label string  `json:"label"`
+		Score float64 `json:"score"`
+	}
+	type entityT struct {
+		Text string `json:"text"`
+		Type string `json:"type"`
+	}
+	topicList := []topicT{{Label: "go concurrency", Score: 0.9}}
+	entityList := []entityT{{Text: "Go", Type: "LOC"}, {Text: "OpenAI", Type: "MISC"}}
+
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health":
-			w.Write([]byte(`{"status":"ok","version":"0.1.0","models":{"lid":true,"ner":true,"keyphrase":true,"topic":true}}`))
+			w.Write([]byte(`{"status":"ok","version":"0.2.0","models":{"lid":true,"ner":true,"keyphrase":true,"topic":true}}`))
 		case "/tag":
 			var req struct {
 				Chunks []struct {
@@ -34,15 +47,18 @@ func startFakeSemantic(t *testing.T, tags []string) *httptest.Server {
 				return
 			}
 			type result struct {
-				ID   int      `json:"id"`
-				Tags []string `json:"tags"`
+				ID       int       `json:"id"`
+				Tags     []string  `json:"tags"`
+				Topics   []topicT  `json:"topics"`
+				Entities []entityT `json:"entities"`
 			}
 			out := struct {
-				Results []result `json:"results"`
-				Errors  []any    `json:"errors"`
-			}{Errors: []any{}}
+				Results    []result `json:"results"`
+				Errors     []any    `json:"errors"`
+				CorpusLang string   `json:"corpus_lang"`
+			}{Errors: []any{}, CorpusLang: corpusLang}
 			for _, c := range req.Chunks {
-				out.Results = append(out.Results, result{ID: c.ID, Tags: tags})
+				out.Results = append(out.Results, result{ID: c.ID, Tags: tags, Topics: topicList, Entities: entityList})
 			}
 			w.Write(mustJSON(t, out))
 		default:
@@ -61,10 +77,15 @@ func mustJSON(t *testing.T, v any) []byte {
 	return b
 }
 
-// TestSemanticTagsFromService: enabled service → tags come back, merged.
-func TestSemanticTagsFromService(t *testing.T) {
+// textChunks wraps a single text as the chunk list passed to semanticFastFields.
+func textChunks(text string) []store.IndexChunk {
+	return []store.IndexChunk{{Seq: 0, Content: text}}
+}
+
+// TestSemanticFastFieldsFromService: enabled service → all four fields.
+func TestSemanticFastFieldsFromService(t *testing.T) {
 	tmp := t.TempDir()
-	srv := startFakeSemantic(t, []string{"golang", "concurrency", "golang"})
+	srv := startFakeSemantic(t, []string{"golang", "concurrency", "golang"}, "en")
 	defer srv.Close()
 
 	cfg := cfgFromTest(t, tmp, filepath.Join(tmp, "test.db"))
@@ -74,25 +95,26 @@ func TestSemanticTagsFromService(t *testing.T) {
 	idx := New(cfg, nil)
 	idx.WithLogger(nopLogger{})
 
-	tags := idx.semanticTags(context.Background(), "test.pdf", "some text about go concurrency and channels")
-	if tags == nil {
-		t.Fatal("semanticTags returned nil; want tags from fake service")
+	fields := idx.semanticFastFields(context.Background(), "test.pdf", textChunks("some text about go concurrency and channels"))
+	if fields == nil {
+		t.Fatal("semanticFastFields returned nil; want fields from fake service")
 	}
-	// Duplicated tag across chunks must be deduped.
-	seen := map[string]bool{}
-	for _, tag := range tags {
-		if seen[tag] {
-			t.Fatalf("duplicate tag %q in %v", tag, tags)
-		}
-		seen[tag] = true
+	if got := fields["tags"]; got != "golang,concurrency" {
+		t.Errorf("tags = %q, want golang,concurrency (deduped)", got)
 	}
-	if !seen["golang"] || !seen["concurrency"] {
-		t.Fatalf("want golang+concurrency tags, got %v", tags)
+	if got := fields["topics"]; got != "go concurrency" {
+		t.Errorf("topics = %q, want go concurrency", got)
+	}
+	if got := fields["entities"]; got != "LOC:Go,MISC:OpenAI" {
+		t.Errorf("entities = %q, want LOC:Go,MISC:OpenAI", got)
+	}
+	if got := fields["language"]; got != "en" {
+		t.Errorf("language = %q, want en", got)
 	}
 }
 
-// TestSemanticTagsDegrade: service down → nil tags, no panic, keyword-safe.
-func TestSemanticTagsDegrade(t *testing.T) {
+// TestSemanticFastFieldsDegrade: service down → nil fields, no panic.
+func TestSemanticFastFieldsDegrade(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := cfgFromTest(t, tmp, filepath.Join(tmp, "test.db"))
 	cfg.Config.Semantic.Enabled = true
@@ -101,30 +123,28 @@ func TestSemanticTagsDegrade(t *testing.T) {
 	idx := New(cfg, nil)
 	idx.WithLogger(nopLogger{})
 
-	if tags := idx.semanticTags(context.Background(), "x.pdf", "text"); tags != nil {
-		t.Fatalf("want nil tags when service is down, got %v", tags)
+	if fields := idx.semanticFastFields(context.Background(), "x.pdf", textChunks("text")); fields != nil {
+		t.Fatalf("want nil fields when service is down, got %v", fields)
 	}
 	// Provider is cached as unavailable: second call must not re-check and
 	// must stay nil.
-	if tags := idx.semanticTags(context.Background(), "y.pdf", "text"); tags != nil {
-		t.Fatalf("second call after degradation must be nil, got %v", tags)
+	if fields := idx.semanticFastFields(context.Background(), "y.pdf", textChunks("text")); fields != nil {
+		t.Fatalf("second call after degradation must be nil, got %v", fields)
 	}
 }
 
-// TestSemanticDisabled: capability off → provider nil → no tags, no
-// health check attempted (the fake server must not be hit).
+// TestSemanticDisabled: capability off → no fields, no HTTP attempted.
 func TestSemanticDisabled(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := cfgFromTest(t, tmp, filepath.Join(tmp, "test.db"))
-	// Enabled=false → semanticProvider must short-circuit before any HTTP.
 	idx := New(cfg, nil)
 	idx.WithLogger(nopLogger{})
-	if tags := idx.semanticTags(context.Background(), "x.pdf", "text"); tags != nil {
-		t.Fatalf("want nil tags when semantic disabled, got %v", tags)
+	if fields := idx.semanticFastFields(context.Background(), "x.pdf", textChunks("text")); fields != nil {
+		t.Fatalf("want nil fields when semantic disabled, got %v", fields)
 	}
 }
 
-// TestSemanticOfflineGate: offline_only + non-loopback → refused, no HTTP.
+// TestSemanticOfflineGate: offline_only + non-loopback → refused.
 func TestSemanticOfflineGate(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := cfgFromTest(t, tmp, filepath.Join(tmp, "test.db"))
@@ -136,28 +156,17 @@ func TestSemanticOfflineGate(t *testing.T) {
 	var warned string
 	idx.WithLogger(captureLogger{buf: &warned})
 
-	if tags := idx.semanticTags(context.Background(), "x.pdf", "text"); tags != nil {
-		t.Fatalf("want nil tags under offline gate, got %v", tags)
+	if fields := idx.semanticFastFields(context.Background(), "x.pdf", textChunks("text")); fields != nil {
+		t.Fatalf("want nil fields under offline gate, got %v", fields)
 	}
 	if !strings.Contains(warned, "offline_only") {
 		t.Fatalf("want offline gate warning, got %q", warned)
 	}
 }
 
-// TestSemanticTagMap encoding matches markdown frontmatter (comma-joined).
-func TestSemanticTagMap(t *testing.T) {
-	m := semanticTagMap([]string{"go", "rust"})
-	if m == nil || m["tags"] != "go,rust" {
-		t.Fatalf("want tags=go,rust, got %v", m)
-	}
-	if semanticTagMap(nil) != nil {
-		t.Fatal("empty tags must map to nil fast fields")
-	}
-}
-
-// TestSyncPdfWritesSemanticTags: end-to-end through the real store writer —
-// a synced PDF ends up with a `tags` fast field when the service is up.
-func TestSyncPdfWritesSemanticTags(t *testing.T) {
+// TestSyncPdfWritesSemanticFastFields: end-to-end through the real store
+// writer — a synced PDF gains all four fast fields when the service is up.
+func TestSyncPdfWritesSemanticFastFields(t *testing.T) {
 	tmp := t.TempDir()
 	db, err := store.Open(filepath.Join(tmp, "test.db"))
 	if err != nil {
@@ -168,7 +177,7 @@ func TestSyncPdfWritesSemanticTags(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	srv := startFakeSemantic(t, []string{"finance", "2024-report"})
+	srv := startFakeSemantic(t, []string{"finance", "2024-report"}, "en")
 	defer srv.Close()
 
 	cfg := cfgFromTest(t, tmp, filepath.Join(tmp, "test.db"))
@@ -194,13 +203,20 @@ func TestSyncPdfWritesSemanticTags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotVal, err := db.FastFields().Get(doc.ID, "tags")
-	if err != nil {
-		t.Fatalf("Get(tags): %v", err)
-	}
-	got, _ := gotVal.(string)
-	if got != "finance,2024-report" {
-		t.Fatalf("want tags fast field finance,2024-report, got %q", got)
+	for field, want := range map[string]string{
+		"tags":     "finance,2024-report",
+		"topics":   "go concurrency",
+		"entities": "LOC:Go,MISC:OpenAI",
+		"language": "en",
+	} {
+		gotVal, err := db.FastFields().Get(doc.ID, field)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", field, err)
+		}
+		got, _ := gotVal.(string)
+		if got != want {
+			t.Errorf("fast field %q = %q, want %q", field, got, want)
+		}
 	}
 }
 
