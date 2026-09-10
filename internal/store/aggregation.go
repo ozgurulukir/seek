@@ -75,7 +75,7 @@ func buildAggregationQuery(spec AggregationSpec) (string, []interface{}, bool, e
 
 func buildTermsQuery(field string) (string, []interface{}, bool, error) {
 	field = strings.ToLower(field)
-	if isFastField(field) {
+	if ValidFastField(field) {
 		return `SELECT REPLACE(ff.field_value, '"', '') as key, COUNT(*) as count
 			FROM documents d
 			JOIN collections c ON c.id = d.collection_id
@@ -175,7 +175,10 @@ func quoteQualifiedIdentifier(column string) string {
 	return strings.Join(parts, ".")
 }
 
-func isFastField(field string) bool {
+// ValidFastField reports whether field is a known fast-field name that may
+// be filtered and aggregated on. Kept central here so both aggregation and
+// the --field filter share the same whitelist.
+func ValidFastField(field string) bool {
 	switch field {
 	case "lang", "tags", "repo", "ext", "filename", "rel_path", "workspace":
 		return true

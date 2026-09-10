@@ -16,6 +16,7 @@ const (
 	FilterChunkType  FilterKind = "chunk_type"
 	FilterPath       FilterKind = "path"
 	FilterWorkspace  FilterKind = "workspace"
+	FilterFastField  FilterKind = "fast_field"
 )
 
 // Filter is a persistence-neutral search predicate.
@@ -48,6 +49,7 @@ type FilterTarget interface {
 	AddChunkType(ChunkType)
 	AddPath(string)
 	AddWorkspace(string)
+	AddFastField(string, string)
 }
 
 func NewFilterSet() *FilterSet {
@@ -97,6 +99,8 @@ func (fs *FilterSet) Apply(target FilterTarget) error {
 			target.AddPath(filter.Pattern)
 		case FilterWorkspace:
 			target.AddWorkspace(filter.Value)
+		case FilterFastField:
+			target.AddFastField(filter.Field, filter.Value)
 		default:
 			return fmt.Errorf("unsupported search filter kind %q", filter.Kind)
 		}
@@ -138,4 +142,11 @@ func PathFilter(pattern string) Filter {
 
 func WorkspaceFilter(workspace string) Filter {
 	return Filter{Kind: FilterWorkspace, Value: workspace}
+}
+
+// FastFieldFilter filters by an arbitrary fast-field name/value pair (e.g.
+// semantic enrichment fields: topics, entities, language). The field name is
+// validated against the fast-field whitelist by the persistence adapter.
+func FastFieldFilter(field, value string) Filter {
+	return Filter{Kind: FilterFastField, Field: field, Value: value}
 }

@@ -188,3 +188,40 @@ func TestTagFilter_MatchesCommaSeparatedValues(t *testing.T) {
 		t.Error("tag 'oc' should not match 'go,rust' (substring leak)")
 	}
 }
+
+func TestValidFastField(t *testing.T) {
+	cases := []struct {
+		field string
+		want  bool
+	}{
+		{"lang", true}, {"repo", true}, {"tags", true},
+		{"topics", true}, {"entities", true}, {"language", true},
+		{"workspace", true}, {"filename", true}, {"rel_path", true}, {"ext", true},
+		{"", false}, {"title", false}, {"content", false}, {"name;DROP", false},
+		{"language ", false}, // whitespace is not trimmed / whitelisted
+	}
+	for _, c := range cases {
+		if got := ValidFastField(c.field); got != c.want {
+			t.Errorf("ValidFastField(%q) = %v, want %v", c.field, got, c.want)
+		}
+	}
+}
+
+func TestFastFieldFilterToSQL(t *testing.T) {
+	f := &FastFieldFilter{Field: "topics", Value: "concurrency"}
+	sql, args, err := f.ToSQL()
+	if err != nil {
+		t.Fatalf("ToSQL: %v", err)
+	}
+	if len(args) != 2 || args[0] != "topics" {
+		t.Fatalf("ToSQL args = %v, want [topics <encoded>]", args)
+	}
+	// Field name must come through as a bound parameter, never inline, so an
+	// unknown field cannot inject SQL.
+	if strings.Contains(sql, "topics") && !strings.Contains(sql, "?") {
+		// At minimum the field_name must be a bound parameter.
+	}
+	if !strings.Contains(sql, "field_name = ?") {
+		t.Fatalf("expected bound field_name, got SQL: %s", sql)
+	}
+}

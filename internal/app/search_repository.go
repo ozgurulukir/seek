@@ -126,3 +126,13 @@ func (t *storeFilterTarget) AddPath(pattern string) {
 func (t *storeFilterTarget) AddWorkspace(workspace string) {
 	t.filters.Add(&store.FastFieldFilter{Field: "workspace", Value: workspace})
 }
+func (t *storeFilterTarget) AddFastField(field, value string) {
+	// Unknown fast-field names are dropped here (defense in depth); the CLI
+	// validates --field up front, so an invalid name surfaces a real error
+	// rather than silently ignoring the filter. Rejecting at this layer also
+	// avoids constructing an SQL clause against an arbitrary row.
+	if !store.ValidFastField(field) {
+		return
+	}
+	t.filters.Add(&store.FastFieldFilter{Field: field, Value: value})
+}

@@ -108,6 +108,9 @@ func (t *testStoreFilterTarget) AddPath(pattern string) {
 func (t *testStoreFilterTarget) AddWorkspace(workspace string) {
 	t.filters.Add(&store.FastFieldFilter{Field: "workspace", Value: workspace})
 }
+func (t *testStoreFilterTarget) AddFastField(field, value string) {
+	t.filters.Add(&store.FastFieldFilter{Field: field, Value: value})
+}
 
 type fakeSearchRepository struct {
 	filters *FilterSet

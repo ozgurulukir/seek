@@ -22,17 +22,18 @@ type SearchCmd struct {
 	Limit int    `short:"l" default:"10" help:"Max results"`
 
 	// New filter flags
-	Collection string `help:"Filter by collection name"`
-	Tag        string `help:"Filter by tag (markdown frontmatter tags, fast field)"`
-	Repo       string `help:"Filter by repository or collection name (alias for --collection)"`
-	DocType    string `help:"Filter by document type (markdown, claude, codex, images, pdf, documents, parser, code)"`
-	Lang       string `help:"Filter code documents by programming language (e.g. go, python, typescript)"`
-	After      string `help:"Filter documents after this date (RFC3339)"`
-	Before     string `help:"Filter documents before this date (RFC3339)"`
-	ChunkType  string `help:"Filter by chunk type (text, image)"`
-	Path       string `help:"Filter by path pattern (GLOB)"`
-	Workspace  string `help:"Filter parser collections by workspace directory (fast field)"`
-	Context    int    `short:"C" default:"0" help:"Number of surrounding chunks before and after to expand context"`
+	Collection string   `help:"Filter by collection name"`
+	Tag        string   `help:"Filter by tag (markdown frontmatter tags, fast field)"`
+	Repo       string   `help:"Filter by repository or collection name (alias for --collection)"`
+	DocType    string   `help:"Filter by document type (markdown, claude, codex, images, pdf, documents, parser, code)"`
+	Lang       string   `help:"Filter code documents by programming language (e.g. go, python, typescript)"`
+	After      string   `help:"Filter documents after this date (RFC3339)"`
+	Before     string   `help:"Filter documents before this date (RFC3339)"`
+	ChunkType  string   `help:"Filter by chunk type (text, image)"`
+	Path       string   `help:"Filter by path pattern (GLOB)"`
+	Workspace  string   `help:"Filter parser collections by workspace directory (fast field)"`
+	Field      []string `help:"Filter by fast field name:value (e.g. topics:concurrency, entities:ORG:OpenAI, language:en, repo:myproject)"`
+	Context    int      `short:"C" default:"0" help:"Number of surrounding chunks before and after to expand context"`
 
 	// Aggregation flags
 	Aggs []string `help:"Aggregations to run (e.g., type:terms, created_at:histogram:month)"`
@@ -81,7 +82,10 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) (err error) {
 	engine := runtime.Search
 	engine.WithLogger(searchLogger{})
 	embedClient, vlClient := runtime.EmbedClient, runtime.VLClient
-	filters := c.buildFilters()
+	filters, err := c.buildFilters()
+	if err != nil {
+		return err
+	}
 
 	// Build analyzer if tokenization is enabled
 	var analyzer *search.Analyzer
@@ -143,14 +147,14 @@ func (searchLogger) Printf(format string, v ...interface{}) {
 	fmt.Fprintf(os.Stderr, format, v...)
 }
 
-func (c *SearchCmd) buildFilters() *search.FilterSet {
+func (c *SearchCmd) buildFilters() (*search.FilterSet, error) {
 	colName := c.Collection
 	if colName == "" {
 		colName = c.Repo
 	}
 
-	if colName == "" && c.DocType == "" && c.Lang == "" && c.Tag == "" && c.Repo == "" && c.After == "" && c.Before == "" && c.ChunkType == "" && c.Path == "" && c.Workspace == "" {
-		return nil
+	if colName == "" && c.DocType == "" && c.Lang == "" && c.Tag == "" && c.Repo == "" && c.After == "" && c.Before == "" && c.ChunkType == "" && c.Path == "" && c.Workspace == "" && len(c.Field) == 0 {
+		return nil, nil
 	}
 
 	filters := search.NewFilterSet()
@@ -185,8 +189,18 @@ func (c *SearchCmd) buildFilters() *search.FilterSet {
 	if c.Workspace != "" {
 		filters.Add(search.WorkspaceFilter(c.Workspace))
 	}
+	for _, f := range c.Field {
+		field, value, ok := strings.Cut(f, ":")
+		if !ok || field == "" || value == "" {
+			return nil, fmt.Errorf("--field must be 'name:value' (got %q)", f)
+		}
+		if !store.ValidFastField(field) {
+			return nil, fmt.Errorf("--field: unknown fast field %q (valid: lang, repo, tags, topics, entities, language, ext, filename, rel_path, workspace)", field)
+		}
+		filters.Add(search.FastFieldFilter(field, value))
+	}
 
-	return filters
+	return filters, nil
 }
 
 func (c *SearchCmd) executeSearch(ctx context.Context, engine *search.Engine, embedClient embed.QueryEmbedder, vlClient embed.VLQueryEmbedder, opts search.Options) ([]search.Result, error) {
