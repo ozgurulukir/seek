@@ -126,6 +126,7 @@ Deep-dive documentation and specialized guides:
 | 🔍 [**Query Syntax & Filters Guide**](docs/query-guide.md) | Structured AST syntax (AND/OR/NOT), filters (`--repo`, `--lang`), line spans (`:L10-L45`), and `-C`. |
 | 🤖 [**Schema-Driven Parsers**](docs/parsers.md) | Opencode, Copilot CLI, Zed threads, and `--workspace` filtering. |
 | 🛠️ [**AI Agent Skill Reference**](skills/seek/SKILL.md) | Agent prompt instructions, query strategies, and CLI reference. |
+| 🏷️ [**Semantic Tag Service**](docs/semantic.md) | Optional local NLP service (NER, keyphrases, topics, LID) that generates `tags` fast fields for pdf/documents/conversations. |
 | 🔌 [**MCP Server**](docs/mcp.md) | `seek mcp` — Model Context Protocol tools (`seek_search`, `seek_status`, `seek_autocomplete`) for Claude Code and other agents. |
 
 ---
@@ -182,7 +183,7 @@ seek search "<query>" --vec        # Vector semantic search only
 seek search "<query>" -C 1         # expand surrounding chunk context
 seek search "<query>" --repo <r>   # filter by repository/collection
 seek search "<query>" --lang <l>   # filter by code language (go, rust, python, ts, etc.)
-seek search "<query>" --tag <t>    # filter by markdown frontmatter tags (fast field)
+seek search "<query>" --tag <t>    # filter by tags (markdown frontmatter, or semantic-generated for pdf/documents/conversations)
 seek search "<query>" --path <p>   # filter by file path pattern (GLOB)
 seek search "<query>" --aggs "type:terms"  # faceted aggregations (also lang:terms, repo:terms, tags:terms)
 
@@ -243,6 +244,13 @@ vector_index:
 compression:
   algorithm: zstd           # "zstd" (default) or "none"
   level: 3
+
+semantic:
+  enabled: false            # optional local tag enrichment (pdf, documents,
+                            # conversations gain generated `tags` fast fields)
+  base_url: http://127.0.0.1:8003
+  max_tags: 5               # 1..20
+  # timeout: 60s
 
 privacy:
   offline_only: true        # refuse external embedding/rerank/OCR/xberg calls;
