@@ -212,6 +212,50 @@ type Config struct {
 	Compression  CompressionConfig `yaml:"compression,omitempty"`
 	Extractor    ExtractorConfig   `yaml:"extractor,omitempty"`
 	Privacy      PrivacyConfig     `yaml:"privacy,omitempty"`
+	Semantic     SemanticConfig    `yaml:"semantic,omitempty"`
+}
+
+// SemanticConfig controls the optional local semantic tag service
+// (tools/semantic). It is a capability, not a dependency: when disabled or
+// the service is unreachable, keyword search is unaffected. With
+// privacy.offline_only, only numeric loopback endpoints are accepted.
+type SemanticConfig struct {
+	// Enabled turns on semantic tag enrichment during sync.
+	Enabled bool `yaml:"enabled,omitempty"`
+	// BaseURL is the semantic service endpoint (e.g. http://127.0.0.1:8003).
+	BaseURL string `yaml:"base_url,omitempty"`
+	// MaxTags caps tags per document (default 5, hard limit 20).
+	MaxTags int `yaml:"max_tags,omitempty"`
+	// Timeout is the per-request timeout (default DefaultSemanticTimeout).
+	Timeout time.Duration `yaml:"timeout,omitempty"`
+}
+
+// EffectiveBaseURL returns the configured endpoint, or the default local
+// service URL when unset.
+func (s SemanticConfig) EffectiveBaseURL() string {
+	if s.BaseURL == "" {
+		return DefaultSemanticBaseURL
+	}
+	return s.BaseURL
+}
+
+// EffectiveMaxTags clamps the tag cap into [1, DefaultSemanticMaxTags].
+func (s SemanticConfig) EffectiveMaxTags() int {
+	if s.MaxTags <= 0 {
+		return DefaultSemanticMaxTags
+	}
+	if s.MaxTags > DefaultSemanticMaxTags {
+		return DefaultSemanticMaxTags
+	}
+	return s.MaxTags
+}
+
+// EffectiveTimeout returns the configured request timeout or the default.
+func (s SemanticConfig) EffectiveTimeout() time.Duration {
+	if s.Timeout <= 0 {
+		return DefaultSemanticTimeout
+	}
+	return s.Timeout
 }
 
 // PrivacyConfig controls what seek may send to external providers.

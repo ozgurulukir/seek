@@ -153,6 +153,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 			LineCount:    pageCount,
 			FTSContent:   pageText.String(),
 			Chunks:       indexChunks,
+			FastFields:   semanticTagMap(idx.semanticTags(idx.ctx(), f.Name, pageText.String())),
 		})
 		if err != nil {
 			idx.warnf("  WARN: index %s: %v\n", f.Path, err)

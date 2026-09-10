@@ -100,6 +100,13 @@ const (
 	// DefaultXbergTimeout is the default timeout for xberg extraction requests.
 	// Document extraction (esp. OCR) can be slow, so this is generous.
 	DefaultXbergTimeout = 180 * time.Second
+	// DefaultSemanticBaseURL is the default semantic tag service endpoint
+	// (tools/semantic). The service binds to 127.0.0.1:8003.
+	DefaultSemanticBaseURL = "http://127.0.0.1:8003"
+	// DefaultSemanticMaxTags caps the number of semantic tags per document.
+	DefaultSemanticMaxTags = 5
+	// DefaultSemanticTimeout is the default timeout for semantic tag requests.
+	DefaultSemanticTimeout = 60 * time.Second
 	// DefaultExtractorOutputFormat is the text format requested from xberg.
 	// "markdown" preserves structure (headings, tables, lists) which chunks well.
 	DefaultExtractorOutputFormat = "markdown"

@@ -105,6 +105,7 @@ func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFil
 		LineCount:    lineCount,
 		FTSContent:   res.Content,
 		Chunks:       toIndexChunks(chunk.ChunkMarkdown(res.Content, maxSize, overlap), true),
+		FastFields:   semanticTagMap(idx.semanticTags(idx.ctx(), f.Path, res.Content)),
 	}); err != nil {
 		idx.warnf("  WARN: index %s: %v\n", f.Path, err)
 		idx.recordFailure(f.Path, "persistence", err)

@@ -11,6 +11,7 @@ import (
 	"github.com/ozgurulukir/seek/internal/extractor"
 	"github.com/ozgurulukir/seek/internal/extractor/builtin"
 	"github.com/ozgurulukir/seek/internal/extractor/xberg"
+	"github.com/ozgurulukir/seek/internal/semantic"
 	"github.com/ozgurulukir/seek/internal/source"
 	"github.com/ozgurulukir/seek/internal/store"
 )
@@ -39,6 +40,11 @@ type Indexer struct {
 	// resolved per collection (see extractorFor).
 	ext      extractor.Extractor
 	resolver ExtractorResolver
+	// sem* cache the resolved semantic provider. Resolution (offline gate +
+	// one health check) happens at most once per indexer instance; handlers
+	// run sequentially.
+	semChecked bool
+	semClient  semantic.Provider
 }
 
 func New(cfg *config.AppConfig, db *store.Store) *Indexer {
@@ -400,6 +406,14 @@ func (idx *Indexer) syncConversation(
 			LineCount:    lineCount,
 			FTSContent:   text,
 			Chunks:       indexChunks,
+		}
+		// Tag only on the initial (replace) write: append passes must not
+		// recompute tags for the whole session on every delta. The append
+		// path in the store upserts fast fields without deleting them, so
+		// the initial tags survive; they are refreshed on the next full
+		// sync of the session.
+		if fromLine == 0 && text != "" {
+			request.FastFields = semanticTagMap(idx.semanticTags(idx.ctx(), f.Path, text))
 		}
 		if fromLine == 0 {
 			_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), request)
