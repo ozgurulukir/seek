@@ -144,6 +144,51 @@ func TestSemanticDisabled(t *testing.T) {
 	}
 }
 
+// TestSemanticNilConfig: semanticFastFields must return nil (not panic) when
+// the indexer has no config — the capability is simply absent.
+func TestSemanticNilConfig(t *testing.T) {
+	idx := New(nil, nil)
+	idx.WithLogger(nopLogger{})
+	if fields := idx.semanticFastFields(context.Background(), "x.pdf", textChunks("text")); fields != nil {
+		t.Fatalf("want nil fields when cfg is nil, got %v", fields)
+	}
+}
+
+// TestSemanticSkipsEmptyContentChunks: chunks with no readable text (e.g.
+// image-only pages whose Content is empty) must not be sent to the service;
+// an all-empty document yields nil fields. Chunks whose Content holds page
+// text are sent even when ChunkType is Image (PDF pages rasterize to PNG
+// but keep their text in Content).
+func TestSemanticSkipsEmptyContentChunks(t *testing.T) {
+	tmp := t.TempDir()
+	srv := startFakeSemantic(t, []string{"tag"}, "en")
+	defer srv.Close()
+
+	cfg := cfgFromTest(t, tmp, filepath.Join(tmp, "test.db"))
+	cfg.Config.Semantic.Enabled = true
+	cfg.Config.Semantic.BaseURL = srv.URL
+
+	idx := New(cfg, nil)
+	idx.WithLogger(nopLogger{})
+
+	// All empty content → nothing to send → nil fields, no service call.
+	if fields := idx.semanticFastFields(context.Background(), "blanks.pdf", []store.IndexChunk{
+		{Seq: 0, Content: "   ", ChunkType: store.ChunkTypeImage, ImagePath: "/p.png"},
+		{Seq: 1, Content: "", ChunkType: store.ChunkTypeText},
+	}); fields != nil {
+		t.Fatalf("want nil fields when all chunks are empty, got %v", fields)
+	}
+
+	// Image chunk with real page text IS sent (PDF pages carry text here).
+	fields := idx.semanticFastFields(context.Background(), "doc.pdf", []store.IndexChunk{
+		{Seq: 0, Content: "Go concurrency and goroutines", ChunkType: store.ChunkTypeImage, ImagePath: "/p.png"},
+		{Seq: 1, Content: "Rust ownership and borrowing", ChunkType: store.ChunkTypeImage, ImagePath: "/q.png"},
+	})
+	if fields == nil || fields["language"] != "en" || fields["tags"] == "" {
+		t.Fatalf("image chunk with text should be processed, got %v", fields)
+	}
+}
+
 // TestSemanticOfflineGate: offline_only + non-loopback → refused.
 func TestSemanticOfflineGate(t *testing.T) {
 	tmp := t.TempDir()

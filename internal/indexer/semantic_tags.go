@@ -38,11 +38,25 @@ const (
 //	entities — "TYPE:Text" pairs from NER (e.g. "ORG:OpenAI,LOC:Go")
 //	language — detected ISO 639-1 for the document
 func (idx *Indexer) semanticFastFields(ctx context.Context, label string, chunks []store.IndexChunk) map[string]string {
+	if idx.cfg == nil {
+		return nil
+	}
 	p := idx.semanticProvider()
 	if p == nil {
 		return nil
 	}
-	parts := chunks
+	// Chunks carry extracted text regardless of their storage type: PDF
+	// pages are rasterized to PNG (ChunkTypeImage) but their Content holds
+	// the page text when present. Skip only chunks with no readable text —
+	// an image-only page whose Content is empty/whitespace adds no semantic
+	// signal and would pollute keyphrase/topic/entity extraction.
+	var parts []store.IndexChunk
+	for _, c := range chunks {
+		if strings.TrimSpace(c.Content) == "" {
+			continue
+		}
+		parts = append(parts, c)
+	}
 	if len(parts) == 0 {
 		return nil
 	}
@@ -127,16 +141,18 @@ func (idx *Indexer) semanticProvider() semantic.Provider {
 	}
 	idx.semChecked = true
 
-	cfg := idx.cfg
-	if cfg == nil || !cfg.Config.Semantic.Enabled {
+	if idx.cfg == nil {
 		return nil
 	}
-	baseURL := cfg.Config.Semantic.EffectiveBaseURL()
-	if err := semantic.ValidateOffline(cfg, baseURL); err != nil {
+	if !idx.cfg.Config.Semantic.Enabled {
+		return nil
+	}
+	baseURL := idx.cfg.Config.Semantic.EffectiveBaseURL()
+	if err := semantic.ValidateOffline(idx.cfg, baseURL); err != nil {
 		idx.warnf("  WARN: semantic disabled: %v\n", err)
 		return nil
 	}
-	client := semantic.NewClient(baseURL, cfg.Config.Semantic.EffectiveTimeout())
+	client := semantic.NewClient(baseURL, idx.cfg.Config.Semantic.EffectiveTimeout())
 
 	ctx, cancel := context.WithTimeout(idx.ctx(), 10*time.Second)
 	defer cancel()

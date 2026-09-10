@@ -110,8 +110,16 @@ func (s *Store) writeIndex(ctx context.Context, req DocumentIndex, replace bool)
 		if err := ensureFastFieldsTx(ctx, tx); err != nil {
 			return 0, fmt.Errorf("ensure fast fields: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM fast_fields WHERE doc_id = ?`, docID); err != nil {
-			return 0, fmt.Errorf("delete fast fields: %w", err)
+		// Only clear fast fields when the caller supplied a computed set
+		// (e.g. semantic enrichment). A nil FastFields map means the caller
+		// did not (re)compute metadata this pass (semantic disabled or the
+		// service is down), so keep the previously stored values rather than
+		// wiping them — enrichment is optional and must not destroy existing
+		// metadata on a transient outage.
+		if req.FastFields != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM fast_fields WHERE doc_id = ?`, docID); err != nil {
+				return 0, fmt.Errorf("delete fast fields: %w", err)
+			}
 		}
 	} else if len(req.FastFields) > 0 {
 		if err := ensureFastFieldsTx(ctx, tx); err != nil {
