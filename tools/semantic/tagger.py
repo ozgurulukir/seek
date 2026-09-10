@@ -1,19 +1,26 @@
 """Tag pipeline for the seek semantic tag service.
 
-Combines four components into the contract shape
-``{"tags": [...], "topics": [...], "entities": [...]}``:
+Batch API: one /tag request is one document (its chunks). Components:
 
-  - LID        fasttext-langdetect  (optional; degrades to "unknown")
-  - NER        spaCy                (optional; degrades to no entities)
-  - Keyphrase  YAKE                 (light default, always available)
-  - Topics     BERTopic             (heavy; loaded lazily, first /tag call)
+  - LID        fasttext-langdetect  (corpus-level; reported once per request)
+  - NER        spaCy                (per chunk)
+  - Keyphrase  YAKE                 (per chunk)
+  - Topics     BERTopic             (fit over the request's chunks, then
+                                     transformed — a corpus-level algorithm)
 
 All optional heavy dependencies are imported lazily inside try/except so
-that the service boots and answers with whatever is installed. Model
-state is reported via ``model_status()`` so ``/health`` (and therefore
-seek) can see which capabilities are active. No model output format is
-ever passed through raw: everything is normalized to the contract
-envelope before it reaches FastAPI.
+that the service boots and answers with whatever is installed. Model state
+is reported via ``model_status()`` so ``/health`` (and therefore seek) can
+see which capabilities are active. No model output format is ever passed
+through raw: everything is normalized to the contract envelope before it
+reaches FastAPI.
+
+Contract v0.2.0 (2026-09-10):
+  request  {"chunks": [{"id", "text", "lang?"}], "max_tags": n}
+  response {"results": [{"id", "tags", "topics", "entities"}],
+            "lang": "en", "errors": [...]}
+``lang`` is detected corpus-level (ISO 639-1) when no chunk carries a hint;
+the Go side persists it as the ``language`` fast field.
 """
 
 from __future__ import annotations
@@ -23,8 +30,25 @@ import threading
 
 log = logging.getLogger("semantic")
 
-# Topic labels produced by BERTopic can be long; keep the contract tidy.
-MAX_TOPIC_LABEL_CHARS = 60
+# BERTopic tuning: small batches (one document's chunks) don't need the
+# default 50-dim UMAP; 10 dims keeps fit fast and stable.
+BERTOPIC_MIN_CHUNKS = 3
+BERTOPIC_UMAP_DIMS = 10
+MAX_TOPIC_LABEL_WORDS = 4
+MAX_ENTITIES_PER_CHUNK = 10
+
+
+def _topic_label(model, topic_id: int) -> str:
+    """Turn a BERTopic c-TF-IDF topic into a short readable label."""
+    try:
+        pairs = model.get_topic(topic_id)
+    except Exception:
+        return ""
+    if not pairs:
+        return ""
+    words = [str(w) for w, _score in pairs[:MAX_TOPIC_LABEL_WORDS]]
+    label = " ".join(words).strip()
+    return label[:80]
 
 
 class TagPipeline:
@@ -34,7 +58,7 @@ class TagPipeline:
         self._lid_failed = False
         self._spacy_nlp: dict | None = None
         self._spacy_failed = False
-        self._bertopic = None
+        self._bertopic_factory = None
         self._bertopic_failed = False
         self._yake = None
         self._yake_failed = False
@@ -52,7 +76,7 @@ class TagPipeline:
             "lid": self._lid is not None,
             "ner": bool(self._spacy_nlp),
             "keyphrase": self._yake is not None,
-            "topic": self._bertopic is not None,
+            "topic": self._bertopic_factory is not None,
         }
 
     # ------------------------------------------------------------------
@@ -123,22 +147,36 @@ class TagPipeline:
                 log.warning("YAKE unavailable (%s); keyphrases disabled", e)
         return self._yake
 
-    def _get_bertopic(self):
-        # Heavy: only built on first use. A fresh model per service start
-        # is fine; fitting over all chunks happens inside _topics().
-        if self._bertopic is None and not self._bertopic_failed:
+    def _bertopic_available(self) -> bool:
+        """Check (once) that BERTopic deps can be imported."""
+        if self._bertopic_factory is None and not self._bertopic_failed:
             try:
                 from sentence_transformers import SentenceTransformer
 
                 from bertopic import BERTopic
 
-                self._bertopic = BERTopic(
-                    embedding_model=SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2"),
-                )
+                def factory():
+                    # PCA (not UMAP) for dimensionality reduction: UMAP fails
+                    # on small batches (n_neighbors > n_samples). PCA is fast,
+                    # deterministic, and works for both small and large N.
+                    from sklearn.decomposition import PCA
+
+                    def make_model(n_docs: int):
+                        comps = min(5, max(2, n_docs - 1))
+                        return BERTopic(
+                            embedding_model=SentenceTransformer(
+                                "paraphrase-multilingual-MiniLM-L12-v2"
+                            ),
+                            umap_model=PCA(n_components=comps, random_state=42),
+                        )
+
+                    return make_model
+
+                self._bertopic_factory = factory
             except Exception as e:
                 self._bertopic_failed = True
                 log.warning("BERTopic unavailable (%s); topics disabled", e)
-        return self._bertopic
+        return self._bertopic_factory is not None
 
     # ------------------------------------------------------------------
     # per-component taggers
@@ -170,11 +208,11 @@ class TagPipeline:
             if len(ent.text.strip()) < 2:
                 continue
             ents.append({"text": ent.text.strip(), "type": ent.label_})
-            if len(ents) >= 10:
+            if len(ents) >= MAX_ENTITIES_PER_CHUNK:
                 break
         return ents
 
-    def _keyphrases(self, text: str, lang: str) -> list[str]:
+    def _keyphrases(self, text: str) -> list[str]:
         yake = self._get_yake()
         if yake is None:
             return []
@@ -189,57 +227,113 @@ class TagPipeline:
                 seen.setdefault(k, None)
         return list(seen)
 
-    def _topics(self, text: str, lang: str, max_tags: int) -> list[dict]:
-        model = self._get_bertopic()
-        if model is None:
-            return []
+    def _fit_topics(self, texts: list[str]) -> list[list[dict]]:
+        """Fit BERTopic over the batch and return per-chunk top topics.
+
+        Returns a list parallel to ``texts``; each entry is a list of
+        {"label", "score"} dicts (usually 0-1 entries per chunk because
+        document chunk sets are small).
+
+        Two parameters matter for small N (3-8 chunks): HDBSCAN's default
+        min_samples == min_cluster_size is too conservative and marks every
+        point as noise, so we force min_samples=1 to let a >=2-chunk theme
+        survive. A chunk whose theme has no second member stays noise (-1)
+        and correctly gets no topic.
+        """
+        n = len(texts)
+        if not self._bertopic_available() or n < BERTOPIC_MIN_CHUNKS:
+            return [[] for _ in range(n)]
         with self._lock:
             try:
-                topics, probs = model.transform(text)
-            except Exception:
-                return []
-        best: list[tuple[float, str]] = []
-        for prob, topic in zip(probs, topics):
-            if topic < 0:  # -1 = outlier
-                continue
-            try:
-                label = str(model.get_topic(topic))[:MAX_TOPIC_LABEL_CHARS]
-            except Exception:
-                continue
-            if label and label != "-1":
-                best.append((float(prob), label))
-        best.sort(key=lambda x: x[0], reverse=True)
-        return [
-            {"label": label, "score": round(score, 4)} for score, label in best[:max_tags]
-        ]
+                model = self._bertopic_factory()(n)
+                model.hdbscan_model.min_cluster_size = 2
+                # Default min_samples == min_cluster_size is conservative
+                # enough to noise out every point on small batches; lower it
+                # so a >=2-chunk theme still forms a topic (HDBSCAN docs).
+                model.hdbscan_model.min_samples = 1
+                model.fit_transform(texts)
+                # fit_transform/transform return parallel 1-D lists: per-chunk
+                # (topic_id, probability). topic < 0 = HDBSCAN outlier (noise).
+                topics, probs = model.transform(texts)
+                out: list[list[dict]] = []
+                for i in range(n):
+                    topic_id, prob = topics[i], probs[i]
+                    if topic_id < 0:
+                        out.append([])
+                        continue
+                    label = _topic_label(model, int(topic_id))
+                    if label:
+                        out.append([{"label": label, "score": round(float(prob), 4)}])
+                    else:
+                        out.append([])
+                return out
+            except Exception as e:
+                log.warning("BERTopic fit failed: %s", e)
+                return [[] for _ in range(n)]
 
     # ------------------------------------------------------------------
     # contract
     # ------------------------------------------------------------------
 
-    def tag(self, text: str, lang: str | None = None, max_tags: int = 5) -> dict:
-        lang = (lang or "").lower() or self._detect_lang(text)
-        entities = self._ner(text, lang)
-        keyphrases = self._keyphrases(text, lang)
-        topics = self._topics(text, lang, max_tags)
+    def tag_batch(
+        self,
+        items: list[dict],
+        max_tags: int = 5,
+    ) -> tuple[list[dict], str]:
+        """Tag a document (its non-empty chunks).
 
-        # Merge order: keyphrases (stable, cheap) first, then topics as
-        # tags (topical labels double as search tags). Entities stay a
-        # separate facet; dedup is case-insensitive.
-        tags: dict[str, None] = {}
-        for t in keyphrases:
-            tags.setdefault(t, None)
-            if len(tags) >= max_tags:
+        items: [{"id": int, "text": str, "lang": str|None}, ...]
+        Returns (results, corpus_lang).
+        """
+        # Corpus-level language: explicit hint wins, else detect over the
+        # joined text (LID is cheap even on long text).
+        corpus_lang = "unknown"
+        for it in items:
+            if it.get("lang"):
+                corpus_lang = str(it["lang"]).lower()
                 break
-        for t in topics:
-            k = t["label"].lower()
-            if k not in tags:
-                tags[k] = None
+        if corpus_lang == "unknown" and items:
+            joined = " ".join(it["text"][:2000] for it in items[:5])
+            corpus_lang = self._detect_lang(joined)
+
+        texts = [it["text"] for it in items]
+        topic_lists = self._fit_topics(texts)
+
+        results: list[dict] = []
+        for i, it in enumerate(items):
+            text = it["text"]
+            lang_hint = (it.get("lang") or "").lower() or corpus_lang
+            entities = self._ner(text, lang_hint)
+            keyphrases = self._keyphrases(text)
+            topics = topic_lists[i]
+
+            # Merge order: keyphrases (stable, cheap) first, then topic
+            # labels as tags. Dedup is case-insensitive.
+            tags: dict[str, None] = {}
+            for t in keyphrases:
+                tags.setdefault(t, None)
                 if len(tags) >= max_tags:
                     break
+            for t in topics:
+                k = t["label"].lower()
+                if k not in tags:
+                    tags[k] = None
+                    if len(tags) >= max_tags:
+                        break
 
-        return {
-            "tags": list(tags)[:max_tags],
-            "topics": topics,
-            "entities": entities,
-        }
+            results.append(
+                {
+                    "id": it["id"],
+                    "tags": list(tags)[:max_tags],
+                    "topics": topics,
+                    "entities": entities,
+                }
+            )
+        return results, corpus_lang
+
+    # Backwards-compatible single-text entry (used by tests).
+    def tag(self, text: str, lang: str | None = None, max_tags: int = 5) -> dict:
+        results, _lang = self.tag_batch(
+            [{"id": 0, "text": text, "lang": lang}], max_tags=max_tags
+        )
+        return results[0]

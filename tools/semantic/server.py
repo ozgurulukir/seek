@@ -92,41 +92,69 @@ class TagError(BaseModel):
 class TagResponse(BaseModel):
     results: list[TagResult]
     errors: list[TagError]
+    # corpus_lang is the detected ISO 639-1 for the whole document
+    # (contract v0.2.0); seek persists it as the ``language`` fast field.
+    corpus_lang: Optional[str] = None
 
 
 @app.get("/health")
 def health():
     return {
         "status": "ok",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "models": pipeline.model_status(),
     }
 
 
 @app.post("/tag", response_model=TagResponse)
 def tag(req: TagRequest) -> TagResponse:
-    results: list[TagResult] = []
     errors: list[TagError] = []
+    items: list[dict] = []
     for ch in req.chunks:
         text = ch.text[:MAX_CHUNK_CHARS]
         if not text.strip():
-            continue  # empty chunks are skipped, not errors
-        try:
-            r = pipeline.tag(text, lang=ch.lang, max_tags=req.max_tags)
-            results.append(
-                TagResult(
-                    id=ch.id,
-                    tags=r["tags"],
-                    topics=[Topic(label=t["label"], score=t["score"]) for t in r["topics"]],
-                    entities=[Entity(text=e["text"], type=e["type"]) for e in r["entities"]],
-                )
+            # Empty chunks are skipped, not errors.
+            continue
+        items.append({"id": ch.id, "text": text, "lang": ch.lang})
+
+    # A single batch is one document (the Go client sends a document's
+    # chunks together), so corpus-level operations (LID, BERTopic fit)
+    # are meaningful and run once per request.
+    if not items:
+        return TagResponse(results=[], errors=errors, corpus_lang=None)
+
+    try:
+        results_raw, corpus_lang = pipeline.tag_batch(items, max_tags=req.max_tags)
+    except Exception as e:  # pipeline-level failure degrades, never 500
+        return TagResponse(
+            results=[],
+            errors=[TagError(id=-1, message=str(e))],
+            corpus_lang=None,
+        )
+
+    out = TagResponse(results=[], errors=errors, corpus_lang=corpus_lang)
+    for r in results_raw:
+        out.results.append(
+            TagResult(
+                id=r["id"],
+                tags=r["tags"],
+                topics=[Topic(label=t["label"], score=t["score"]) for t in r["topics"]],
+                entities=[Entity(text=e["text"], type=e["type"]) for e in r["entities"]],
             )
-        except Exception as e:  # per-chunk failure must not sink the batch
-            errors.append(TagError(id=ch.id, message=str(e)))
-    return TagResponse(results=results, errors=errors)
+        )
+    return out
 
 
 if __name__ == "__main__":
     host = os.environ.get("SEMANTIC_HOST", "127.0.0.1")
     port = int(os.environ.get("SEMANTIC_PORT", "8003"))
+    # SEMANTIC_WARMUP=1 eagerly loads the heavy models at startup so the
+    # first /tag call (and therefore the first document indexed by seek)
+    # already has topic + NER + LID available instead of cold-starting on
+    # that very first request.
+    if os.environ.get("SEMANTIC_WARMUP") == "1":
+        pipeline._get_lid()
+        pipeline._get_spacy("en")
+        pipeline._bertopic_available()
+        pipeline._get_yake()
     uvicorn.run(app, host=host, port=port)

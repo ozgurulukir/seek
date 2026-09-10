@@ -78,6 +78,7 @@ def test_tag_contract_shape():
     body = _tag({"chunks": [{"id": 1, "text": "OpenAI released GPT-4 in 2023."}], "max_tags": 3})
     check("tag: results is list", isinstance(body["results"], list))
     check("tag: errors is list", isinstance(body["errors"], list))
+    check("tag: corpus_lang present (v0.2)", "corpus_lang" in body)
     res = body["results"][0]
     check("tag: id echoed", res["id"] == 1)
     check("tag: tags is list[str]", isinstance(res["tags"], list)
@@ -113,9 +114,42 @@ def test_tag_max_tags_clamped():
 def test_pipeline_direct():
     p = TagPipeline()
     r = p.tag("OpenAI released the GPT-4 model in 2023. Concurrency in Go.", max_tags=5)
-    check("pipeline: keys complete", set(r) == {"tags", "topics", "entities"})
+    check("pipeline: keys complete", set(r) == {"id", "tags", "topics", "entities"})
     check("pipeline: dedup is case-insensitive",
           len(r["tags"]) == len({t.lower() for t in r["tags"]}))
+
+
+def test_batch_lang_and_topics_shape():
+    p = TagPipeline()
+    items = [
+        {"id": i, "text": "Golang concurrency uses goroutines and channels for coordination."}
+        for i in range(4)
+    ]
+    results, lang = p.tag_batch(items, max_tags=5)
+    check("batch: one result per chunk", len(results) == len(items))
+    check("batch: lang is a string", isinstance(lang, str) and len(lang) > 0)
+    for r in results:
+        check(f"batch: chunk {r['id']} has shape",
+              set(r) == {"id", "tags", "topics", "entities"})
+
+
+def test_batch_produces_topics():
+    """A batch with >=2 chunks per theme must cluster into topics.
+
+    Guards against HDBSCAN's default too-conservative behaviour (min_samples
+    == min_cluster_size) which marked every point as noise and returned no
+    topics at all on small batches.
+    """
+    p = TagPipeline()
+    items = [
+        {"id": 0, "text": "Golang concurrency uses goroutines and channels."},
+        {"id": 1, "text": "Go channels coordinate goroutines on the runtime scheduler."},
+        {"id": 2, "text": "Rust ownership and borrowing prevent data races."},
+        {"id": 3, "text": "Rust lifetimes ensure references stay valid without a garbage collector."},
+    ]
+    results, _lang = p.tag_batch(items, max_tags=5)
+    n_topics = sum(1 for r in results if r["topics"])
+    check("batch >=4 chunks produces at least one topic", n_topics >= 1, f"got {n_topics}")
 
 
 if __name__ == "__main__":
@@ -126,4 +160,6 @@ if __name__ == "__main__":
     test_tag_batch_isolated()
     test_tag_max_tags_clamped()
     test_pipeline_direct()
+    test_batch_lang_and_topics_shape()
+    test_batch_produces_topics()
     print(f"\nall {passed} checks passed")

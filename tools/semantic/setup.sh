@@ -13,8 +13,12 @@
 #   source tools/semantic/.venv/bin/activate
 #   python tools/semantic/server.py
 #
-# Environment:
-#   SEMANTIC_HOST (default 127.0.0.1), SEMANTIC_PORT (default 8003).
+Source env:
+#   SEMANTIC_HOST (default 127.0.0.1)
+#   SEMANTIC_PORT (default 8003)
+#   SEMANTIC_WARMUP=1  — eagerly load heavy models (spaCy/BERTopic/LID) at
+#                        startup so the first request is fast (recommended
+#                        for seek integration).
 #
 # Note: heavy model weights (spaCy xx_ent_wiki_sm, tr_core_news_sm,
 # paraphrase-multilingual-MiniLM-L12-v2, LID vectors) are downloaded on
@@ -84,4 +88,5 @@ echo
 echo "Setup complete."
 echo "Start the service with:"
 echo "  source tools/semantic/.venv/bin/activate"
-echo "  python tools/semantic/server.py"
+echo "  SEMANTIC_WARMUP=1 python tools/semantic/server.py   # prefer: eager model load"
+echo "  python tools/semantic/server.py                       # lazy first-request load"
