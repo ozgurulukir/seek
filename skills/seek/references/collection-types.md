@@ -58,6 +58,10 @@ These are stored in a `fast_fields` table and are filterable (`--tag`,
 - **code** — always: `lang`, `ext`, `filename`, `rel_path`, `repo` (collection name)
 - **markdown** — YAML frontmatter keys, e.g. `tags` (comma-joined list),
   `date`, `author`, or any other scalar in the frontmatter block
+- **pdf / documents / conversations** — `tags` (comma-joined list) generated
+  by the optional local semantic tag service when `semantic.enabled: true`
+  (NER + keyphrases + topics; see [docs/semantic.md](docs/semantic.md)).
+  Without the service, these collections have no `tags`.
 
 ## Schema-driven parsers
 
