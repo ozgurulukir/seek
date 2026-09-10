@@ -114,8 +114,8 @@ func NewExtractor(cfg *config.AppConfig, backend string) (extractor.Extractor, e
 		backend = cfg.Config.Extractor.Backend
 	}
 	var ocr extractor.OCR
-	if cfg.Config.OCR.Enabled && cfg.Config.OCR.APIKey != "" && !cfg.Config.OfflineOnly() {
-		ocr = embed.NewOCRClient(cfg.Config.OCR.BaseURL, cfg.Config.OCR.APIKey, cfg.Config.OCR.Model)
+	if cfg.Config.CanUseOCR() {
+		ocr = embed.NewOCRClient(cfg.Config.OCR.BaseURL, cfg.Config.OCR.APIKey, cfg.Config.OCR.Model, cfg.Config.OCR.MaxTokens)
 	}
 	switch backend {
 	case "", "builtin":

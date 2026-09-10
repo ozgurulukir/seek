@@ -231,6 +231,7 @@ seek search "query" \
 - [Query Syntax](references/query-syntax.md) — boolean, phrase, prefix, fuzzy, field-scoped, proximity
 - [Filters](references/filters.md) — repo/collection, lang, doc-type, date range, chunk-type, path, workspace, sort, query-mode
 - [Collection Types](references/collection-types.md) — code, markdown, claude, codex, images, pdf, documents, parser
+- [OCR Reference](references/ocr.md) — local Ollama/GLM-OCR quickstart, privacy boundary, compatibility, and troubleshooting
 - [Service](references/service.md) — background periodic sync+embed service
 - [Hooks](references/hooks.md) — Claude Code and Codex auto-indexing hooks
 - [Troubleshooting](references/troubleshooting.md) — no results, API errors, index issues
@@ -256,9 +257,17 @@ chunk:
 ```yaml
 ocr:
   enabled: true
-  # base_url/api_key/model default to embedding provider
-  # model: qwen-vl-ocr
+  # base_url/api_key/model default to the embedding provider
+  # base_url: http://127.0.0.1:11434/v1
+  # api_key: ollama
+  # model: glm-ocr
+  # max_tokens: 2048
 ```
+
+- OCR runs only for PDF pages with no embedded text layer.
+- With `privacy.offline_only: true`, use only numeric loopback URLs (`127.0.0.0/8` or `::1`). Hostnames such as `localhost`, private-network URLs, and remote URLs are refused; environment HTTP proxies are bypassed for numeric loopback OCR. The local OCR server remains a trusted boundary and may have its own forwarding behavior.
+- The request is non-streaming and capped at `ocr.max_tokens` (default `2048`). Increase the limit if dense pages are truncated.
+- For the recommended local setup and provider compatibility table, read [OCR Reference](references/ocr.md).
 
 **Reranking (Cross-Encoder reranking for better result ordering):**
 ```yaml

@@ -13,6 +13,23 @@
 - Check `~/.config/seek/config.yaml` for `embedding.api_key`
 - If missing, add the key and run `seek embed`
 
+## Scanned PDF OCR is empty or fails
+
+- OCR is called only when a PDF page has no embedded text layer. Text-native PDF
+  pages do not call the OCR provider.
+- Confirm `ocr.enabled: true`, a non-empty `ocr.api_key`, and the correct model
+  endpoint. For Ollama, use `http://127.0.0.1:11434/v1`, `api_key: ollama`, and
+  `model: glm-ocr`.
+- With `privacy.offline_only: true`, use a numeric loopback URL (`127.0.0.0/8`
+  or `::1`). `localhost`, private-network addresses, and remote endpoints are
+  refused. The local OCR server itself must be trusted not to forward images.
+- Run `seek doctor` to inspect the OCR destination and policy status, then run
+  `seek sync` and verify with `seek search "text" --lex`.
+- If output is truncated, raise `ocr.max_tokens` above its default of `2048`.
+- If the server rejects the request, verify that `ocr.base_url` is the API root
+  (for example `/v1`); seek normalizes a trailing slash and appends
+  `/chat/completions`.
+
 ## Index seems stale
 
 ```bash

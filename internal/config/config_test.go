@@ -51,6 +51,43 @@ func TestDefaultAppConfig(t *testing.T) {
 	}
 }
 
+func TestCanUseOCR(t *testing.T) {
+	cases := []struct {
+		name    string
+		offline bool
+		baseURL string
+		enabled bool
+		apiKey  string
+		want    bool
+	}{
+		{name: "offline loopback IPv4", offline: true, baseURL: "http://127.0.0.1:11434/v1", enabled: true, apiKey: "local", want: true},
+		{name: "offline hostname", offline: true, baseURL: "http://localhost:11434/v1", enabled: true, apiKey: "local", want: false},
+		{name: "offline loopback IPv6", offline: true, baseURL: "http://[::1]:11434/v1", enabled: true, apiKey: "local", want: true},
+		{name: "offline remote host", offline: true, baseURL: "https://api.example.com/v1", enabled: true, apiKey: "secret", want: false},
+		{name: "offline private network", offline: true, baseURL: "http://192.168.1.10:11434/v1", enabled: true, apiKey: "local", want: false},
+		{name: "offline invalid URL", offline: true, baseURL: "localhost:11434/v1", enabled: true, apiKey: "local", want: false},
+		{name: "online remote host", offline: false, baseURL: "https://api.example.com/v1", enabled: true, apiKey: "secret", want: true},
+		{name: "disabled", offline: false, baseURL: "http://127.0.0.1:11434/v1", enabled: false, apiKey: "local", want: false},
+		{name: "missing API key", offline: false, baseURL: "http://127.0.0.1:11434/v1", enabled: true, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{
+				OCR: OCRConfig{
+					Enabled: tc.enabled,
+					BaseURL: tc.baseURL,
+					APIKey:  tc.apiKey,
+				},
+				Privacy: PrivacyConfig{OfflineOnly: tc.offline},
+			}
+			if got := cfg.CanUseOCR(); got != tc.want {
+				t.Errorf("CanUseOCR() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestApplyFallbacks(t *testing.T) {
 	t.Setenv("TEST_API_KEY", "secret-key-123")
 	t.Setenv("TEST_XBERG_HOST", "http://xberg.local:8080")
@@ -79,6 +116,9 @@ func TestApplyFallbacks(t *testing.T) {
 	}
 	if cfg.OCR.Model != DefaultOCRModel {
 		t.Errorf("OCR.Model = %q, want %q", cfg.OCR.Model, DefaultOCRModel)
+	}
+	if cfg.OCR.MaxTokens != DefaultOCRMaxTokens {
+		t.Errorf("OCR.MaxTokens = %d, want %d", cfg.OCR.MaxTokens, DefaultOCRMaxTokens)
 	}
 
 	if cfg.Rerank.BaseURL != "https://api.example.com/v1" {

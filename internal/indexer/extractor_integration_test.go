@@ -2,6 +2,9 @@ package indexer_test
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,5 +82,45 @@ func TestNewExtractor_BuiltinPDFExtractionIntegration(t *testing.T) {
 	_, err = indexer.NewExtractor(cfg, "unknown-backend")
 	if err == nil {
 		t.Error("expected error for unknown backend, got nil")
+	}
+}
+
+func TestNewExtractor_AllowsLoopbackOCRWhenOfflineOnly(t *testing.T) {
+	ocrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"content":"LOCAL OCR TEXT"}}]}`)
+	}))
+	t.Cleanup(ocrServer.Close)
+
+	tmpDir := t.TempDir()
+	cfg := &config.AppConfig{CacheDir: filepath.Join(tmpDir, "cache")}
+	cfg.Config.OCR = config.OCRConfig{
+		Enabled: true,
+		BaseURL: ocrServer.URL,
+		APIKey:  "local",
+		Model:   "test-ocr",
+	}
+	cfg.Config.Privacy.OfflineOnly = true
+
+	ext, err := indexer.NewExtractor(cfg, "builtin")
+	if err != nil {
+		t.Fatalf("NewExtractor(builtin): %v", err)
+	}
+
+	pdfPath := filepath.Join(tmpDir, "scan.pdf")
+	writeMinPdf(t, pdfPath)
+	doc, err := ext.Extract(context.Background(), pdfPath)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(doc.Pages) != 1 {
+		t.Fatalf("Pages = %d, want 1", len(doc.Pages))
+	}
+	if got := doc.Pages[0].Text; got != "LOCAL OCR TEXT" {
+		t.Errorf("OCR text = %q, want %q", got, "LOCAL OCR TEXT")
 	}
 }

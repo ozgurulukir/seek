@@ -53,6 +53,7 @@ func (c *ConfigCmd) Run(cfg *config.AppConfig) error {
 		fmt.Println("  # base_url: https://dashscope.aliyuncs.com/compatible-mode/v1")
 		fmt.Println("  # api_key: ${DASHSCOPE_API_KEY}")
 		fmt.Println("  # model: qwen-vl-ocr")
+		fmt.Println("  # max_tokens: 2048")
 		fmt.Println("EOF")
 		return nil
 	}

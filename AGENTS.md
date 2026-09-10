@@ -77,10 +77,11 @@ ocr:
   # base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
   # api_key: ${DASHSCOPE_API_KEY}
   # model: qwen-vl-ocr
+  # max_tokens: 2048
 ```
 
 - OCR runs only for PDF pages with no embedded text (scanned docs), during `seek add --pdf` / `seek sync`.
-- Uses the OpenAI-compatible chat-completions vision format (`POST {base_url}/chat/completions`), so any vision/OCR model works.
+- Uses the OpenAI-compatible chat-completions vision format (`POST {base_url}/chat/completions`), with `stream: false` and a configurable `max_tokens` limit (default 2048), so any vision/OCR model works. With `privacy.offline_only: true`, only numeric loopback OCR endpoints (`127.0.0.0/8` or `::1`) are allowed and environment HTTP proxies are bypassed; remote/private-network endpoints are refused. The local OCR server remains a trusted boundary and may have its own forwarding behavior.
 - Extracted text is written to the chunk `content` and indexed via `UpsertFTS`, making scanned PDFs keyword-searchable.
 - `source.TextExtractor` is the interface; `embed.OCRClient` implements it. Keep `source` decoupled from `embed`.
 

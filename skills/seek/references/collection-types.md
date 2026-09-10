@@ -11,6 +11,11 @@
 | `documents` | Any directory | Rich documents (docx/xlsx/pptx/epub/html/...) via extraction backend (builtin/xberg) |
 | `parser` | External SQLite/JSONL | Schema-driven: opencode, copilot-cli, zed, claude (text-only), codex (text-only) |
 
+PDF OCR is opt-in and runs only for pages without an embedded text layer. Configure
+the OpenAI-compatible vision endpoint under `ocr:`; in strict offline mode the
+endpoint must use a numeric loopback address (`127.0.0.0/8` or `::1`). See the
+[OCR Reference](ocr.md).
+
 ## Source code collections (`code`)
 
 Indexes source code repositories with automatic language detection, `.gitignore` filtering, vendor / node_modules / lockfile skipping, and binary detection.

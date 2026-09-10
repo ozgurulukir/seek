@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,12 +102,14 @@ func (e EmbeddingConfig) IsMultimodal() bool {
 // OCRConfig configures text extraction from rasterized PDF pages (scanned docs).
 // It uses the OpenAI-compatible chat-completions vision format, so any provider
 // that exposes a vision/OCR model works (DashScope qwen-vl-ocr, OpenAI gpt-4o, etc.).
-// Empty base_url/model fall back to the embedding provider's settings.
+// Empty base_url/model fall back to the embedding provider's settings. A
+// positive max_tokens value limits the response; zero uses the safe default.
 type OCRConfig struct {
-	Enabled bool   `yaml:"enabled,omitempty"`
-	BaseURL string `yaml:"base_url,omitempty"`
-	APIKey  string `yaml:"api_key,omitempty"`
-	Model   string `yaml:"model,omitempty"`
+	Enabled   bool   `yaml:"enabled,omitempty"`
+	BaseURL   string `yaml:"base_url,omitempty"`
+	APIKey    string `yaml:"api_key,omitempty"`
+	Model     string `yaml:"model,omitempty"`
+	MaxTokens int    `yaml:"max_tokens,omitempty"`
 }
 
 // RerankConfig configures optional cross-encoder reranking.
@@ -212,14 +216,43 @@ type Config struct {
 
 // PrivacyConfig controls what seek may send to external providers.
 type PrivacyConfig struct {
-	// OfflineOnly refuses every network call to embedding, rerank, and OCR
-	// providers (fail fast, before any data leaves the machine). Keyword
-	// search stays fully local regardless.
+	// OfflineOnly refuses external provider calls. OCR may still use a
+	// numeric loopback endpoint (127.0.0.0/8 or ::1) for local models;
+	// keyword search stays fully local regardless.
 	OfflineOnly bool `yaml:"offline_only,omitempty"`
 }
 
 // OfflineOnly reports whether external provider calls are forbidden.
 func (c *Config) OfflineOnly() bool { return c.Privacy.OfflineOnly }
+
+// CanUseOCR reports whether the configured OCR client may be constructed
+// under the current privacy policy. When offline_only is enabled, only a
+// numeric loopback URL is allowed; hostname resolution is deliberately not
+// used so a private or public network address cannot be mistaken for local.
+func (c *Config) CanUseOCR() bool {
+	if c == nil || !c.OCR.Enabled || c.OCR.APIKey == "" {
+		return false
+	}
+	return !c.OfflineOnly() || IsNumericLoopbackURL(c.OCR.BaseURL)
+}
+
+// IsNumericLoopbackURL reports whether rawURL uses an HTTP(S) numeric loopback
+// address. Hostnames are intentionally excluded so DNS, hosts-file, and proxy
+// configuration cannot turn an offline OCR destination into a remote one.
+func IsNumericLoopbackURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return false
+	}
+
+	ip := net.ParseIP(u.Hostname())
+	return ip != nil && ip.IsLoopback()
+}
 
 type AppConfig struct {
 	Config   Config
@@ -306,6 +339,9 @@ func applyFallbacks(cfg *Config) {
 	}
 	if cfg.OCR.Model == "" {
 		cfg.OCR.Model = DefaultOCRModel
+	}
+	if cfg.OCR.MaxTokens <= 0 {
+		cfg.OCR.MaxTokens = DefaultOCRMaxTokens
 	}
 
 	// Rerank falls back to the embedding provider's baseURL/APIKey if empty

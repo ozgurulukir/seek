@@ -48,7 +48,10 @@ ocr:
   # base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
   # api_key: ${DASHSCOPE_API_KEY}
   # model: qwen-vl-ocr
+  # max_tokens: 2048
 ```
 
 - When a PDF page contains no embedded text, `seek` invokes the configured vision/OCR model during `seek sync`.
+- The request is non-streaming and defaults to a 2048-token response limit; set `ocr.max_tokens` higher for unusually dense pages if the result is truncated.
 - Extracted text is indexed into FTS5 and chunk content, making scanned documents fully keyword- and hybrid-searchable.
+- With `privacy.offline_only: true`, OCR is allowed only for numeric loopback endpoints (`127.0.0.0/8` or `::1`), and environment HTTP proxies are bypassed. This limits seek's direct destination; trust the local OCR server not to forward document images. See the [local OCR quickstarts](local-setup.md#3-optional-ocr-for-scanned-pdfs).

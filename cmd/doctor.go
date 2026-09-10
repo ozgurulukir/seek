@@ -128,12 +128,12 @@ func (c *DoctorCmd) Run(cfg *config.AppConfig) error {
 }
 
 // reportPrivacy prints which external endpoints receive which data types —
-// the disclosure surface for seek's one network egress path (Jerry review
-// #6b: keyword search is local; embedding/rerank/OCR are not, by default).
+// the disclosure surface for seek's network egress paths (keyword search is
+// local; external embedding/rerank/OCR are not allowed in offline-only mode).
 func (c *DoctorCmd) reportPrivacy(cfg *config.AppConfig) {
 	fmt.Println("privacy / data egress:")
 	if cfg.Config.OfflineOnly() {
-		fmt.Println("  offline_only: true — embedding, rerank, OCR, and xberg extractor network calls are blocked")
+		fmt.Println("  offline_only: true — external embedding, rerank, OCR, and xberg calls are blocked; loopback OCR is allowed")
 	} else {
 		fmt.Println("  offline_only: false — external providers may receive data:")
 	}
@@ -145,7 +145,15 @@ func (c *DoctorCmd) reportPrivacy(cfg *config.AppConfig) {
 		fmt.Printf("  rerank:    %s (%s)  <- query + result text\n", cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.Model)
 	}
 	if cfg.Config.OCR.Enabled && cfg.Config.OCR.BaseURL != "" {
-		fmt.Printf("  ocr:       %s (%s)  <- scanned PDF page images\n", cfg.Config.OCR.BaseURL, cfg.Config.OCR.Model)
+		status := ""
+		if cfg.Config.OfflineOnly() {
+			if cfg.Config.CanUseOCR() {
+				status = " [loopback allowed]"
+			} else {
+				status = " [blocked by offline_only]"
+			}
+		}
+		fmt.Printf("  ocr:       %s (%s)%s  <- scanned PDF page images\n", cfg.Config.OCR.BaseURL, cfg.Config.OCR.Model, status)
 	}
 	if cfg.Config.Extractor.XbergBaseURL != "" && !cfg.Config.OfflineOnly() {
 		fmt.Printf("  xberg:     %s  <- full document contents (rich-format extraction)\n", cfg.Config.Extractor.XbergBaseURL)

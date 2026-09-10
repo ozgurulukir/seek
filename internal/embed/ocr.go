@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/ozgurulukir/seek/internal/config"
 )
@@ -14,21 +15,41 @@ import (
 // chat-completions endpoint. Any provider exposing a vision model works
 // (DashScope qwen-vl-ocr, OpenAI gpt-4o, etc.).
 type OCRClient struct {
-	baseURL string
-	apiKey  string
-	model   string
-	http    *http.Client
+	baseURL   string
+	apiKey    string
+	model     string
+	maxTokens int
+	http      *http.Client
 }
 
 // NewOCRClient creates an OCR client. baseURL is the OpenAI-compatible endpoint
 // root (e.g. https://dashscope.aliyuncs.com/compatible-mode/v1); the chat
 // completions path is appended automatically.
-func NewOCRClient(baseURL, apiKey, model string) *OCRClient {
+func NewOCRClient(baseURL, apiKey, model string, maxTokens int) *OCRClient {
+	if maxTokens <= 0 {
+		maxTokens = config.DefaultOCRMaxTokens
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if config.IsNumericLoopbackURL(baseURL) {
+		// ProxyFromEnvironment only special-cases the hostname "localhost";
+		// numeric loopback URLs could otherwise be sent through HTTP_PROXY.
+		transport.Proxy = nil
+	}
 	return &OCRClient{
-		baseURL: baseURL,
-		apiKey:  apiKey,
-		model:   model,
-		http:    &http.Client{Timeout: config.DefaultEmbeddingTimeout},
+		baseURL:   baseURL,
+		apiKey:    apiKey,
+		model:     model,
+		maxTokens: maxTokens,
+		http: &http.Client{
+			Transport: transport,
+			Timeout:   config.DefaultEmbeddingTimeout,
+			// OCR requests may carry private document images. Never follow a
+			// redirect automatically; a local endpoint must not be able to
+			// redirect the request to an external host.
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 }
 
@@ -37,6 +58,8 @@ type ocrRequest struct {
 	Model       string       `json:"model"`
 	Messages    []ocrMessage `json:"messages"`
 	Temperature float64      `json:"temperature"`
+	MaxTokens   int          `json:"max_tokens"`
+	Stream      bool         `json:"stream"`
 }
 
 type ocrMessage struct {
@@ -79,6 +102,8 @@ func (c *OCRClient) ExtractText(imageDataURI string) (string, error) {
 			},
 		},
 		Temperature: 0.0,
+		MaxTokens:   c.maxTokens,
+		Stream:      false,
 	}
 
 	body, err := json.Marshal(req)
@@ -86,7 +111,7 @@ func (c *OCRClient) ExtractText(imageDataURI string) (string, error) {
 		return "", err
 	}
 
-	url := c.baseURL + "/chat/completions"
+	url := strings.TrimRight(c.baseURL, "/") + "/chat/completions"
 	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
 		return "", err

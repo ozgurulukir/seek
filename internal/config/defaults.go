@@ -56,6 +56,9 @@ const (
 	DefaultPDFDPI = 150.0
 	// DefaultOCRModel is the default model for OCR extraction.
 	DefaultOCRModel = "qwen-vl-ocr"
+	// DefaultOCRMaxTokens bounds OCR output so a vision model cannot generate
+	// unbounded commentary instead of returning the extracted page text.
+	DefaultOCRMaxTokens = 2048
 
 	// DefaultRerankModel is the default model for cross-encoder reranking.
 	DefaultRerankModel = "bge-reranker-large"

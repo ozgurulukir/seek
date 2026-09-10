@@ -30,10 +30,10 @@ instead of being reported as success. To verify the download yourself before
 running (download–hash–verify–run):
 
 ```bash
-curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.3.2/seek_v0.3.2_linux-amd64.tar.gz
-curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.3.2/SHA256SUMS.txt
-grep seek_v0.3.2_linux-amd64.tar.gz SHA256SUMS.txt | sha256sum -c -
-tar -xzf seek_v0.3.2_linux-amd64.tar.gz && ./seek --version
+curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.3.3/seek_v0.3.3_linux-amd64.tar.gz
+curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.3.3/SHA256SUMS.txt
+grep seek_v0.3.3_linux-amd64.tar.gz SHA256SUMS.txt | sha256sum -c -
+tar -xzf seek_v0.3.3_linux-amd64.tar.gz && ./seek --version
 ```
 
 **Windows (PowerShell):**
@@ -83,10 +83,10 @@ seek sync                                  # fast incremental index
 seek search "ECONNREFUSED port 3000" --lex
 ```
 
-This option performs zero network calls: indexing, keyword search, and all
-data stay on your machine. (Scanned-PDF OCR is the one opt-in exception —
-it is disabled unless you enable `ocr:` and is always blocked by
-`privacy.offline_only: true`.)
+This option performs zero external network calls: indexing, keyword search, and
+all data stay on your machine. Scanned-PDF OCR is available as an opt-in when
+you point it at a local loopback vision server; remote OCR remains blocked by
+`privacy.offline_only: true`.
 
 ### Option B — Hybrid Search (Cloud OpenAI / DashScope)
 
@@ -210,7 +210,7 @@ keyword-first workflow.
 
 ```yaml
 embedding:
-  base_url: http://localhost:11434/v1
+  base_url: http://127.0.0.1:11434/v1
   api_key: ollama
   model: nomic-embed-text
   dimensions: 768
@@ -245,9 +245,8 @@ compression:
   level: 3
 
 privacy:
-  offline_only: true        # refuse ALL embedding/rerank/OCR/xberg network
-                            # calls (xberg extraction sends document contents
-                            # to its service, even on localhost);
+  offline_only: true        # refuse external embedding/rerank/OCR/xberg calls;
+                            # allow only numeric loopback OCR for local models;
                             # keyword search stays fully local either way
                             # (see: seek doctor → privacy / data egress)
 ```
