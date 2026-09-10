@@ -38,12 +38,14 @@ type HooksUninstallCmd struct {
 	Codex  bool `help:"Remove only the Codex hook"`
 }
 
-// HooksSyncCmd is the machine-readable hook entry point. It intentionally
-// suppresses sync progress and errors: Codex requires valid JSON on stdout.
+// HooksSyncCmd is the machine-readable hook entry point. It suppresses sync
+// progress so hook runners receive valid JSON on stdout, but propagates sync
+// errors through the process exit status.
 type HooksSyncCmd struct {
-	Agent    string        `hidden:"" help:"Collection type to sync"`
-	Embed    bool          `hidden:"" help:"Embed newly synced chunks"`
-	Debounce time.Duration `hidden:"" default:"15s" help:"Minimum time between hook syncs"`
+	Agent      string        `hidden:"" help:"Collection type to sync"`
+	Embed      bool          `hidden:"" help:"Embed newly synced chunks"`
+	Background bool          `hidden:"" help:"Launch sync in a detached background process"`
+	Debounce   time.Duration `hidden:"" default:"15s" help:"Minimum time between hook syncs"`
 }
 
 type HooksStatusCmd struct{}
@@ -75,6 +77,8 @@ type hookTarget struct {
 	event         string // hook event, e.g. "Stop"
 	context       bool   // Context hooks search seek and return additional agent context.
 	embed         bool   // Sync hooks optionally refresh semantic search.
+	background    bool   // Launch a detached worker before the hook runner timeout.
+	async         bool   // Ask the hook runner not to wait for the command.
 	timeout       int    // Optional command timeout in seconds.
 	statusMessage string // Optional command status shown by the hook runner.
 }
@@ -95,6 +99,7 @@ var hookTargets = []hookTarget{
 	{name: "Claude Code", agent: "claude", settingsPath: claudeSettingsPath, event: "Stop", timeout: 600, statusMessage: "Syncing seek index..."},
 	{name: "Claude Code", agent: "claude", settingsPath: claudeSettingsPath, event: "UserPromptSubmit", context: true, timeout: 5},
 	{name: "Codex", agent: "codex", settingsPath: codexHooksPath, event: "Stop", timeout: 600},
+	{name: "Codex", agent: "codex", settingsPath: codexHooksPath, event: "Interrupt", background: true, async: true, timeout: 3},
 	{name: "Codex", agent: "codex", settingsPath: codexHooksPath, event: "UserPromptSubmit", context: true, timeout: 5},
 }
 
@@ -269,6 +274,9 @@ func (c *HooksSyncCmd) Run(cfg *config.AppConfig) error {
 		_, err := io.WriteString(os.Stdout, "{}\n")
 		return err
 	}
+	if c.Background {
+		return c.runBackground()
+	}
 	statePath := hookStatePath(cfg, c.Agent)
 	lockCtx, cancelLock := context.WithTimeout(context.Background(), hookLockWaitTimeout)
 	defer cancelLock()
@@ -317,10 +325,34 @@ func (c *HooksSyncCmd) Run(cfg *config.AppConfig) error {
 		childErr = command.Run()
 		return childErr
 	}, os.Stdout)
-	if err := writeHookState(statePath, hookState{Agent: c.Agent, CompletedAt: time.Now(), LastAttemptAt: time.Now(), Error: errorString(childErr)}); err != nil {
-		fmt.Fprintf(os.Stderr, "WARN: record seek hook state: %v\n", err)
+	now := time.Now()
+	stateErr := writeHookState(statePath, hookState{Agent: c.Agent, CompletedAt: now, LastAttemptAt: now, Error: errorString(childErr)})
+	if stateErr != nil {
+		fmt.Fprintf(os.Stderr, "WARN: record seek hook state: %v\n", stateErr)
 	}
-	return syncErr
+	return errors.Join(syncErr, stateErr)
+}
+
+// runBackground starts the real sync in a detached process and returns before
+// Codex's short Interrupt-hook timeout expires. The child runs the normal
+// locked sync path and therefore remains visible through hooks status.
+func (c *HooksSyncCmd) runBackground() error {
+	args := []string{"hooks", "sync", "--agent", c.Agent}
+	if c.Embed {
+		args = append(args, "--embed")
+	}
+	command := exec.Command(hookRuntimeBinary(), args...)
+	command.Env = withoutHookLockEnv(os.Environ())
+	// nil streams map to the OS null device. In particular, do not inherit the
+	// hook runner's pipes: the detached child must not keep the hook alive.
+	configureDetachedHookCommand(command)
+	if err := command.Start(); err != nil {
+		_, outputErr := io.WriteString(os.Stdout, "{}\n")
+		return errors.Join(fmt.Errorf("start background hook sync: %w", err), outputErr)
+	}
+	_ = command.Process.Release()
+	_, err := io.WriteString(os.Stdout, "{}\n")
+	return err
 }
 
 type hookState struct {
@@ -365,6 +397,16 @@ func withHookLockEnv(env []string) []string {
 		}
 	}
 	return append(filtered, hookLockEnv+"=1")
+}
+
+func withoutHookLockEnv(env []string) []string {
+	filtered := make([]string, 0, len(env))
+	for _, value := range env {
+		if !strings.HasPrefix(value, hookLockEnv+"=") {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 func readHookState(path string) (hookState, bool) {
@@ -428,9 +470,9 @@ func errorString(err error) string {
 type syncRunner func() error
 
 func runHooksSync(sync syncRunner, output io.Writer) error {
-	_ = sync()
-	_, err := io.WriteString(output, "{}\n")
-	return err
+	syncErr := sync()
+	_, outputErr := io.WriteString(output, "{}\n")
+	return errors.Join(syncErr, outputErr)
 }
 
 // --- generic Claude-Code-style JSON hooks ---
@@ -531,6 +573,9 @@ func hookCommand(t hookTarget, binary string) string {
 	if t.agent != "" {
 		args = append(args, "--agent", t.agent)
 	}
+	if t.background && !t.context {
+		args = append(args, "--background")
+	}
 	if t.embed && !t.context {
 		args = append(args, "--embed")
 	}
@@ -552,13 +597,48 @@ func findSeekHookIndex(settings map[string]interface{}, event string) int {
 	return findHookIndex(settings, event, isSeekHookCommand)
 }
 
-// findTargetSeekHookIndex only recognizes the exact current command shape for
-// target. Legacy commands remain discoverable by findSeekHookIndex so install
-// and uninstall can upgrade or remove them, but are not reported as healthy.
+// findTargetSeekHookIndex only recognizes the exact current command shape and
+// required runner options for target. Legacy commands remain discoverable by
+// findSeekHookIndex so install and uninstall can upgrade or remove them, but
+// are not reported as healthy.
 func findTargetSeekHookIndex(settings map[string]interface{}, target hookTarget) int {
-	return findHookIndex(settings, target.event, func(command string) bool {
-		return isTargetSeekHookCommand(command, target)
-	})
+	hooks, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		return -1
+	}
+	eventHooks, ok := hooks[target.event].([]interface{})
+	if !ok {
+		return -1
+	}
+	for i, entry := range eventHooks {
+		entryMap, ok := entry.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		hookList, ok := entryMap["hooks"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, value := range hookList {
+			hook, ok := value.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			command, _ := hook["command"].(string)
+			if isTargetSeekHookCommand(command, target) && targetHookOptionsMatch(hook, target) {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func targetHookOptionsMatch(hook map[string]interface{}, target hookTarget) bool {
+	if !target.async {
+		return true
+	}
+	async, ok := hook["async"].(bool)
+	return ok && async
 }
 
 func findHookIndex(settings map[string]interface{}, event string, matches func(string) bool) int {
@@ -601,7 +681,7 @@ var (
 	// upgrade and uninstall must all still find their own hook entry.
 	// Quoted forms must end in a path separator + "seek" (or be exactly the
 	// bare binary name) so lookalikes like 'myseek' never match.
-	directSeekHookCommandPattern = regexp.MustCompile(`(?i)^(?:'(?:(?:[^'/\\]*[\\/]+)*seek(?:\.exe)?)'|"(?:(?:[^"\\]*[\\/]+)*seek(?:\.exe)?)"|(?:[^\s]+[\\/])?seek(?:\.exe)?)\s+(?:hooks\s+)?(?:sync|context)(?:\s+--(?:agent\s+\S+|embed))*\s*$`)
+	directSeekHookCommandPattern = regexp.MustCompile(`(?i)^(?:'(?:(?:[^'/\\]*[\\/]+)*seek(?:\.exe)?)'|"(?:(?:[^"\\]*[\\/]+)*seek(?:\.exe)?)"|(?:[^\s]+[\\/])?seek(?:\.exe)?)\s+(?:hooks\s+)?(?:sync|context)(?:\s+--(?:agent\s+\S+|embed|background))*\s*$`)
 )
 
 func isSeekHookCommand(command string) bool {
@@ -616,8 +696,11 @@ func isTargetSeekHookCommand(command string, target hookTarget) bool {
 	if target.context {
 		commandName = "context"
 	}
-	pattern := `(?i)^(?:'[^']*[\\/]seek(?:\.exe)?'|"[^"]*[\\/]seek(?:\.exe)?"|(?:[^\s]+[\\/])?seek(?:\.exe)?)\s+hooks\s+` + commandName + `\s+--agent\s+` + regexp.QuoteMeta(target.agent)
+	pattern := `(?i)^(?:'(?:(?:[^'/\\]*[\\/]+)*seek(?:\.exe)?)'|"(?:(?:[^"\\]*[\\/]+)*seek(?:\.exe)?)"|(?:[^\s]+[\\/])?seek(?:\.exe)?)\s+hooks\s+` + commandName + `\s+--agent\s+` + regexp.QuoteMeta(target.agent)
 	if !target.context {
+		if target.background {
+			pattern += `\s+--background`
+		}
 		pattern += `(?:\s+--embed)?`
 	}
 	return regexp.MustCompile(pattern + `\s*$`).MatchString(command)
@@ -730,6 +813,9 @@ func installHook(t hookTarget) error {
 	if t.statusMessage != "" {
 		commandHook["statusMessage"] = t.statusMessage
 	}
+	if t.async {
+		commandHook["async"] = true
+	}
 
 	newHook := map[string]interface{}{
 		"matcher": "",
@@ -801,6 +887,12 @@ func replaceSeekHookCommand(settings map[string]interface{}, event string, idx i
 			if target.statusMessage != "" && hook["statusMessage"] != target.statusMessage {
 				hook["statusMessage"] = target.statusMessage
 				changed = true
+			}
+			if target.async {
+				if async, ok := hook["async"].(bool); !ok || !async {
+					hook["async"] = true
+					changed = true
+				}
 			}
 			return changed
 		}

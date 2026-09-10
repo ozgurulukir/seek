@@ -378,11 +378,12 @@ func TestLimitedWriterCapsRetainedOutput(t *testing.T) {
 
 func TestRunHooksSyncReturnsJSONAfterFailedSync(t *testing.T) {
 	var output bytes.Buffer
+	syncErr := errors.New("sync failed")
 	err := runHooksSync(func() error {
-		return errors.New("sync failed")
+		return syncErr
 	}, &output)
-	if err != nil {
-		t.Fatalf("runHooksSync: %v", err)
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("runHooksSync error = %v, want %v", err, syncErr)
 	}
 
 	outputBytes := output.Bytes()
@@ -589,12 +590,106 @@ func TestSelectedTargets(t *testing.T) {
 		t.Errorf("--claude: got %v", claudeOnly)
 	}
 	codexOnly := selectedTargets(false, true)
-	if len(codexOnly) != 2 || codexOnly[0].name != "Codex" || codexOnly[1].event != "UserPromptSubmit" {
+	if len(codexOnly) != 3 || codexOnly[0].name != "Codex" || codexOnly[1].event != "Interrupt" || codexOnly[2].event != "UserPromptSubmit" {
 		t.Errorf("--codex: got %v", codexOnly)
 	}
 }
 
+func TestInstallHook_CodexInterruptLaunchesBackgroundSync(t *testing.T) {
+	target := newCodexFixtureTarget(t)
+	target.event = "Interrupt"
+	target.background = true
+	target.async = true
+	target.timeout = 3
+	if err := installHook(target); err != nil {
+		t.Fatalf("installHook: %v", err)
+	}
+
+	settings := readTestSettings(t, target.settingsPath())
+	command := settings["hooks"].(map[string]interface{})["Interrupt"].([]interface{})[0].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})
+	if got := command["command"].(string); !strings.Contains(got, " hooks sync --agent codex --background") {
+		t.Errorf("Codex interrupt command = %q, want background sync", got)
+	}
+	if got := command["async"]; got != true {
+		t.Errorf("async = %v, want true", got)
+	}
+	if got := command["timeout"]; got != float64(3) {
+		t.Errorf("timeout = %v, want 3", got)
+	}
+	if findTargetSeekHookIndex(settings, target) < 0 {
+		t.Fatal("installed background interrupt hook was not recognized as healthy")
+	}
+}
+
+func TestTargetBackgroundHookRequiresAsync(t *testing.T) {
+	target := newCodexFixtureTarget(t)
+	target.event = "Interrupt"
+	target.background = true
+	target.async = true
+	settings := map[string]interface{}{
+		"hooks": map[string]interface{}{
+			"Interrupt": []interface{}{map[string]interface{}{
+				"hooks": []interface{}{map[string]interface{}{
+					"type":    "command",
+					"command": "seek hooks sync --agent codex --background",
+				}},
+			}},
+		},
+	}
+	if findTargetSeekHookIndex(settings, target) >= 0 {
+		t.Fatal("background interrupt hook without async=true was reported healthy")
+	}
+	settings["hooks"].(map[string]interface{})["Interrupt"].([]interface{})[0].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})["async"] = true
+	if findTargetSeekHookIndex(settings, target) < 0 {
+		t.Fatal("background interrupt hook with async=true was not recognized")
+	}
+}
+
+func TestInstallHook_UpgradesCodexInterruptHook(t *testing.T) {
+	target := newCodexFixtureTarget(t)
+	target.event = "Interrupt"
+	target.background = true
+	target.async = true
+	target.timeout = 3
+	settings := map[string]interface{}{
+		"hooks": map[string]interface{}{
+			"Interrupt": []interface{}{map[string]interface{}{
+				"matcher": "",
+				"hooks": []interface{}{map[string]interface{}{
+					"type":    "command",
+					"command": "seek hooks sync --agent codex",
+				}},
+			}},
+		},
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(target.settingsPath()), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target.settingsPath(), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := installHook(target); err != nil {
+		t.Fatalf("installHook: %v", err)
+	}
+
+	updated := readTestSettings(t, target.settingsPath())
+	command := updated["hooks"].(map[string]interface{})["Interrupt"].([]interface{})[0].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})
+	if got := command["command"].(string); !strings.Contains(got, "--background") {
+		t.Errorf("upgraded command = %q, want --background", got)
+	}
+	if command["async"] != true || command["timeout"] != float64(3) {
+		t.Errorf("upgraded options = %#v, want async=true timeout=3", command)
+	}
+}
+
 func TestIsSeekHookCommand_MatcherMatrix(t *testing.T) {
+	if !isSeekHookCommand("'seek' hooks sync --agent codex --background") {
+		t.Error("expected background Codex hook command to match")
+	}
 	mustMatch := []string{
 		// bare, and the quoted bare form install writes when LookPath fails (CI)
 		"seek hooks sync",

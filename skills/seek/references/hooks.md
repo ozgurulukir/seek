@@ -1,6 +1,6 @@
 # AI Agent Hooks (Claude Code & Codex)
 
-Hooks keep each agent's conversation collection fresh when that agent finishes a conversation (`Stop`), and can add relevant local context before a prompt is submitted (`UserPromptSubmit`).
+Hooks keep each agent's conversation collection fresh when that agent finishes a conversation (`Stop`), including interrupted Codex turns (`Interrupt`), and can add relevant local context before a prompt is submitted (`UserPromptSubmit`).
 
 ## Commands
 
@@ -27,7 +27,7 @@ seek hooks doctor
 | Agent | Config file | Event |
 |-------|-------------|-------|
 | Claude Code | `~/.claude/settings.json` | `Stop` + `UserPromptSubmit` |
-| Codex | `~/.codex/hooks.json` | `Stop` + `UserPromptSubmit` |
+| Codex | `~/.codex/hooks.json` | `Stop` + `Interrupt` + `UserPromptSubmit` |
 
 Both agents use the same Claude-Code-style JSON hook schema:
 
@@ -37,9 +37,10 @@ Both agents use the same Claude-Code-style JSON hook schema:
 
 The installed hooks:
 1. On `Stop`, run `seek hooks sync --agent <agent>` for only that agent's collections.
-2. Debounce repeated stops for 15 seconds and record the last outcome; inspect it with `seek hooks status`.
-3. On `UserPromptSubmit`, search the local index and provide capped relevant context to the agent.
-4. With `seek hooks install --embed`, the sync child also runs a realtime
+2. On Codex `Interrupt`, launch a detached `seek hooks sync --agent codex` worker so the sync survives Codex's short interrupt-hook timeout.
+3. Debounce repeated syncs for 15 seconds and record the last outcome; inspect it with `seek hooks status`.
+4. On `UserPromptSubmit`, search the local index and provide capped relevant context to the agent.
+5. With `seek hooks install --embed`, the sync child also runs a realtime
    embedding pass for the same agent collection as part of that same sync.
 
 ## What Gets Modified
@@ -66,8 +67,10 @@ The installed hooks:
 ```
 
 **Codex install** writes the same event shape to `~/.codex/hooks.json`. Its commands
-use `seek hooks sync --agent codex` and `seek hooks context --agent codex`; the wrapper
-always writes valid JSON so Codex can consume the hook response safely.
+use `seek hooks sync --agent codex`, a background `Interrupt` launcher, and
+`seek hooks context --agent codex`. The hook responses remain valid JSON; sync
+failures are also returned through the process exit status and recorded for
+`seek hooks status`.
 
 **Uninstall removes** only the Seek command from its matching hook entry. Other
 commands and hooks are preserved.
@@ -108,6 +111,9 @@ seek hooks status
 # Check that seek is in PATH for the agent environment
 which seek
 
+# Codex requires reviewing/trusting a newly installed or changed hook.
+# In Codex, open /hooks and trust the Seek Interrupt hook if prompted.
+
 # Try manually running the Claude hook action
 seek hooks sync --agent claude
 ```
@@ -129,5 +135,6 @@ cat ~/.codex/hooks.json
 ## Idempotency
 
 - `seek hooks install` leaves a current hook unchanged, but upgrades older direct, shell-wrapped, or unscoped hooks in place to agent-scoped `seek hooks sync --agent <agent>` commands.
+- For Codex, re-running `seek hooks install --codex` also installs/upgrades the `Interrupt` hook and its detached background launcher.
 - `seek hooks uninstall` removes only the Seek command from its matching hook entry. Other commands and hooks in the config files are preserved.
 - If the `Stop` list becomes empty after uninstall, the event key is removed from the file.

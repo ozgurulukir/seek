@@ -110,9 +110,9 @@ The background service and hooks are complementary:
 
 | Feature | Service | Hooks |
 |---------|---------|-------|
-| Frequency | Periodic (every N minutes) | On every Claude Code Stop event |
+| Frequency | Periodic (every N minutes) | Claude Code Stop + Codex Stop/Interrupt |
 | Coverage | All collections | All collections (via `sync`) |
 | Latency | Batched (up to interval) | Near real-time |
-| Requires Claude Code? | No | Yes (hooks into `settings.json`) |
+| Requires Claude Code? | No | Yes (Claude `settings.json` / Codex `hooks.json`) |
 
 For best coverage, use **both**: hooks for immediate indexing after conversations, and service for background catch-up sync.

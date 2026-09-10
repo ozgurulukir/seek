@@ -29,7 +29,7 @@ seek service stop               # stop and remove scheduled task
 Automatically sync conversations as soon as an AI agent finishes:
 
 ```bash
-seek hooks install              # writes Stop + prompt-context hooks for Claude Code + Codex
+seek hooks install              # writes Stop/Interrupt + prompt-context hooks for Claude Code + Codex
 seek hooks install --embed      # also refresh semantic embeddings after each agent sync
 seek hooks install --claude     # only ~/.claude/settings.json
 seek hooks install --codex      # only ~/.codex/hooks.json
@@ -39,10 +39,13 @@ seek hooks doctor               # also validate the binary recorded in each hook
 ```
 
 Each Stop hook invokes `seek hooks sync --agent <claude|codex>`, so it syncs
-only that agent's conversation collections. Hook syncs are lock-protected and
-debounced for 15 seconds; `seek hooks status` reports the last result. Prompt
-hooks run a small local lexical search and return capped relevant context. Codex
-commands always return valid JSON. Re-running install upgrades older hooks.
+only that agent's conversation collections. Codex also gets an `Interrupt` hook
+that quickly launches a detached background sync, because Codex limits
+interrupt hooks to three seconds. Hook syncs are lock-protected and debounced
+for 15 seconds; `seek hooks status` reports the last result. Prompt hooks run a
+small local lexical search and return capped relevant context. Codex commands
+always return valid JSON, while sync failures are recorded and surfaced through
+the hook process status. Re-running install upgrades older hooks.
 
 Claude Code runs the same JSON-safe wrapper with a ten-minute timeout and the
 status message `Syncing seek index...` while it runs.

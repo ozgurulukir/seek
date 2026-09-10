@@ -180,7 +180,7 @@ See also: [Service Reference](references/service.md)
 ### Claude Code Hooks
 
 ```bash
-# Install seek hooks into Claude Code (auto-sync on Stop)
+# Install seek hooks into Claude Code and Codex (auto-sync on lifecycle events)
 seek hooks install
 
 # Uninstall hooks
@@ -232,7 +232,7 @@ seek search "query" \
 - [Filters](references/filters.md) — repo/collection, lang, doc-type, date range, chunk-type, path, workspace, sort, query-mode
 - [Collection Types](references/collection-types.md) — code, markdown, claude, codex, images, pdf, documents, parser
 - [Service](references/service.md) — background periodic sync+embed service
-- [Hooks](references/hooks.md) — Claude Code auto-indexing hooks
+- [Hooks](references/hooks.md) — Claude Code and Codex auto-indexing hooks
 - [Troubleshooting](references/troubleshooting.md) — no results, API errors, index issues
 
 ## Configuration Notes
