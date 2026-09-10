@@ -195,8 +195,7 @@ class TagPipeline:
         except Exception:
             return "unknown"
 
-    def _ner(self, text: str, lang: str) -> list[dict]:
-        nlp = self._get_spacy(lang)
+    def _ner(self, text: str, nlp) -> list[dict]:
         if nlp is None:
             return []
         try:
@@ -299,11 +298,17 @@ class TagPipeline:
         texts = [it["text"] for it in items]
         topic_lists = self._fit_topics(texts)
 
+        # Resolve the NER model once for the whole batch (per corpus
+        # language) instead of re-selecting it per chunk. Turkish prefers
+        # tr_core_news_sm, everything else xx_ent_wiki_sm; the model is
+        # cached across requests, so this only avoids repeated hash-lookups
+        # and language checks on every chunk.
+        nlp = self._get_spacy(corpus_lang)
+
         results: list[dict] = []
         for i, it in enumerate(items):
             text = it["text"]
-            lang_hint = (it.get("lang") or "").lower() or corpus_lang
-            entities = self._ner(text, lang_hint)
+            entities = self._ner(text, nlp)
             keyphrases = self._keyphrases(text)
             topics = topic_lists[i]
 
