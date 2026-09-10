@@ -35,6 +35,29 @@ seek search "note" --tag priority   # notes tagged "priority"
 
 Both sources are also facetable with `--aggs tags:terms`.
 
+## Semantic enrichment fields
+
+For pdf / documents / conversation collections, the optional local semantic
+tag service (see [docs/semantic.md](docs/semantic.md)) adds three more fast
+fields alongside `tags`. All are whole-token-matching lists, facetable with
+`--aggs <field>:terms`:
+
+```bash
+seek search "lang" --aggs topics:terms     # topics: e.g. "goroutines, ownership"
+seek search "rust" --aggs entities:terms   # entities: "TYPE:Text", e.g. "LOC:Go,PER:Rust"
+seek search "file" --aggs language:terms   # language: ISO 639-1 per document
+seek search "x" --aggs tags:terms          # tags: frontmatter + semantic
+```
+
+These fields exist only when `semantic.enabled: true`; without the service
+they are absent (no error, no empty facets).
+
+> Note: only `tags` is a first-class filter (`--tag X`). `topics`,
+> `entities`, and `language` are facetable via `--aggs` but have no
+> dedicated filter flag — there is no generic fast-field filter. To find
+> documents about a topic, facet with `--aggs topics:terms` first, then
+> describe the document in the query.
+
 ## Document Type
 
 Document types: `code`, `markdown`, `claude`, `codex`, `images`, `pdf`, `documents`, `parser`.

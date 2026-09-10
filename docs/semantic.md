@@ -30,7 +30,9 @@ model formats never leak into the contract):
       "entities": [{"text": "OpenAI", "type": "MISC"}, {"text": "Go", "type": "LOC"}]
     }
   ],
-  "errors": []   // per-chunk failures are isolated; a bad chunk never sinks the batch
+  "corpus_lang": "en",   // detected ISO 639-1 for the whole document
+  "errors": []           // pipeline-level failures surface here; a healthy
+                         // request returns empty
 }
 ```
 
@@ -38,8 +40,31 @@ model formats never leak into the contract):
 |---|---|---|
 | `tags` | YAKE keyphrases (+ BERTopic labels when available) | merged, deduped, capped at `max_tags` |
 | `entities` | spaCy NER (`xx_ent_wiki_sm`; `tr_core_news_sm` for Turkish when installed) | multilingual (50+ languages) |
-| `topics` | BERTopic (multilingual embedding, PCA + min_samples) | each chunk carries its topic label; a theme needs only 2+ chunks to form one 
-| language | `fasttext-langdetect` | runs when `lang` is omitted |
+| `topics` | BERTopic (multilingual embedding, PCA + min_samples) | each chunk carries its topic label; a theme needs only 2+ chunks to form one |
+| language | `fasttext-langdetect` | reported once per request as `corpus_lang` |
+
+## How seek consumes it
+
+When `semantic.enabled: true` in `~/.config/seek/config.yaml`, seek sends each
+document's chunks to `POST /tag` and stores four fast fields on the document
+(pdf / documents / conversation collections only):
+
+- `tags`, `topics`, `entities`, `language`
+
+`tags` is a first-class filter (`--tag`); `topics`, `entities` and
+`language` are facetable (no dedicated filter flag). All four facet with
+`--aggs`:
+
+```bash
+seek search "query" --tag <t>                    # tags (frontmatter + semantic)
+seek search "query" --aggs tags:terms --aggs topics:terms \
+  --aggs entities:terms --aggs language:terms
+```
+
+Enrichment is always optional and degrades gracefully: if the service is down
+or the capability is disabled, seek emits a WARN and proceeds without tags —
+keyword search is unaffected. Under `privacy.offline_only` only numeric
+loopback endpoints (`127.0.0.0/8`, `[::1]`) are accepted.
 
 ## Run it
 

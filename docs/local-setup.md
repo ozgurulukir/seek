@@ -85,7 +85,7 @@ uv run tools/xberg_server/server.py
 uv run tools/semantic/server.py
 # Full pipeline (LID + NER + keyphrases + topics) — see docs/semantic.md:
 tools/semantic/setup.sh && source tools/semantic/.venv/bin/activate && \
-  python tools/semantic/server.py
+  SEMANTIC_WARMUP=1 python tools/semantic/server.py
 ```
 
 The xberg backend is useful for rich document conversion, but `seek` refuses

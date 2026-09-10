@@ -57,7 +57,7 @@ seek search "conceptual question" --vec -l 10
    - `--doc-type <type>`: `code`, `markdown`, `claude`, `codex`, `images`, `pdf`, `documents`, `parser`
    - `--after/--before`, `--chunk-type`, `--path`, `--workspace`
 6. **Increase `-l 20`** if the first 10 results aren't enough.
-7. **Use `--aggs`** to get facet counts and statistics alongside search results — including metadata facets `tags:terms`, `lang:terms`, `repo:terms` (from frontmatter/code metadata):
+7. **Use `--aggs`** to get facet counts and statistics alongside search results — including metadata facets `tags:terms`, `lang:terms`, `repo:terms`, `topics:terms`, `entities:terms`, `language:terms` (from frontmatter/code metadata and, for pdf/documents/conversations, semantic enrichment):
 
 ## Reading Results
 

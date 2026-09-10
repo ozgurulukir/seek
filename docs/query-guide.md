@@ -101,9 +101,14 @@ Compute statistical facet distributions alongside search results:
 seek search "error" --aggs "type:terms" --aggs "collection:terms"
 
 # Metadata fast-field facets (markdown frontmatter + code metadata)
-seek search "signal" --aggs "tags:terms"        # tags from YAML frontmatter (comma-separated)
+seek search "signal" --aggs "tags:terms"        # tags (frontmatter + semantic)
 seek search "error" --aggs "lang:terms"          # code language (go, rust, python, ts, …)
 seek search "req"   --aggs "repo:terms"          # repository/collection name
+
+# Semantic enrichment facets (pdf/documents/conversations, semantic.enabled)
+seek search "note"  --aggs "topics:terms"        # BERTopic labels
+seek search "rust"  --aggs "entities:terms"      # "TYPE:Text" NER pairs
+seek search "x"     --aggs "language:terms"      # detected ISO 639-1 (e.g. "en")
 
 # Time-based histograms
 seek search "release" --aggs "created_at:histogram:month"
@@ -112,10 +117,13 @@ seek search "release" --aggs "created_at:histogram:month"
 seek search "func" --aggs "line_count:range:0-50,50-200,200+"
 ```
 
-The `tags`, `lang`, `repo`, `ext`, `filename`, and `rel_path` facets come
-from the fast-field metadata written at index time: markdown notes expose
-their YAML frontmatter keys (e.g. `tags`, `date`), code files expose language
-and repository. They are filterable too:
+The `tags`, `lang`, `repo`, `ext`, `filename`, `rel_path`, `topics`,
+`entities`, and `language` facets come from the fast-field metadata written
+at index time: markdown notes expose their YAML frontmatter keys (e.g.
+`tags`, `date`), code files expose language and repository, and the optional
+semantic service (see [docs/semantic.md](semantic.md)) adds `topics`,
+`entities` and `language` for pdf/documents/conversations. They are
+filterable too:
 
 ```bash
 # Filter to documents tagged in frontmatter
