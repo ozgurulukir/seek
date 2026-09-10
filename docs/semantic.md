@@ -38,7 +38,7 @@ model formats never leak into the contract):
 |---|---|---|
 | `tags` | YAKE keyphrases (+ BERTopic labels when available) | merged, deduped, capped at `max_tags` |
 | `entities` | spaCy NER (`xx_ent_wiki_sm`; `tr_core_news_sm` for Turkish when installed) | multilingual (50+ languages) |
-| `topics` | BERTopic (multilingual embedding) | empty for single isolated chunks; meaningful over documents/batches |
+| `topics` | BERTopic (multilingual embedding, PCA + min_samples) | each chunk carries its topic label; a theme needs only 2+ chunks to form one 
 | language | `fasttext-langdetect` | runs when `lang` is omitted |
 
 ## Run it
@@ -55,13 +55,16 @@ uv run tools/semantic/server.py
 ```bash
 tools/semantic/setup.sh                  # one-time: venv + models
 source tools/semantic/.venv/bin/activate
-python tools/semantic/server.py
+SEMANTIC_WARMUP=1 python tools/semantic/server.py   # eager model load (recommended)
 ```
+Run `setup.sh` once. Model weights are downloaded on first run, not
+vendored into the repo (D9). `SEMANTIC_WARMUP=1` loads heavy models at
+startup so the first indexed document already has topics/NER/LID; without
+it they load lazily on the first request.
 
-`setup.sh` is idempotent. Model weights are downloaded on first run, not
-vendored into the repo (D9). The Turkish spaCy model (`tr_core_news_sm`) is
-optional — only published for spaCy 3.4–3.5; on newer spaCy the service falls
-back to the multilingual `xx_ent_wiki_sm`.
+The Turkish spaCy model (`tr_core_news_sm`) is optional — only published
+for spaCy 3.4–3.5; on newer spaCy the service falls back to the
+multilingual `xx_ent_wiki_sm`.
 
 Environment: `SEMANTIC_HOST` (default `127.0.0.1`), `SEMANTIC_PORT` (default `8003`).
 
