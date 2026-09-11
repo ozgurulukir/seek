@@ -131,7 +131,7 @@ Deep-dive documentation and specialized guides:
 
 ---
 
-## 🔌 MCP Server (for AI agents)
+## 🔌 MCP Server
 
 Expose your entire seek index to AI agents via the [Model Context Protocol](https://modelcontextprotocol.io):
 
