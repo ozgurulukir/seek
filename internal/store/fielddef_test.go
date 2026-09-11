@@ -49,20 +49,20 @@ func TestSupportedFastFieldsCoversParserdefVocabulary(t *testing.T) {
 	}
 }
 
-func TestFieldMatchMode(t *testing.T) {
+func TestFastFieldMatchModeLookup(t *testing.T) {
 	for _, name := range []string{"tags", "topics", "entities"} {
-		mode, ok := FieldMatchMode(name)
+		mode, ok := fastFieldMatchMode(name)
 		if !ok || mode != FastFieldMembership {
-			t.Errorf("FieldMatchMode(%q) = (%v, %v), want membership", name, mode, ok)
+			t.Errorf("fastFieldMatchMode(%q) = (%v, %v), want membership", name, mode, ok)
 		}
 	}
 	for _, name := range []string{"lang", "repo", "language", "model", "parent"} {
-		mode, ok := FieldMatchMode(name)
+		mode, ok := fastFieldMatchMode(name)
 		if !ok || mode != FastFieldExact {
-			t.Errorf("FieldMatchMode(%q) = (%v, %v), want exact", name, mode, ok)
+			t.Errorf("fastFieldMatchMode(%q) = (%v, %v), want exact", name, mode, ok)
 		}
 	}
-	if _, ok := FieldMatchMode("title"); ok {
+	if _, ok := fastFieldMatchMode("title"); ok {
 		t.Error("title is sort-only and must not be match-mode-curated")
 	}
 }

@@ -9,12 +9,11 @@ import (
 
 // FastFieldSummary provides discovery statistics for a single fast field.
 type FastFieldSummary struct {
-	FieldName      string             `json:"field_name"`
-	MatchMode      string             `json:"match_mode"` // "exact" or "membership"
-	Mode           FastFieldMatchMode `json:"-"`
-	DistinctValues int                `json:"distinct_values"`
-	DocCount       int                `json:"doc_count"`
-	TotalDocs      int                `json:"total_docs"`
+	FieldName      string `json:"field_name"`
+	MatchMode      string `json:"match_mode"` // "exact" or "membership"
+	DistinctValues int    `json:"distinct_values"`
+	DocCount       int    `json:"doc_count"`
+	TotalDocs      int    `json:"total_docs"`
 }
 
 // FieldValueCount records a single distinct fast field value and the number of documents
@@ -101,7 +100,11 @@ func (s *Store) GetFastFieldSummaryContext(ctx context.Context, collection strin
 	// definition and sort alphabetically after the curated block.
 	extras := make([]string, 0, len(stats))
 	for name := range stats {
-		if _, curated := lookupFieldDef(name); !curated {
+		// Gate on curated-filterable, not on registry presence: a frontmatter
+		// key that happens to collide with a documents-column sort field
+		// (title, path, created_at, ...) is still a real fast field and must
+		// be discovered.
+		if _, curated := fastFieldMatchMode(name); !curated {
 			extras = append(extras, name)
 		}
 	}
@@ -110,10 +113,8 @@ func (s *Store) GetFastFieldSummaryContext(ctx context.Context, collection strin
 	summaries := make([]FastFieldSummary, 0, len(fields))
 
 	for _, field := range fields {
-		mode, curated := FieldMatchMode(field)
-		if !curated {
-			mode = FastFieldExact
-		}
+		// fastFieldMatchMode already returns exact for non-curated names.
+		mode, _ := fastFieldMatchMode(field)
 		modeStr := "exact"
 		if mode == FastFieldMembership {
 			modeStr = "membership"
@@ -155,7 +156,6 @@ func (s *Store) GetFastFieldSummaryContext(ctx context.Context, collection strin
 		summaries = append(summaries, FastFieldSummary{
 			FieldName:      field,
 			MatchMode:      modeStr,
-			Mode:           mode,
 			DistinctValues: distinctCount,
 			DocCount:       st.docCount,
 			TotalDocs:      totalDocs,
@@ -177,7 +177,7 @@ func (s *Store) ListFastFieldValuesContext(ctx context.Context, field string, op
 	}
 
 	field = strings.ToLower(strings.TrimSpace(field))
-	mode, curated := FieldMatchMode(field)
+	mode, curated := fastFieldMatchMode(field)
 	if !curated {
 		// Dynamic discovery: any field physically present in fast_fields is
 		// listable, in exact mode. The probe rides the field_name index
@@ -191,7 +191,7 @@ func (s *Store) ListFastFieldValuesContext(ctx context.Context, field string, op
 		if !present {
 			return nil, fmt.Errorf("unknown fast field %q (%s)", field, FieldDiscoveryHint())
 		}
-		mode = FastFieldExact
+		// fastFieldMatchMode already returned FastFieldExact for the miss.
 	}
 
 	limit := opts.Limit

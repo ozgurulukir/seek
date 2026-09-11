@@ -102,3 +102,86 @@ func TestDynamicFieldDiscoveryAndFiltering(t *testing.T) {
 		t.Errorf("error should point at discovery: %v", err)
 	}
 }
+
+func TestDynamicDiscoveryCoversSortFieldNameCollision(t *testing.T) {
+	// A frontmatter key named "title" collides with the documents-column
+	// sort pseudo-field; it is still a real fast field and must surface in
+	// the summary and be listable.
+	s := newTestStore(t)
+	col, err := s.CreateCollection("notes", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "/tmp/note.md", "Note", "h", 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FastFields().Set(docID, "title", "My Custom Title"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertFTS(docID, "Note", "note body content"); err != nil {
+		t.Fatal(err)
+	}
+
+	summaries, err := s.GetFastFieldSummaryContext(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, summary := range summaries {
+		if summary.FieldName == "title" {
+			found = true
+			if summary.DocCount != 1 {
+				t.Errorf("title summary = %+v, want 1 doc", summary)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("fast field 'title' missing from dynamic discovery summary")
+	}
+
+	if _, err := s.ListFastFieldValuesContext(t.Context(), "title", ListFastFieldOptions{}); err != nil {
+		t.Fatalf("listing a fast field named title: %v", err)
+	}
+}
+
+func TestChunkTypeFilterOnFTSPath(t *testing.T) {
+	// Regression: the chunk-type filter used to emit ch.chunk_type = ?,
+	// which fails on the FTS plan (no chunks alias). The subquery form must
+	// work on both the FTS and vector paths.
+	s := newTestStore(t)
+	col, err := s.CreateCollection("notes", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "/tmp/note.md", "Note", "h", 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertChunk(docID, 0, "note body content", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertFTS(docID, "Note", "note body content"); err != nil {
+		t.Fatal(err)
+	}
+
+	fs := NewFilterSet()
+	fs.Add(&ChunkTypeFilter{Type: 0}) // text chunk exists → doc matches
+	results, err := s.SearchFTS("Note", 10, fs)
+	if err != nil {
+		t.Fatalf("SearchFTS with chunk-type filter: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("text filter returned %d results, want 1", len(results))
+	}
+
+	fs = NewFilterSet()
+	fs.Add(&ChunkTypeFilter{Type: 1}) // no image chunk → doc excluded
+	results, err = s.SearchFTS("Note", 10, fs)
+	if err != nil {
+		t.Fatalf("SearchFTS with image filter: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("image filter returned %d results, want 0", len(results))
+	}
+}

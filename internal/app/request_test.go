@@ -231,3 +231,21 @@ func TestValidateFastField(t *testing.T) {
 		t.Error("nil-store unknown field must error")
 	}
 }
+
+func TestPlanSearchSortByValidation(t *testing.T) {
+	runtime := newRequestTestRuntime(t)
+	ctx := context.Background()
+
+	// Registry sort fields (documents columns and curated fast fields) pass.
+	for _, field := range []string{"created_at", "line_count", "title", "lang"} {
+		if _, err := runtime.planSearch(ctx, SearchRequest{SortBy: field}); err != nil {
+			t.Errorf("planSearch(sort-by %s) unexpected error: %v", field, err)
+		}
+	}
+
+	// Unknown names error instead of silently degrading to relevance order.
+	_, err := runtime.planSearch(ctx, SearchRequest{SortBy: "bogus"})
+	if err == nil || !strings.Contains(err.Error(), "--sort-by") {
+		t.Fatalf("planSearch(sort-by bogus) err = %v, want --sort-by unknown-field error", err)
+	}
+}

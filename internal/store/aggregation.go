@@ -28,7 +28,7 @@ type AggregationBucket struct {
 func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationSpec, filters *FilterSet) ([]AggregationBucket, error) {
 	if strings.ToLower(spec.Type) == "terms" {
 		field := strings.ToLower(strings.TrimSpace(spec.Field))
-		if mode, ok := FieldMatchMode(field); ok && mode == FastFieldMembership {
+		if mode, ok := fastFieldMatchMode(field); ok && mode == FastFieldMembership {
 			return s.executeMembershipTermsAggregationContext(ctx, field, filters)
 		}
 	}
@@ -258,7 +258,6 @@ func applyAggregationFilters(query string, args []interface{}, filters *FilterSe
 	if clause == "" {
 		return query, args, nil
 	}
-	clause = strings.ReplaceAll(clause, "ch.chunk_type = ?", "d.id IN (SELECT document_id FROM chunks WHERE chunk_type = ?)")
 	upper := strings.ToUpper(query)
 	groupAt := strings.Index(upper, " GROUP BY ")
 	if groupAt < 0 {

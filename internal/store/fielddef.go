@@ -105,12 +105,6 @@ func fastFieldMatchMode(field string) (FastFieldMatchMode, bool) {
 	return def.Mode, true
 }
 
-// FieldMatchMode returns the match mode for a curated filterable fast field,
-// and whether the field is curated-filterable at all.
-func FieldMatchMode(field string) (FastFieldMatchMode, bool) {
-	return fastFieldMatchMode(field)
-}
-
 // SupportedFastFields returns all curated fast field names in canonical
 // display order.
 func SupportedFastFields() []string {

@@ -55,9 +55,9 @@ const (
 	ModeVec
 )
 
-// EffectiveQueryMode resolves flag-over-config: a non-empty flag wins, else
+// effectiveQueryMode resolves flag-over-config: a non-empty flag wins, else
 // the configured search.query_mode.
-func EffectiveQueryMode(flagMode, cfgMode string) string {
+func effectiveQueryMode(flagMode, cfgMode string) string {
 	if flagMode != "" {
 		return flagMode
 	}
@@ -115,16 +115,15 @@ func (r *Runtime) planSearch(ctx context.Context, req SearchRequest) (search.Opt
 
 	// Degraded runtimes (the MCP test seam) may carry a nil config; every
 	// setting then falls back to its default.
-	cfgMode, cfgLang, cfgRRFK := "", "", 0
+	cfgMode, cfgRRFK := "", 0
 	if cfg := r.config(); cfg != nil {
 		cfgMode = cfg.Config.Search.QueryMode
-		cfgLang = cfg.Config.Search.AnalyzeLang
 		cfgRRFK = cfg.Config.Search.RRFK
 	}
 
-	opts.QueryMode = EffectiveQueryMode(req.QueryMode, cfgMode)
+	opts.QueryMode = effectiveQueryMode(req.QueryMode, cfgMode)
 	if opts.QueryMode != "raw" {
-		opts.Analyzer = search.NewAnalyzer(EffectiveAnalyzeLang(firstNonEmpty(req.AnalyzeLang, cfgLang), nil), true, true)
+		opts.Analyzer = search.NewAnalyzer(EffectiveAnalyzeLang(req.AnalyzeLang, r.config()), true, true)
 	}
 
 	opts.RRFK = cfgRRFK
@@ -133,6 +132,11 @@ func (r *Runtime) planSearch(ctx context.Context, req SearchRequest) (search.Opt
 	}
 
 	opts.SortBy = req.SortBy
+	if opts.SortBy != "" {
+		if err := r.validateSortField(ctx, opts.SortBy); err != nil {
+			return opts, err
+		}
+	}
 	opts.SortOrder = req.SortOrder
 	if opts.SortBy != "" && opts.SortOrder == "" {
 		opts.SortOrder = "desc"
@@ -140,11 +144,25 @@ func (r *Runtime) planSearch(ctx context.Context, req SearchRequest) (search.Opt
 	return opts, nil
 }
 
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
+// validateSortField accepts registry sort fields (curated fast fields plus
+// documents-column pseudo-fields) and any fast field physically present in
+// the index, mirroring --field validation. Unknown names error instead of
+// silently degrading to relevance order.
+func (r *Runtime) validateSortField(ctx context.Context, field string) error {
+	if store.SortableField(field) {
+		return nil
 	}
-	return b
+	if r.Store == nil {
+		return fmt.Errorf("--sort-by: unknown field %q (%s)", field, store.FieldDiscoveryHint())
+	}
+	resolver, err := store.NewFastFieldResolver(ctx, r.Store)
+	if err != nil {
+		return fmt.Errorf("resolve sort field: %w", err)
+	}
+	if !resolver.Known(field) {
+		return fmt.Errorf("--sort-by: unknown field %q (%s)", field, store.FieldDiscoveryHint())
+	}
+	return nil
 }
 
 // buildRequestFilters maps the request's filter slots into the domain
@@ -153,10 +171,6 @@ func (r *Runtime) buildRequestFilters(ctx context.Context, req SearchRequest) (*
 	colName := req.Collection
 	if colName == "" {
 		colName = req.Repo
-	}
-
-	if colName == "" && req.DocType == "" && req.Lang == "" && req.Repo == "" && req.After == "" && req.Before == "" && req.ChunkType == "" && req.Path == "" && req.Workspace == "" && req.Tag == "" && len(req.Fields) == 0 {
-		return nil, nil
 	}
 
 	filters := search.NewFilterSet()
@@ -220,6 +234,9 @@ func (r *Runtime) buildRequestFilters(ctx context.Context, req SearchRequest) (*
 			}
 			filters.Add(search.FastFieldFilter(field, value))
 		}
+	}
+	if len(filters.Items()) == 0 {
+		return nil, nil
 	}
 	return filters, nil
 }

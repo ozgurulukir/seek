@@ -119,13 +119,16 @@ func (f *DateRangeFilter) ToSQL() (string, []interface{}, error) {
 	return strings.Join(clauses, " AND "), args, nil
 }
 
-// ChunkTypeFilter filters chunks by chunk_type (0=text, 1=image).
+// ChunkTypeFilter filters documents by whether they have a chunk of the
+// given type (0=text, 1=image). The subquery form is valid on every query
+// plan: FTS aggregates one row per document and has no chunks alias, vector
+// search joins chunks as ch, and aggregations group documents.
 type ChunkTypeFilter struct {
 	Type int // 0=text, 1=image
 }
 
 func (f *ChunkTypeFilter) ToSQL() (string, []interface{}, error) {
-	return "ch.chunk_type = ?", []interface{}{f.Type}, nil
+	return "d.id IN (SELECT document_id FROM chunks WHERE chunk_type = ?)", []interface{}{f.Type}, nil
 }
 
 // PathFilter filters documents by path pattern (GLOB).

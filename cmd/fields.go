@@ -140,41 +140,12 @@ func listFieldValues(ctx context.Context, db *store.Store, field, collection, pr
 }
 
 func (c *FieldsCmd) runValues(db *store.Store) error {
-	name := strings.ToLower(strings.TrimSpace(c.Name))
-	if !store.ValidFastField(name) {
-		// Not curated — accept it when it is physically present in the index
-		// (dynamic discovery, same rule as --field).
-		present, err := db.ListFastFieldNames(context.Background())
-		if err != nil {
-			return fmt.Errorf("list fast field names: %w", err)
-		}
-		found := false
-		for _, n := range present {
-			if n == name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("unknown fast field %q (%s)", c.Name, store.FieldDiscoveryHint())
-		}
-	}
-
-	opts := store.ListFastFieldOptions{
-		Collection: c.Collection,
-		Prefix:     c.Prefix,
-		Limit:      c.Limit,
-	}
-
-	values, err := db.ListFastFieldValues(name, opts)
+	values, err := listFieldValues(context.Background(), db, c.Name, c.Collection, c.Prefix, c.Limit)
 	if err != nil {
-		return fmt.Errorf("list fast field values: %w", err)
+		return err
 	}
 
 	if c.JSON {
-		if values == nil {
-			values = []store.FieldValueCount{}
-		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(values)
@@ -182,9 +153,9 @@ func (c *FieldsCmd) runValues(db *store.Store) error {
 
 	if len(values) == 0 {
 		if c.Prefix != "" {
-			fmt.Printf("No values found for %q with prefix %q.\n", name, c.Prefix)
+			fmt.Printf("No values found for %q with prefix %q.\n", c.Name, c.Prefix)
 		} else {
-			fmt.Printf("No values found for fast field %q.\n", name)
+			fmt.Printf("No values found for fast field %q.\n", c.Name)
 		}
 		return nil
 	}

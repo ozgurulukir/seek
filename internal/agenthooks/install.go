@@ -44,10 +44,11 @@ func RemoveAllSeekEntries(path string) error {
 			if idx < 0 {
 				break
 			}
-			if err := removeHookAtIndex(settings, event, idx); err != nil {
+			entryChanged, err := stripSeekHookFromEntry(settings, event, idx)
+			if err != nil {
 				return err
 			}
-			changed = true
+			changed = changed || entryChanged
 		}
 	}
 	if !changed {
@@ -159,12 +160,11 @@ func replaceSeekHookCommand(settings map[string]interface{}, event string, idx i
 		}
 		if current, _ := hook["command"].(string); isSeekHookCommand(current) {
 			changed := false
-			if current == command {
-				// Keep the existing command when it already has the desired form.
-			} else {
+			if current != command {
 				hook["command"] = command
 				changed = true
 			}
+			// Otherwise the existing command already has the desired form.
 			if target.timeout > 0 {
 				currentTimeout, ok := hook["timeout"].(float64)
 				if !ok || int(currentTimeout) != target.timeout {
@@ -201,10 +201,39 @@ func uninstallHook(t Target, out io.Writer) error {
 		return nil
 	}
 
-	hooks := settings["hooks"].(map[string]interface{})
-	eventHooks := hooks[t.event].([]interface{})
-	entry := eventHooks[idx].(map[string]interface{})
-	hookList := entry["hooks"].([]interface{})
+	if _, err := stripSeekHookFromEntry(settings, t.event, idx); err != nil {
+		return err
+	}
+
+	if err := WriteSettings(path, settings); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
+	}
+
+	fmt.Fprintf(out, "Removed %s %s hook.\n", t.name, t.event)
+	return nil
+}
+
+// stripSeekHookFromEntry removes seek's own command from the hook entry at
+// idx, keeping every other tool's command in the same entry, and prunes the
+// entry (and the event) only when they become empty. Shared by the
+// per-target uninstall and RemoveAllSeekEntries.
+func stripSeekHookFromEntry(settings map[string]interface{}, event string, idx int) (bool, error) {
+	hooks, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		return false, fmt.Errorf("no hooks map")
+	}
+	eventHooks, ok := hooks[event].([]interface{})
+	if !ok || idx >= len(eventHooks) {
+		return false, fmt.Errorf("hook entry vanished")
+	}
+	entry, ok := eventHooks[idx].(map[string]interface{})
+	if !ok {
+		return false, fmt.Errorf("hook entry is not an object")
+	}
+	hookList, ok := entry["hooks"].([]interface{})
+	if !ok {
+		return false, fmt.Errorf("hook entry has no command list")
+	}
 	for hookIdx, hook := range hookList {
 		hookMap, ok := hook.(map[string]interface{})
 		if !ok {
@@ -223,35 +252,9 @@ func uninstallHook(t Target, out io.Writer) error {
 		entry["hooks"] = hookList
 	}
 	if len(eventHooks) == 0 {
-		delete(hooks, t.event)
-	} else {
-		hooks[t.event] = eventHooks
-	}
-
-	if err := WriteSettings(path, settings); err != nil {
-		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
-	}
-
-	fmt.Fprintf(out, "Removed %s %s hook.\n", t.name, t.event)
-	return nil
-}
-
-// removeHookAtIndex deletes the entry at idx from the event's hook list and
-// cleans up the event when it becomes empty (same semantics as uninstallHook).
-func removeHookAtIndex(settings map[string]interface{}, event string, idx int) error {
-	hooks, ok := settings["hooks"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("no hooks map")
-	}
-	eventHooks, ok := hooks[event].([]interface{})
-	if !ok || idx >= len(eventHooks) {
-		return fmt.Errorf("hook entry vanished")
-	}
-	eventHooks = append(eventHooks[:idx], eventHooks[idx+1:]...)
-	if len(eventHooks) == 0 {
 		delete(hooks, event)
 	} else {
 		hooks[event] = eventHooks
 	}
-	return nil
+	return true, nil
 }

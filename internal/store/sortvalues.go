@@ -21,17 +21,6 @@ func (s *Store) SortValues(ctx context.Context, docIDs []int64, field string) (m
 	return s.FastFields().BatchGetContext(ctx, docIDs, field)
 }
 
-// documentSortColumns maps sortable pseudo-field names to documents table
-// columns. The map is code-owned; names reach here only via the registry
-// (lookupFieldDef), and the column never carries user input.
-var documentSortColumns = map[string]string{
-	"created_at": "created_at",
-	"line_count": "line_count",
-	"mtime":      "mtime",
-	"path":       "path",
-	"title":      "title",
-}
-
 // documentSortValues reads the requested documents column for the given IDs.
 // created_at is RFC3339 TEXT, so lexicographic order is chronological;
 // line_count and mtime are emitted as float64.
@@ -44,10 +33,10 @@ func (s *Store) documentSortValues(ctx context.Context, docIDs []int64, field st
 	if len(docIDs) == 0 {
 		return map[int64]interface{}{}, nil
 	}
-	column, ok := documentSortColumns[field]
-	if !ok {
-		return nil, fmt.Errorf("sort values: %q is not a documents column", field)
-	}
+	// Names reach here only via the registry (SortValues gates on
+	// sourceDocuments), and the column name equals the registry name, so the
+	// identifier is code-owned despite being formatted in.
+	column := field
 
 	placeholders := make([]string, 0, len(docIDs))
 	args := make([]interface{}, 0, len(docIDs))

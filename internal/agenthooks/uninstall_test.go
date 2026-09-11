@@ -83,3 +83,31 @@ func TestHookCommandGolden(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoveAllSeekEntries_KeepsForeignCommandInMixedEntry(t *testing.T) {
+	// A seek command sharing one matcher entry with another tool's command:
+	// only seek's command may go; the entry and the foreign command stay.
+	path := filepath.Join(t.TempDir(), "settings.json")
+	content := `{"hooks": {"Stop": [
+		{"hooks": [
+			{"type": "command", "command": "other-tool run"},
+			{"type": "command", "command": "'seek' hooks sync"}
+		]}
+	]}}`
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveAllSeekEntries(path); err != nil {
+		t.Fatalf("RemoveAllSeekEntries: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "other-tool run") {
+		t.Errorf("foreign command in the same entry was removed: %s", data)
+	}
+	if strings.Contains(string(data), "seek") {
+		t.Errorf("seek command still present: %s", data)
+	}
+	if !strings.Contains(string(data), `"Stop"`) {
+		t.Errorf("entry should survive with the foreign command: %s", data)
+	}
+}
