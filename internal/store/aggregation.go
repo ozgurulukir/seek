@@ -47,6 +47,11 @@ func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationS
 	}
 	defer rows.Close()
 
+	// Fast-field terms buckets group on the raw stored value, which is
+	// JSON-encoded; decode the keys once here. Other bucket keys (strftime
+	// labels, range labels, column values) are plain text already.
+	decodeKeys := strings.ToLower(spec.Type) == "terms" && ValidFastField(strings.ToLower(strings.TrimSpace(spec.Field)))
+
 	var buckets []AggregationBucket
 	for rows.Next() {
 		var bucket AggregationBucket
@@ -58,6 +63,9 @@ func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationS
 		} else if err := rows.Scan(&bucket.Key, &bucket.Count); err != nil {
 			return nil, fmt.Errorf("scan aggregation bucket: %w", err)
 		}
+		if decodeKeys {
+			bucket.Key = decodeFastFieldText(bucket.Key)
+		}
 		buckets = append(buckets, bucket)
 	}
 	if err := rows.Err(); err != nil {
@@ -67,7 +75,10 @@ func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationS
 }
 
 func (s *Store) executeMembershipTermsAggregationContext(ctx context.Context, field string, filters *FilterSet) ([]AggregationBucket, error) {
-	query := `SELECT REPLACE(ff.field_value, '"', '')
+	// Fetch raw values and decode/split in Go: the SQL-side REPLACE decode
+	// corrupts values containing quotes, and the token counting happens
+	// per row anyway.
+	query := `SELECT ff.field_value
 		FROM documents d
 		JOIN collections c ON c.id = d.collection_id
 		JOIN fast_fields ff ON ff.doc_id = d.id AND ff.field_name = ?`
@@ -90,16 +101,8 @@ func (s *Store) executeMembershipTermsAggregationContext(ctx context.Context, fi
 		if err := rows.Scan(&raw); err != nil {
 			return nil, fmt.Errorf("scan aggregation bucket: %w", err)
 		}
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
 		seenInDoc := make(map[string]struct{})
-		for _, part := range strings.Split(raw, ",") {
-			token := strings.TrimSpace(part)
-			if token == "" {
-				continue
-			}
+		for _, token := range splitMembershipTokens(decodeFastFieldText(raw)) {
 			if _, seen := seenInDoc[token]; !seen {
 				seenInDoc[token] = struct{}{}
 				counts[token]++
@@ -141,7 +144,11 @@ func buildAggregationQuery(spec AggregationSpec) (string, []interface{}, bool, e
 func buildTermsQuery(field string) (string, []interface{}, bool, error) {
 	field = strings.ToLower(field)
 	if ValidFastField(field) {
-		return `SELECT REPLACE(ff.field_value, '"', '') as key, COUNT(*) as count
+		// Group on the raw stored value (JSON encoding is injective per
+		// string, so raw grouping equals decoded grouping) and ride the
+		// (field_name, field_value) index; ExecuteAggregationContext decodes
+		// the keys after scanning.
+		return `SELECT ff.field_value as key, COUNT(*) as count
 			FROM documents d
 			JOIN collections c ON c.id = d.collection_id
 			JOIN fast_fields ff ON ff.doc_id = d.id AND ff.field_name = ?
@@ -238,11 +245,6 @@ func quoteQualifiedIdentifier(column string) string {
 		parts[i] = `"` + strings.ReplaceAll(part, `"`, `""`) + `"`
 	}
 	return strings.Join(parts, ".")
-}
-
-func isFastField(field string) bool {
-	// Delegate to the central whitelist/match-mode table in filters.go.
-	return ValidFastField(field)
 }
 
 func applyAggregationFilters(query string, args []interface{}, filters *FilterSet) (string, []interface{}, error) {

@@ -63,7 +63,13 @@ seek search "layout error" --chunk-type image
 
 ## 🔀 Sorting by Metadata Fields (`--sort-by`, `--sort-order`)
 
-By default, search results are ordered by hybrid relevance score (or cross-encoder score if configured). You can explicitly sort results by any indexed fast-field:
+By default, search results are ordered by hybrid relevance score (or cross-encoder score if configured). `--sort-by` accepts two families of fields:
+
+- **Document fields** resolved from the index itself: `created_at` (RFC3339,
+  so text order is chronological), `line_count` and `mtime` (numeric),
+  `path`, `title`.
+- **Fast fields** written at index time (e.g. `lang`, `repo`); documents
+  missing the field sort last, preserving relevance order.
 
 ```bash
 # Sort by creation / modification time

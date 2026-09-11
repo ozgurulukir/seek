@@ -81,7 +81,17 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) (err error) {
 	engine := runtime.Search
 	engine.WithLogger(searchLogger{})
 	embedClient, vlClient := runtime.EmbedClient, runtime.VLClient
-	filters, err := c.buildFilters()
+	// Resolve --field names against the curated registry plus fields
+	// physically present in the index (one DISTINCT query, only when needed).
+	var fieldKnown func(string) bool
+	if len(c.Field) > 0 {
+		resolver, err := store.NewFastFieldResolver(ctx, runtime.Store)
+		if err != nil {
+			return fmt.Errorf("resolve fast fields: %w", err)
+		}
+		fieldKnown = resolver.Known
+	}
+	filters, err := c.buildFilters(fieldKnown)
 	if err != nil {
 		return err
 	}
@@ -146,7 +156,14 @@ func (searchLogger) Printf(format string, v ...interface{}) {
 	fmt.Fprintf(os.Stderr, format, v...)
 }
 
-func (c *SearchCmd) buildFilters() (*search.FilterSet, error) {
+// buildFilters maps the filter flags into the domain FilterSet. fieldKnown
+// decides whether a --field name may be used: it accepts curated fast fields
+// plus any field physically present in the index (nil = curated only, which
+// keeps unit tests database-free).
+func (c *SearchCmd) buildFilters(fieldKnown func(string) bool) (*search.FilterSet, error) {
+	if fieldKnown == nil {
+		fieldKnown = store.ValidFastField
+	}
 	colName := c.Collection
 	if colName == "" {
 		colName = c.Repo
@@ -190,8 +207,8 @@ func (c *SearchCmd) buildFilters() (*search.FilterSet, error) {
 		if !ok || field == "" || value == "" {
 			return nil, fmt.Errorf("--field must be 'name:value' (got %q)", f)
 		}
-		if !store.ValidFastField(field) {
-			return nil, fmt.Errorf("--field: unknown fast field %q (valid: lang, repo, tags, topics, entities, language, ext, filename, rel_path, workspace)", field)
+		if !fieldKnown(field) {
+			return nil, fmt.Errorf("--field: unknown fast field %q (%s)", field, store.FieldDiscoveryHint())
 		}
 		filters.Add(search.FastFieldFilter(field, value))
 	}

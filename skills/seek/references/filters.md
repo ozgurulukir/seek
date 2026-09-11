@@ -26,9 +26,16 @@ The generic `--field <name>:<value>` flag filters by any fast field. Match
 semantics depend on the field type:
 
 - **Exact** (single-value fields): `lang`, `ext`, `filename`, `rel_path`,
-  `repo`, `workspace`, `language`.
+  `repo`, `workspace`, `language`, plus the parserdef conversation-context
+  fields `parent`, `platform`, `profile`, `channel`, `model`.
 - **Comma-list membership** (multi-value fields): `tags`, `topics`,
   `entities` — a whole comma-separated token matches (substrings do not).
+
+Field names are not limited to this curated list: every field name physically
+present in the index is accepted in exact mode (e.g. arbitrary markdown
+frontmatter keys such as `author`). Run `seek fields` to discover what the
+index holds; curated fields are listed first, dynamically indexed fields
+after, sorted alphabetically.
 
 ```bash
 seek search "gradient" --field tags:go        # tags list contains "go" (not "golang")

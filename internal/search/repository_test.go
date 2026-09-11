@@ -35,8 +35,8 @@ func (r *testStoreRepository) SearchVector(ctx context.Context, query []float32,
 	return testStoreResults(results), err
 }
 
-func (r *testStoreRepository) BatchGetFastFields(ctx context.Context, documentIDs []int64, field string) (map[int64]interface{}, error) {
-	return r.store.FastFields().BatchGetContext(ctx, documentIDs, field)
+func (r *testStoreRepository) SortValues(ctx context.Context, documentIDs []int64, field string) (map[int64]interface{}, error) {
+	return r.store.SortValues(ctx, documentIDs, field)
 }
 
 func (r *testStoreRepository) GetChunkContent(ctx context.Context, chunkID int64) (string, error) {
@@ -128,7 +128,7 @@ func (f *fakeSearchRepository) SearchVector(context.Context, []float32, int, *Fi
 	return nil, nil
 }
 
-func (f *fakeSearchRepository) BatchGetFastFields(context.Context, []int64, string) (map[int64]interface{}, error) {
+func (f *fakeSearchRepository) SortValues(context.Context, []int64, string) (map[int64]interface{}, error) {
 	return nil, f.sortErr
 }
 

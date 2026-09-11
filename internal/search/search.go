@@ -314,7 +314,7 @@ func (e *Engine) sortResults(ctx context.Context, results []Result, opts Options
 		docIDs[i] = r.DocumentID
 	}
 
-	values, err := e.repository.BatchGetFastFields(ctx, docIDs, opts.SortBy)
+	values, err := e.repository.SortValues(ctx, docIDs, opts.SortBy)
 	if err != nil {
 		return nil, fmt.Errorf("sort by %q: %w", opts.SortBy, err)
 	}

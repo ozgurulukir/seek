@@ -197,7 +197,10 @@ func TestValidFastField(t *testing.T) {
 		{"lang", true}, {"repo", true}, {"tags", true},
 		{"topics", true}, {"entities", true}, {"language", true},
 		{"workspace", true}, {"filename", true}, {"rel_path", true}, {"ext", true},
-		{"", false}, {"title", false}, {"content", false}, {"name;DROP", false},
+		// parserdef conversation-context fields.
+		{"parent", true}, {"platform", true}, {"profile", true}, {"channel", true}, {"model", true},
+		{"", false}, {"title", false}, {"created_at", false}, // document pseudo-fields are sort-only
+		{"content", false}, {"name;DROP", false},
 		{"language ", false}, // whitespace is not trimmed / whitelisted
 	}
 	for _, c := range cases {

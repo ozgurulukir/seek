@@ -94,10 +94,26 @@ func (s *Store) GetFastFieldSummaryContext(ctx context.Context, collection strin
 	}
 
 	fields := SupportedFastFields()
+	// Dynamic discovery: fast_fields may hold field names with no curated
+	// registry entry (arbitrary markdown frontmatter keys, future parsers).
+	// The aggregate above already grouped by every present field name, so
+	// surfacing the extras costs no additional SQL. They are exact-mode by
+	// definition and sort alphabetically after the curated block.
+	extras := make([]string, 0, len(stats))
+	for name := range stats {
+		if _, curated := lookupFieldDef(name); !curated {
+			extras = append(extras, name)
+		}
+	}
+	sort.Strings(extras)
+	fields = append(fields, extras...)
 	summaries := make([]FastFieldSummary, 0, len(fields))
 
 	for _, field := range fields {
-		mode, _ := FieldMatchMode(field)
+		mode, curated := FieldMatchMode(field)
+		if !curated {
+			mode = FastFieldExact
+		}
 		modeStr := "exact"
 		if mode == FastFieldMembership {
 			modeStr = "membership"
@@ -107,31 +123,27 @@ func (s *Store) GetFastFieldSummaryContext(ctx context.Context, collection strin
 		distinctCount := st.distinctRaw
 
 		if mode == FastFieldMembership && st.docCount > 0 {
-			var memQuery strings.Builder
-			var memArgs []interface{}
-			memQuery.WriteString(`SELECT DISTINCT REPLACE(ff.field_value, '"', '')
+			memQuery := `SELECT ff.field_value
 				FROM fast_fields ff
-				JOIN documents d ON d.id = ff.doc_id`)
+				JOIN documents d ON d.id = ff.doc_id`
+			var memArgs []interface{}
 			if collection != "" {
-				memQuery.WriteString(` JOIN collections c ON c.id = d.collection_id WHERE c.name = ? AND ff.field_name = ?`)
+				memQuery += ` JOIN collections c ON c.id = d.collection_id WHERE c.name = ? AND ff.field_name = ?`
 				memArgs = append(memArgs, collection, field)
 			} else {
-				memQuery.WriteString(` WHERE ff.field_name = ?`)
+				memQuery += ` WHERE ff.field_name = ?`
 				memArgs = append(memArgs, field)
 			}
-			memQuery.WriteString(` AND ff.field_value IS NOT NULL AND ff.field_value != '' AND ff.field_value != '""'`)
+			memQuery += ` AND ff.field_value IS NOT NULL AND ff.field_value != '' AND ff.field_value != '""'`
 
-			memRows, err := s.db.QueryContext(ctx, memQuery.String(), memArgs...)
+			memRows, err := s.db.QueryContext(ctx, memQuery, memArgs...)
 			if err == nil {
 				tokenSet := make(map[string]struct{})
 				for memRows.Next() {
 					var raw string
 					if err := memRows.Scan(&raw); err == nil {
-						for _, p := range strings.Split(raw, ",") {
-							tok := strings.TrimSpace(p)
-							if tok != "" {
-								tokenSet[tok] = struct{}{}
-							}
+						for _, p := range splitMembershipTokens(decodeFastFieldText(raw)) {
+							tokenSet[p] = struct{}{}
 						}
 					}
 				}
@@ -158,16 +170,28 @@ func (s *Store) ListFastFieldValues(field string, opts ListFastFieldOptions) ([]
 	return s.ListFastFieldValuesContext(context.Background(), field, opts)
 }
 
-// ListFastFieldValuesContext returns distinct values and document counts for a given fast field with context.
+// ListFastFieldValuesContext returns distinct values and document counts for a given fast field.
 func (s *Store) ListFastFieldValuesContext(ctx context.Context, field string, opts ListFastFieldOptions) ([]FieldValueCount, error) {
 	if err := s.FastFields().ensureTable(); err != nil {
 		return nil, fmt.Errorf("ensure fast fields table: %w", err)
 	}
 
 	field = strings.ToLower(strings.TrimSpace(field))
-	mode, ok := FieldMatchMode(field)
-	if !ok {
-		return nil, fmt.Errorf("unknown fast field %q (available: %s)", field, strings.Join(SupportedFastFields(), ", "))
+	mode, curated := FieldMatchMode(field)
+	if !curated {
+		// Dynamic discovery: any field physically present in fast_fields is
+		// listable, in exact mode. The probe rides the field_name index
+		// prefix; seek fields inspects one field per invocation.
+		var present bool
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM fast_fields WHERE field_name = ?)`, field,
+		).Scan(&present); err != nil {
+			return nil, fmt.Errorf("resolve fast field: %w", err)
+		}
+		if !present {
+			return nil, fmt.Errorf("unknown fast field %q (%s)", field, FieldDiscoveryHint())
+		}
+		mode = FastFieldExact
 	}
 
 	limit := opts.Limit
@@ -179,39 +203,24 @@ func (s *Store) ListFastFieldValuesContext(ctx context.Context, field string, op
 	lowerPrefix := strings.ToLower(prefix)
 
 	if mode == FastFieldExact {
-		var q strings.Builder
-		var args []interface{}
-
-		q.WriteString(`SELECT REPLACE(ff.field_value, '"', '') as val, COUNT(DISTINCT ff.doc_id) as count
+		// Group on the raw indexed column (no per-row SQL decoding), then
+		// decode, prefix-filter, sort, and limit in Go.
+		q := `SELECT ff.field_value, COUNT(DISTINCT ff.doc_id)
 			FROM fast_fields ff
 			JOIN documents d ON d.id = ff.doc_id
 			JOIN collections c ON c.id = d.collection_id
-			WHERE ff.field_name = ?`)
-		args = append(args, field)
+			WHERE ff.field_name = ?`
+		args := []interface{}{field}
 
 		if opts.Collection != "" {
-			q.WriteString(` AND c.name = ?`)
+			q += ` AND c.name = ?`
 			args = append(args, opts.Collection)
 		}
 
-		if prefix != "" {
-			escapedPrefix := strings.ReplaceAll(prefix, "\\", "\\\\")
-			escapedPrefix = strings.ReplaceAll(escapedPrefix, "%", "\\%")
-			escapedPrefix = strings.ReplaceAll(escapedPrefix, "_", "\\_")
-			q.WriteString(` AND REPLACE(ff.field_value, '"', '') LIKE ? || '%' ESCAPE '\' COLLATE NOCASE`)
-			args = append(args, escapedPrefix)
-		}
+		q += ` AND ff.field_value IS NOT NULL AND ff.field_value != '' AND ff.field_value != '""'
+			GROUP BY ff.field_value`
 
-		q.WriteString(` AND REPLACE(ff.field_value, '"', '') != ''
-			GROUP BY val
-			ORDER BY count DESC, val ASC`)
-
-		if limit > 0 {
-			q.WriteString(` LIMIT ?`)
-			args = append(args, limit)
-		}
-
-		rows, err := s.db.QueryContext(ctx, q.String(), args...)
+		rows, err := s.db.QueryContext(ctx, q, args...)
 		if err != nil {
 			return nil, fmt.Errorf("query exact fast field values: %w", err)
 		}
@@ -219,35 +228,51 @@ func (s *Store) ListFastFieldValuesContext(ctx context.Context, field string, op
 
 		var results []FieldValueCount
 		for rows.Next() {
+			var raw string
 			var item FieldValueCount
-			if err := rows.Scan(&item.Value, &item.Count); err != nil {
+			if err := rows.Scan(&raw, &item.Count); err != nil {
 				return nil, fmt.Errorf("scan exact fast field value: %w", err)
+			}
+			item.Value = decodeFastFieldText(raw)
+			if item.Value == "" {
+				continue
+			}
+			if prefix != "" && !strings.HasPrefix(strings.ToLower(item.Value), lowerPrefix) {
+				continue
 			}
 			results = append(results, item)
 		}
 		if err := rows.Err(); err != nil {
 			return nil, fmt.Errorf("iterate exact fast field values: %w", err)
 		}
+
+		sort.Slice(results, func(i, j int) bool {
+			if results[i].Count != results[j].Count {
+				return results[i].Count > results[j].Count
+			}
+			return results[i].Value < results[j].Value
+		})
+		if limit > 0 && len(results) > limit {
+			results = results[:limit]
+		}
 		return results, nil
 	}
 
 	// Membership fields (tags, topics, entities)
-	var q strings.Builder
-	var args []interface{}
-	q.WriteString(`SELECT REPLACE(ff.field_value, '"', '')
+	q := `SELECT ff.field_value
 		FROM fast_fields ff
 		JOIN documents d ON d.id = ff.doc_id
 		JOIN collections c ON c.id = d.collection_id
 		WHERE ff.field_name = ?
-		AND ff.field_value IS NOT NULL AND ff.field_value != '' AND ff.field_value != '""'`)
-	args = append(args, field)
+		AND ff.field_value IS NOT NULL AND ff.field_value != '' AND ff.field_value != '""'`
+	args := []interface{}{field}
 
 	if opts.Collection != "" {
-		q.WriteString(` AND c.name = ?`)
+		q += ` AND c.name = ?`
 		args = append(args, opts.Collection)
 	}
 
-	rows, err := s.db.QueryContext(ctx, q.String(), args...)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query membership fast field values: %w", err)
 	}
@@ -259,17 +284,9 @@ func (s *Store) ListFastFieldValuesContext(ctx context.Context, field string, op
 		if err := rows.Scan(&raw); err != nil {
 			return nil, fmt.Errorf("scan membership fast field value: %w", err)
 		}
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
 
 		seenInDoc := make(map[string]struct{})
-		for _, part := range strings.Split(raw, ",") {
-			token := strings.TrimSpace(part)
-			if token == "" {
-				continue
-			}
+		for _, token := range splitMembershipTokens(decodeFastFieldText(raw)) {
 			if prefix != "" && !strings.HasPrefix(strings.ToLower(token), lowerPrefix) {
 				continue
 			}
@@ -300,4 +317,17 @@ func (s *Store) ListFastFieldValuesContext(ctx context.Context, field string, op
 	}
 
 	return results, nil
+}
+
+// splitMembershipTokens splits a decoded comma-joined multi-value into its
+// trimmed, non-empty tokens, preserving first-seen order.
+func splitMembershipTokens(decoded string) []string {
+	var tokens []string
+	for _, part := range strings.Split(decoded, ",") {
+		token := strings.TrimSpace(part)
+		if token != "" {
+			tokens = append(tokens, token)
+		}
+	}
+	return tokens
 }

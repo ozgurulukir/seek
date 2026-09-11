@@ -47,6 +47,23 @@ func (fs *FilterSet) ToSQL() (string, []interface{}, error) {
 
 // --- Filter Types ---
 
+// FastFieldMatchMode is declared in fielddef.go together with the registry
+// that owns match semantics.
+
+// decodedFastFieldValue is the SQL expression that recovers plain text from
+// a stored fast-field value. Values are JSON-encoded on write ("go,rust" is
+// stored as `"go,rust"`), so the quote stripping in this expression is what
+// makes membership token matching work. It is deliberately the ONLY place
+// the idiom lives: read paths outside the filter plan decode in Go instead
+// (decodeFastFieldText), which is faithful for values containing quotes.
+const decodedFastFieldValue = `REPLACE(field_value, '"', '')`
+
+// fastFieldMembershipClause matches a plain-text value as a whole
+// comma-separated token (whole value, head, tail, or middle). The value is a
+// bound parameter supplied 4 times by the caller.
+const fastFieldMembershipClause = `(` + decodedFastFieldValue + ` = ? OR ` + decodedFastFieldValue + ` LIKE ? || ',%'` +
+	` OR ` + decodedFastFieldValue + ` LIKE '%,' || ? OR ` + decodedFastFieldValue + ` LIKE '%,' || ? || ',%')`
+
 // TagFilter matches a single tag inside a comma-separated fast-field value
 // (e.g. the markdown frontmatter `tags` field, where "go,rust" must match a
 // search for "go"). FastFieldFilter only does exact equality, which cannot
@@ -56,14 +73,11 @@ type TagFilter struct {
 }
 
 func (f *TagFilter) ToSQL() (string, []interface{}, error) {
-	// Fast-field values are JSON-encoded on write ("go,rust" is stored as
-	// `"go,rust"`), so raw LIKE patterns against the raw column would need
-	// quote-aware boundaries. Simpler and exact: strip the JSON quotes in
-	// SQL with REPLACE, then match the tag as a whole comma-separated token
-	// (whole value, head, tail, or middle).
+	// Match the tag as a whole comma-separated token within the tags field.
+	// This clause runs inside the search WHERE plan, so the membership match
+	// stays SQL-side (see decodedFastFieldValue for the encoding contract).
 	return `d.id IN (SELECT doc_id FROM fast_fields WHERE field_name = 'tags' AND
-		(REPLACE(field_value, '"', '') = ? OR REPLACE(field_value, '"', '') LIKE ? || ',%'
-		 OR REPLACE(field_value, '"', '') LIKE '%,' || ? OR REPLACE(field_value, '"', '') LIKE '%,' || ? || ',%'))`,
+		` + fastFieldMembershipClause + `)`,
 		[]interface{}{f.Tag, f.Tag, f.Tag, f.Tag}, nil
 }
 
@@ -128,54 +142,6 @@ func (f *PathFilter) ToSQL() (string, []interface{}, error) {
 	return "replace(d.path, '\\', '/') GLOB ?", []interface{}{cleaned}, nil
 }
 
-// FastFieldMatchMode controls how a FastFieldFilter matches a value.
-type FastFieldMatchMode int
-
-const (
-	// FastFieldExact matches the whole value exactly (single-value fields:
-	// lang, repo, ext, filename, rel_path, workspace, language).
-	FastFieldExact FastFieldMatchMode = iota
-	// FastFieldMembership matches membership in a comma-separated list
-	// (multi-value fields: tags, topics, entities).
-	FastFieldMembership
-)
-
-// fastFieldMatchMode returns the match mode for a known fast field, and
-// whether the field is known at all. Single source of truth for filtering
-// semantics, shared by FastFieldFilter and the ValidFastField whitelist.
-func fastFieldMatchMode(field string) (FastFieldMatchMode, bool) {
-	switch field {
-	case "tags", "topics", "entities":
-		return FastFieldMembership, true
-	case "lang", "ext", "filename", "rel_path", "repo", "workspace", "language":
-		return FastFieldExact, true
-	default:
-		return FastFieldExact, false
-	}
-}
-
-// FieldMatchMode returns the match mode for a known fast field, and
-// whether the field is known at all.
-func FieldMatchMode(field string) (FastFieldMatchMode, bool) {
-	return fastFieldMatchMode(field)
-}
-
-// SupportedFastFields returns all known fast field names in canonical display order.
-func SupportedFastFields() []string {
-	return []string{
-		"tags", "topics", "entities",
-		"language", "lang", "ext", "filename", "rel_path", "repo", "workspace",
-	}
-}
-
-// ValidFastField reports whether field is a known fast-field name that may
-// be filtered and aggregated on. Kept central so aggregation, the --field
-// filter, and FastFieldFilter share the same whitelist.
-func ValidFastField(field string) bool {
-	_, ok := fastFieldMatchMode(field)
-	return ok
-}
-
 // FastFieldFilter filters documents by a fast-field value (e.g. workspace).
 // Uses the fast_fields table for indexed lookups.
 type FastFieldFilter struct {
@@ -183,27 +149,26 @@ type FastFieldFilter struct {
 	Value string // fast field value (single value, or a comma-list member)
 }
 
-// ToSQL selects the match strategy from the field's type: exact equality
-// for single-value fields, comma-list membership for multi-value fields.
-// The field name is always a bound parameter and the mode is derived from a
-// fixed table (never user input), so it cannot inject SQL.
+// ToSQL selects the match strategy from the field's registry type: exact
+// equality for single-value fields, comma-list membership for multi-value
+// fields. The field name is always a bound parameter and the mode comes from
+// the code-owned registry, so it cannot inject SQL. Names outside the
+// registry (dynamically discovered fields) fall back to exact matching; the
+// command layer rejects names that are neither curated nor present in the
+// index before a filter is built.
 func (f *FastFieldFilter) ToSQL() (string, []interface{}, error) {
-	mode, ok := fastFieldMatchMode(f.Field)
-	if !ok {
-		return "", nil, fmt.Errorf("fast field filter: unknown field %q", f.Field)
-	}
+	mode, _ := fastFieldMatchMode(f.Field)
 	encoded, err := encodeFastFieldValue(f.Value)
 	if err != nil {
 		return "", nil, fmt.Errorf("fast field filter %q: %w", f.Field, err)
 	}
 	if mode == FastFieldMembership {
-		// Values are JSON-encoded on write (e.g. `"go,rust"`); strip the
-		// quotes and match the value as a whole comma-separated token (head,
-		// tail, or middle). Same token semantics as TagFilter but on any
+		// Values are JSON-encoded on write (e.g. `"go,rust"`); the shared
+		// clause strips the quotes and matches the value as a whole
+		// comma-separated token. Same token semantics as TagFilter but on any
 		// multi-value fast field. The value is a bound parameter.
 		return `d.id IN (SELECT doc_id FROM fast_fields WHERE field_name = ? AND
-			(REPLACE(field_value, '"', '') = ? OR REPLACE(field_value, '"', '') LIKE ? || ',%'
-			 OR REPLACE(field_value, '"', '') LIKE '%,' || ? OR REPLACE(field_value, '"', '') LIKE '%,' || ? || ',%'))`,
+			` + fastFieldMembershipClause + `)`,
 			[]interface{}{f.Field, f.Value, f.Value, f.Value, f.Value}, nil
 	}
 	return "d.id IN (SELECT doc_id FROM fast_fields WHERE field_name = ? AND field_value = ?)",

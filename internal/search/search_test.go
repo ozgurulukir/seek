@@ -1067,3 +1067,49 @@ func TestSearchHybrid_SymmetricFallback(t *testing.T) {
 		}
 	})
 }
+
+func TestSearchBM25_SortByDocumentColumn(t *testing.T) {
+	// Regression: document-column pseudo-fields (created_at, line_count,
+	// mtime, path, title) used to sort as a silent no-op because production
+	// never wrote fast fields with those names. They must now resolve from
+	// the documents table without any fast-field seeding.
+	s := newTestStore(t)
+	col, _ := s.CreateCollection("docs", "markdown", "/docs", "*")
+	engine := NewEngine(NewStoreRepository(s), nil)
+
+	doc1, _ := s.UpsertDocument(col.ID, "/docs/c.md", "Beta", "h1", 1, 30)
+	s.UpsertFTS(doc1, "Beta", "notes about testing")
+	doc2, _ := s.UpsertDocument(col.ID, "/docs/a.md", "Gamma", "h2", 1, 10)
+	s.UpsertFTS(doc2, "Gamma", "notes about testing")
+	doc3, _ := s.UpsertDocument(col.ID, "/docs/b.md", "Alpha", "h3", 1, 20)
+	s.UpsertFTS(doc3, "Alpha", "notes about testing")
+
+	ctx := context.Background()
+
+	t.Run("sort line_count asc is numeric", func(t *testing.T) {
+		res, err := engine.SearchBM25(ctx, "testing", 10, Options{SortBy: "line_count", SortOrder: "asc"})
+		if err != nil {
+			t.Fatalf("SearchBM25 error: %v", err)
+		}
+		if len(res) != 3 {
+			t.Fatalf("expected 3 results, got %d", len(res))
+		}
+		// String comparison would order 10, 30, 20; numeric orders 10, 20, 30.
+		if res[0].Title != "Gamma" || res[1].Title != "Alpha" || res[2].Title != "Beta" {
+			t.Errorf("unexpected line_count order: %s, %s, %s", res[0].Title, res[1].Title, res[2].Title)
+		}
+	})
+
+	t.Run("sort path asc", func(t *testing.T) {
+		res, err := engine.SearchBM25(ctx, "testing", 10, Options{SortBy: "path", SortOrder: "asc"})
+		if err != nil {
+			t.Fatalf("SearchBM25 error: %v", err)
+		}
+		if len(res) != 3 {
+			t.Fatalf("expected 3 results, got %d", len(res))
+		}
+		if res[0].Path != "/docs/a.md" || res[1].Path != "/docs/b.md" || res[2].Path != "/docs/c.md" {
+			t.Errorf("unexpected path order: %s, %s, %s", res[0].Path, res[1].Path, res[2].Path)
+		}
+	})
+}

@@ -36,8 +36,11 @@ func (r *StoreSearchRepository) SearchVector(ctx context.Context, query []float3
 	return fromStoreResults(results), err
 }
 
-func (r *StoreSearchRepository) BatchGetFastFields(ctx context.Context, documentIDs []int64, field string) (map[int64]interface{}, error) {
-	return r.store.FastFields().BatchGetContext(ctx, documentIDs, field)
+// SortValues resolves sort keys through the store: documents-column
+// pseudo-fields (created_at, line_count, mtime, path, title) come from the
+// documents row, every other name from fast_fields.
+func (r *StoreSearchRepository) SortValues(ctx context.Context, documentIDs []int64, field string) (map[int64]interface{}, error) {
+	return r.store.SortValues(ctx, documentIDs, field)
 }
 
 func (r *StoreSearchRepository) GetChunkContent(ctx context.Context, chunkID int64) (string, error) {
@@ -127,12 +130,10 @@ func (t *storeFilterTarget) AddWorkspace(workspace string) {
 	t.filters.Add(&store.FastFieldFilter{Field: "workspace", Value: workspace})
 }
 func (t *storeFilterTarget) AddFastField(field, value string) {
-	// Unknown fast-field names are dropped here (defense in depth); the CLI
-	// validates --field up front, so an invalid name surfaces a real error
-	// rather than silently ignoring the filter. Rejecting at this layer also
-	// avoids constructing an SQL clause against an arbitrary row.
-	if !store.ValidFastField(field) {
-		return
-	}
+	// Names are validated upstream (CLI --field / MCP args) against the
+	// curated registry plus fields present in the index; unknown names are
+	// not silently dropped here because a validated dynamic field must still
+	// filter. SQL safety is unaffected either way: the field name is always
+	// a bound parameter, never an identifier.
 	t.filters.Add(&store.FastFieldFilter{Field: field, Value: value})
 }

@@ -172,3 +172,23 @@ func decodeFastFieldValue(encoded string) (interface{}, error) {
 	}
 	return value, nil
 }
+
+// decodeFastFieldText decodes a stored fast-field value to plain text.
+// String values (the only kind production writers store) decode faithfully —
+// including values that contain quotes, which the legacy SQL
+// REPLACE(field_value, '"', ”) idiom corrupted. Non-string JSON and
+// undecodable bytes fall back to best-effort text.
+func decodeFastFieldText(encoded string) string {
+	var value interface{}
+	if err := json.Unmarshal([]byte(encoded), &value); err != nil {
+		return strings.ReplaceAll(encoded, `"`, "")
+	}
+	switch v := value.(type) {
+	case string:
+		return v
+	case nil:
+		return ""
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}

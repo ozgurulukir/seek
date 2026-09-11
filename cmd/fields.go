@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -109,8 +110,22 @@ func (c *FieldsCmd) runSummary(db *store.Store) error {
 func (c *FieldsCmd) runValues(db *store.Store) error {
 	name := strings.ToLower(strings.TrimSpace(c.Name))
 	if !store.ValidFastField(name) {
-		return fmt.Errorf("unknown fast field %q (available: %s)",
-			c.Name, strings.Join(store.SupportedFastFields(), ", "))
+		// Not curated — accept it when it is physically present in the index
+		// (dynamic discovery, same rule as --field).
+		present, err := db.ListFastFieldNames(context.Background())
+		if err != nil {
+			return fmt.Errorf("list fast field names: %w", err)
+		}
+		found := false
+		for _, n := range present {
+			if n == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("unknown fast field %q (%s)", c.Name, store.FieldDiscoveryHint())
+		}
 	}
 
 	opts := store.ListFastFieldOptions{
