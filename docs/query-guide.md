@@ -137,3 +137,25 @@ seek search "sql"  --field language:en
 # Combined filters
 seek search "error" --lang go --repo myrepo
 ```
+
+---
+
+## 🏷️ Metadata Discovery & Fast-Field Taxonomy (`seek fields`)
+
+To eliminate guesswork and prevent empty result sets when using `--field`, inspect indexed field values beforehand using `seek fields`:
+
+```bash
+# View summary of all fast-fields (mode, distinct count, doc coverage)
+seek fields
+
+# Machine-readable JSON summary for agents & scripts
+seek fields --json
+
+# List top distinct values for any field (e.g. tags, topics, entities, language)
+seek fields tags
+seek fields topics --limit 20
+seek fields entities --prefix Open
+
+# Filter values within a specific collection
+seek fields tags -c mynotes
+```

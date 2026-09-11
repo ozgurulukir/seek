@@ -30,10 +30,10 @@ instead of being reported as success. To verify the download yourself before
 running (download–hash–verify–run):
 
 ```bash
-curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.3.3/seek_v0.3.3_linux-amd64.tar.gz
-curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.3.3/SHA256SUMS.txt
-grep seek_v0.3.3_linux-amd64.tar.gz SHA256SUMS.txt | sha256sum -c -
-tar -xzf seek_v0.3.3_linux-amd64.tar.gz && ./seek --version
+curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.4.0/seek_v0.4.0_linux-amd64.tar.gz
+curl -fsSLO https://github.com/ozgurulukir/seek/releases/download/v0.4.0/SHA256SUMS.txt
+grep seek_v0.4.0_linux-amd64.tar.gz SHA256SUMS.txt | sha256sum -c -
+tar -xzf seek_v0.4.0_linux-amd64.tar.gz && ./seek --version
 ```
 
 **Windows (PowerShell):**
@@ -186,6 +186,7 @@ seek search "<query>" --lang <l>   # filter by code language (go, rust, python, 
 seek search "<query>" --field tags:<t>  # filter by fast field tags (comma-list membership; frontmatter or semantic)
 seek search "<query>" --path <p>   # filter by file path pattern (GLOB)
 seek search "<query>" --aggs "type:terms"  # faceted aggregations (also lang:terms, repo:terms, tags:terms, topics:terms, entities:terms, language:terms)
+seek fields [name] [--json]        # discover fast-field values & taxonomy (tags, topics, entities, etc.)
 
 # System & Management
 seek status                        # view collections, document & chunk counts

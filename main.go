@@ -33,6 +33,7 @@ var cli struct {
 	Doctor    cmd.DoctorCmd    `cmd:"" help:"Check and repair local installation (permissions)"`
 	Uninstall cmd.UninstallCmd `cmd:"" help:"Remove seek service, hooks, cache, and config (--dry-run first)"`
 	Parsers   cmd.ParsersCmd   `cmd:"" help:"Manage schema-driven parser definitions"`
+	Fields    cmd.FieldsCmd    `cmd:"" help:"Discover fast-field values and taxonomy (tags, topics, entities, etc.)"`
 	Mcp       cmd.McpCmd       `cmd:"" help:"Run MCP (Model Context Protocol) server on stdio for AI agents"`
 }
 

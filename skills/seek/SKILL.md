@@ -53,7 +53,8 @@ seek search "conceptual question" --vec -l 10
 5. **Use filters** to narrow results:
    - `--repo <name>` / `--collection <name>`: target a specific repository or collection
    - `--lang <language>`: target a programming language (e.g. `go`, `python`, `typescript`, `rust`)
-   - `--field <name>:<value>`: filter by any fast field. `--field tags:go` filters tags (comma-list membership); exact for single-value fields (`--field language:en`); comma-list membership for `tags`/`topics`/`entities`
+   - `--field <name>:<value>`: filter by any fast field. `--field tags:go` filters tags (comma-list membership); exact for single-value fields (`--field language:en`); comma-list membership for `tags`/`topics`/`entities`.
+   - **Discover available field values with `seek fields [name] [--json]`** before guessing tag/topic names. This prevents zero-result queries due to unrepresented terms.
    - `--doc-type <type>`: `code`, `markdown`, `claude`, `codex`, `images`, `pdf`, `documents`, `parser`
    - `--after/--before`, `--chunk-type`, `--path`, `--workspace`
 6. **Increase `-l 20`** if the first 10 results aren't enough.
@@ -203,6 +204,27 @@ seek config
 
 # Open config in default editor ($EDITOR, defaults to vim)
 seek config --edit
+```
+
+### Discover Fast-Field Values & Taxonomy (`seek fields`)
+
+Explore available metadata facets and distinct values before constructing `--field` filters:
+
+```bash
+# List all fast fields, match mode (exact vs membership), distinct value counts, and doc coverage
+seek fields
+
+# Machine-readable JSON summary for tools/agents
+seek fields --json
+
+# List top distinct values for a field (e.g. tags, topics, entities, language)
+seek fields tags
+seek fields topics --limit 20
+seek fields entities --prefix Open
+
+# Machine-readable JSON array of {value, count}
+seek fields tags --json
+seek fields language --json
 ```
 
 ## Search Options

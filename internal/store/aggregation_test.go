@@ -41,6 +41,12 @@ func TestExecuteAggregationContext(t *testing.T) {
 			t.Fatalf("set fast field: %v", err)
 		}
 	}
+	if err := s.FastFields().Set(ids[0], "tags", "golang,concurrency"); err != nil {
+		t.Fatalf("set tags fast field: %v", err)
+	}
+	if err := s.FastFields().Set(ids[1], "tags", "golang,web"); err != nil {
+		t.Fatalf("set tags fast field: %v", err)
+	}
 
 	ctx := context.Background()
 	tests := []struct {
@@ -52,6 +58,8 @@ func TestExecuteAggregationContext(t *testing.T) {
 		{name: "terms", spec: AggregationSpec{Type: "terms", Field: "type"}, want: []AggregationBucket{{Key: "code", Count: 3}, {Key: "markdown", Count: 2}}},
 		{name: "range", spec: AggregationSpec{Type: "range", Field: "line_count", Ranges: []string{"0-100", "100-500", "500-"}}, want: []AggregationBucket{{Key: "0-100", Count: 2}, {Key: "100-500", Count: 2}, {Key: "500-", Count: 1}}},
 		{name: "fast field", spec: AggregationSpec{Type: "terms", Field: "lang"}, want: []AggregationBucket{{Key: "go", Count: 3}}},
+		{name: "membership fast field terms", spec: AggregationSpec{Type: "terms", Field: "tags"}, want: []AggregationBucket{{Key: "golang", Count: 2}, {Key: "concurrency", Count: 1}, {Key: "web", Count: 1}}},
+		{name: "mixed-case membership fast field terms", spec: AggregationSpec{Type: "terms", Field: "TAGS"}, want: []AggregationBucket{{Key: "golang", Count: 2}, {Key: "concurrency", Count: 1}, {Key: "web", Count: 1}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -154,6 +154,20 @@ func fastFieldMatchMode(field string) (FastFieldMatchMode, bool) {
 	}
 }
 
+// FieldMatchMode returns the match mode for a known fast field, and
+// whether the field is known at all.
+func FieldMatchMode(field string) (FastFieldMatchMode, bool) {
+	return fastFieldMatchMode(field)
+}
+
+// SupportedFastFields returns all known fast field names in canonical display order.
+func SupportedFastFields() []string {
+	return []string{
+		"tags", "topics", "entities",
+		"language", "lang", "ext", "filename", "rel_path", "repo", "workspace",
+	}
+}
+
 // ValidFastField reports whether field is a known fast-field name that may
 // be filtered and aggregated on. Kept central so aggregation, the --field
 // filter, and FastFieldFilter share the same whitelist.

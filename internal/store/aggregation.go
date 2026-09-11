@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -25,6 +26,13 @@ type AggregationBucket struct {
 // query entirely inside the persistence layer. No SQL or *sql.Rows crosses
 // into search.
 func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationSpec, filters *FilterSet) ([]AggregationBucket, error) {
+	if strings.ToLower(spec.Type) == "terms" {
+		field := strings.ToLower(strings.TrimSpace(spec.Field))
+		if mode, ok := FieldMatchMode(field); ok && mode == FastFieldMembership {
+			return s.executeMembershipTermsAggregationContext(ctx, field, filters)
+		}
+	}
+
 	query, args, countOnly, err := buildAggregationQuery(spec)
 	if err != nil {
 		return nil, err
@@ -55,6 +63,63 @@ func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationS
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate aggregation rows: %w", err)
 	}
+	return buckets, nil
+}
+
+func (s *Store) executeMembershipTermsAggregationContext(ctx context.Context, field string, filters *FilterSet) ([]AggregationBucket, error) {
+	query := `SELECT REPLACE(ff.field_value, '"', '')
+		FROM documents d
+		JOIN collections c ON c.id = d.collection_id
+		JOIN fast_fields ff ON ff.doc_id = d.id AND ff.field_name = ?`
+	args := []interface{}{field}
+
+	query, args, err := applyAggregationFilters(query, args, filters)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("aggregation query: %w", err)
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("scan aggregation bucket: %w", err)
+		}
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		seenInDoc := make(map[string]struct{})
+		for _, part := range strings.Split(raw, ",") {
+			token := strings.TrimSpace(part)
+			if token == "" {
+				continue
+			}
+			if _, seen := seenInDoc[token]; !seen {
+				seenInDoc[token] = struct{}{}
+				counts[token]++
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate aggregation rows: %w", err)
+	}
+
+	buckets := make([]AggregationBucket, 0, len(counts))
+	for key, count := range counts {
+		buckets = append(buckets, AggregationBucket{Key: key, Count: count})
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		if buckets[i].Count != buckets[j].Count {
+			return buckets[i].Count > buckets[j].Count
+		}
+		return buckets[i].Key < buckets[j].Key
+	})
 	return buckets, nil
 }
 
