@@ -127,7 +127,7 @@ Deep-dive documentation and specialized guides:
 | 🤖 [**Schema-Driven Parsers**](docs/parsers.md) | Opencode, Copilot CLI, Zed threads, and `--workspace` filtering. |
 | 🛠️ [**AI Agent Skill Reference**](skills/seek/SKILL.md) | Agent prompt instructions, query strategies, and CLI reference. |
 | 🏷️ [**Semantic Tag Service**](docs/semantic.md) | Optional local NLP service (NER, keyphrases, topics, LID) that generates `tags`/`topics`/`entities`/`language` fast fields for pdf/documents/conversations. |
-| 🔌 [**MCP Server**](docs/mcp.md) | `seek mcp` — Model Context Protocol tools (`seek_search`, `seek_status`, `seek_autocomplete`) for Claude Code and other agents. |
+| 🔌 [**MCP Server**](docs/mcp.md) | `seek mcp` — Model Context Protocol tools (`seek_search`, `seek_fields`, `seek_status`, `seek_autocomplete`) for Claude Code and other agents. |
 
 ---
 
@@ -139,7 +139,7 @@ Expose your entire seek index to AI agents via the [Model Context Protocol](http
 seek mcp          # MCP server on stdio (JSON-RPC 2.0)
 ```
 
-**Tools:** `seek_search` (hybrid search, same fields as `seek search --json`), `seek_status` (collections + counts), `seek_autocomplete` (prefix suggestions).
+**Tools:** `seek_search` (hybrid search with the full filter/facet/sort surface, same fields as `seek search --json`), `seek_fields` (fast-field discovery and values), `seek_status` (collections + counts), `seek_autocomplete` (prefix suggestions).
 
 **Claude Code** — add to `~/.claude.json` (or project `.mcp.json`):
 

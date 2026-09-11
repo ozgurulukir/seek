@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
@@ -58,7 +59,7 @@ func TestMCPServer_Roundtrip(t *testing.T) {
 	for _, tool := range tools.Tools {
 		got[tool.Name] = true
 	}
-	for _, want := range []string{"seek_search", "seek_status", "seek_autocomplete"} {
+	for _, want := range []string{"seek_search", "seek_fields", "seek_status", "seek_autocomplete"} {
 		if !got[want] {
 			t.Errorf("missing tool %q; have %v", want, tools)
 		}
@@ -79,7 +80,7 @@ func TestMCPServer_Roundtrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("seek_search content not text: %T", res.Content[0])
 	}
-	var results []mcpSearchResult
+	var results []search.SearchResult
 	if err := json.Unmarshal([]byte(tc.Text), &results); err != nil {
 		t.Fatalf("parse search payload: %v (%s)", err, tc.Text)
 	}
@@ -127,8 +128,9 @@ func TestMCPServer_Roundtrip(t *testing.T) {
 }
 
 func TestMCPSearchResult_Shape(t *testing.T) {
-	// The MCP result must mirror `seek search --json` field names.
-	b, err := json.Marshal(mcpSearchResult{ChunkID: 1, DocumentID: 2, Title: "t", ContentKind: "full", Score: 0.5})
+	// The MCP result is the shared wire struct; pin the field names both
+	// surfaces emit.
+	b, err := json.Marshal(search.SearchResult{ChunkID: 1, DocumentID: 2, Title: "t", ContentKind: "full", Score: 0.5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,15 +142,6 @@ func TestMCPSearchResult_Shape(t *testing.T) {
 		if _, ok := m[key]; !ok {
 			t.Errorf("mcpSearchResult missing %q key: %s", key, b)
 		}
-	}
-}
-
-func TestMCPContentKind(t *testing.T) {
-	if got := mcpContentKind(&mcpSearchResult{ChunkID: 5}); got != "full" {
-		t.Errorf("chunk-level = %q, want full", got)
-	}
-	if got := mcpContentKind(&mcpSearchResult{}); got != "snippet" {
-		t.Errorf("document-level = %q, want snippet", got)
 	}
 }
 
@@ -204,7 +197,7 @@ func TestMCPSearch_CollectionFilter(t *testing.T) {
 		t.Fatalf("seek_search: %v", err)
 	}
 	tc := res.Content[0].(*mcp.TextContent)
-	var results []mcpSearchResult
+	var results []search.SearchResult
 	if err := json.Unmarshal([]byte(tc.Text), &results); err != nil {
 		t.Fatalf("parse: %v (%s)", err, tc.Text)
 	}

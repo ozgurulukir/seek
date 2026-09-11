@@ -26,7 +26,7 @@ func TestSearchJSON_Schema(t *testing.T) {
 	var buf bytes.Buffer
 	// printResultsJSON writes to os.Stdout; capture via encoder refactor test:
 	// exercise the mapping logic through a small wrapper instead of stdout.
-	out := buildJSONOutput(c, results, aggs)
+	out := search.NewSearchOutput(c.Query, results, aggs)
 	if err := json.NewEncoder(&buf).Encode(out); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
@@ -76,29 +76,9 @@ func TestSearchJSON_Schema(t *testing.T) {
 }
 
 func TestSearchJSON_EmptyAndNoAggs(t *testing.T) {
-	c := &SearchCmd{Query: "zzz", JSON: true}
-	out := buildJSONOutput(c, nil, nil)
+	out := search.NewSearchOutput("zzz", nil, nil)
 	data, _ := json.Marshal(out)
 	if string(data) != `{"query":"zzz","total":0,"results":[]}` {
 		t.Errorf("empty envelope = %s, want omitempty shape", data)
-	}
-}
-
-func TestEnrichJSONContent_StripsMarkers(t *testing.T) {
-	results := []search.Result{
-		{ChunkID: -1, Content: ">>>match<<< inside"},
-	}
-	enrichJSONContent(nil, results)
-	if results[0].Content != "match inside" {
-		t.Errorf("markers not stripped: %q", results[0].Content)
-	}
-}
-
-func TestContentKind(t *testing.T) {
-	if got := contentKind(search.Result{ChunkID: 42}); got != "full" {
-		t.Errorf("chunk-level = %q, want full", got)
-	}
-	if got := contentKind(search.Result{ChunkID: 0}); got != "snippet" {
-		t.Errorf("document-level = %q, want snippet", got)
 	}
 }

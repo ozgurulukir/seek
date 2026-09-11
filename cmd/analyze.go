@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/search"
 )
@@ -13,7 +14,7 @@ type AnalyzeCmd struct {
 }
 
 func (c *AnalyzeCmd) Run(cfg *config.AppConfig) error {
-	lang := effectiveAnalyzeLang(c.Lang, cfg)
+	lang := app.EffectiveAnalyzeLang(c.Lang, cfg)
 	analyzer := search.NewAnalyzer(lang, true, true)
 	tokens := analyzer.Analyze(c.Text)
 	fmt.Printf("Analyzed (%s): %v\n", lang, tokens)

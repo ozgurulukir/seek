@@ -22,8 +22,6 @@ type Options struct {
 	Query Query
 	// Filters to apply to the search.
 	Filters *FilterSet
-	// Aggregations to run alongside the search (spec strings like "type:terms").
-	Aggregations []string
 	// QueryMode is "raw" or "parsed".
 	QueryMode string
 	// Limit is the max results.

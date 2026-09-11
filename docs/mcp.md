@@ -6,7 +6,8 @@
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `seek_search` | `query` (required), `limit`, `lex`, `vec`, `collection` | JSON array of results — **same field names as `seek search --json`**: `chunk_id`, `document_id`, `seq`, `title`, `path`, `collection`, `content`, `content_kind`, `score`, `chunk_type`, `start_line`, `end_line` |
+| `seek_search` | `query` (required); `limit` (≤100), `lex`, `vec`; filters `collection`, `repo`, `doc_type`, `lang`, `tag`, `after`/`before` (RFC3339), `chunk_type`, `path` (GLOB), `workspace`, `field` (`name:value` list); `sort_by`/`sort_order`; `context` (surrounding chunks); `aggs` | JSON array of results — **same field names as `seek search --json`** (shared wire contract). With `aggs`, a second text block carries `{spec: [{key, count}]}` buckets |
+| `seek_fields` | `field` (omit for summary), `collection`, `prefix`, `limit` | No field → summary of all fields (`total_docs`, `fields[]` with `field_name`, `match_mode`, `distinct_values`, `doc_count`, `coverage_percent`); with field → JSON array of `{value, count}`. Same shapes as `seek fields --json` |
 | `seek_status` | — | JSON array of `{name, type, documents, chunks}` |
 | `seek_autocomplete` | `prefix` (required), `max` | `{query, suggestions[]}` |
 

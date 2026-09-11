@@ -10,7 +10,6 @@ import (
 
 	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
-	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
 )
@@ -78,42 +77,10 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) (err error) {
 		fmt.Fprintf(os.Stderr, "WARN: %s\n", warning)
 	}
 
-	engine := runtime.Search
-	engine.WithLogger(searchLogger{})
-	embedClient, vlClient := runtime.EmbedClient, runtime.VLClient
-	// Resolve --field names against the curated registry plus fields
-	// physically present in the index (one DISTINCT query, only when needed).
-	var fieldKnown func(string) bool
-	if len(c.Field) > 0 {
-		resolver, err := store.NewFastFieldResolver(ctx, runtime.Store)
-		if err != nil {
-			return fmt.Errorf("resolve fast fields: %w", err)
-		}
-		fieldKnown = resolver.Known
-	}
-	filters, err := c.buildFilters(fieldKnown)
-	if err != nil {
-		return err
-	}
+	runtime.Search.WithLogger(searchLogger{})
 
-	// Build analyzer if tokenization is enabled
-	var analyzer *search.Analyzer
-	if c.QueryMode != "raw" && cfg.Config.Search.QueryMode != "raw" {
-		analyzer = search.NewAnalyzer(effectiveAnalyzeLang(c.AnalyzeLang, cfg), true, true)
-	}
-
-	opts := search.Options{
-		Filters:      filters,
-		Aggregations: c.Aggs,
-		QueryMode:    c.QueryMode,
-		Limit:        c.Limit,
-		RRFK:         cfg.Config.Search.RRFK,
-		SortBy:       c.SortBy,
-		SortOrder:    c.SortOrder,
-		Analyzer:     analyzer,
-	}
-
-	results, err := c.executeSearch(ctx, engine, embedClient, vlClient, opts)
+	req := c.searchRequest()
+	results, err := runtime.RunSearch(ctx, req)
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
 	}
@@ -122,21 +89,32 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) (err error) {
 	// context expansion. Content is emitted in full (the FTS snippet carries
 	// >>> markers and 40-token truncation; agents decide how much to read).
 	if c.JSON {
-		if err := engine.EnrichContent(ctx, results); err != nil {
+		if err := runtime.Search.EnrichContent(ctx, results); err != nil {
 			return fmt.Errorf("enrich results: %w", err)
 		}
-		aggs, err := c.computeAggregations(ctx, engine, filters)
+		aggs, err := runtime.RunAggs(ctx, req)
 		if err != nil {
 			return fmt.Errorf("aggregations: %w", err)
 		}
-		return c.printResultsJSON(results, aggs)
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(search.NewSearchOutput(c.Query, results, aggs))
 	}
 
 	// Run aggregations if requested
 	if len(c.Aggs) > 0 {
-		if err := c.printAggregations(ctx, engine, filters); err != nil {
+		aggs, err := runtime.RunAggs(ctx, req)
+		if err != nil {
 			return fmt.Errorf("aggregations: %w", err)
 		}
+		fmt.Println("\nAggregations:")
+		for spec, buckets := range aggs {
+			fmt.Printf("  %s:\n", spec)
+			for _, b := range buckets {
+				fmt.Printf("    %s: %d\n", b.Key, b.Count)
+			}
+		}
+		fmt.Println()
 	}
 
 	if len(results) == 0 {
@@ -144,10 +122,42 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) (err error) {
 		return nil
 	}
 
-	c.expandContext(runtime.Store, results)
+	expandContext(runtime.Store, c.Context, results)
 	c.printResults(results)
 
 	return nil
+}
+
+// searchRequest maps the CLI flags onto the surface-neutral request. Request
+// policy (filter semantics, analyzer gating, RRFK, dispatch) lives in the
+// app planner so the MCP tool shares it unchanged.
+func (c *SearchCmd) searchRequest() app.SearchRequest {
+	req := app.SearchRequest{
+		Query:       c.Query,
+		Limit:       c.Limit,
+		Collection:  c.Collection,
+		Repo:        c.Repo,
+		DocType:     c.DocType,
+		Lang:        c.Lang,
+		After:       c.After,
+		Before:      c.Before,
+		ChunkType:   c.ChunkType,
+		Path:        c.Path,
+		Workspace:   c.Workspace,
+		Fields:      c.Field,
+		SortBy:      c.SortBy,
+		SortOrder:   c.SortOrder,
+		QueryMode:   c.QueryMode,
+		AnalyzeLang: c.AnalyzeLang,
+		Aggs:        c.Aggs,
+	}
+	switch {
+	case c.Lex:
+		req.Mode = app.ModeLex
+	case c.Vec:
+		req.Mode = app.ModeVec
+	}
+	return req
 }
 
 type searchLogger struct{}
@@ -156,227 +166,64 @@ func (searchLogger) Printf(format string, v ...interface{}) {
 	fmt.Fprintf(os.Stderr, format, v...)
 }
 
-// buildFilters maps the filter flags into the domain FilterSet. fieldKnown
-// decides whether a --field name may be used: it accepts curated fast fields
-// plus any field physically present in the index (nil = curated only, which
-// keeps unit tests database-free).
-func (c *SearchCmd) buildFilters(fieldKnown func(string) bool) (*search.FilterSet, error) {
-	if fieldKnown == nil {
-		fieldKnown = store.ValidFastField
-	}
-	colName := c.Collection
-	if colName == "" {
-		colName = c.Repo
-	}
-
-	if colName == "" && c.DocType == "" && c.Lang == "" && c.Repo == "" && c.After == "" && c.Before == "" && c.ChunkType == "" && c.Path == "" && c.Workspace == "" && len(c.Field) == 0 {
-		return nil, nil
-	}
-
-	filters := search.NewFilterSet()
-	if colName != "" {
-		filters.Add(search.CollectionFilter(colName))
-	}
-	if c.DocType != "" {
-		filters.Add(search.DocTypeFilter(c.DocType))
-	}
-	if c.Lang != "" {
-		filters.Add(search.LanguageFilter(strings.ToLower(c.Lang)))
-	}
-	if c.Repo != "" {
-		filters.Add(search.RepositoryFilter(c.Repo))
-	}
-	if c.After != "" || c.Before != "" {
-		filters.Add(search.DateRangeFilter(c.After, c.Before))
-	}
-	if c.ChunkType != "" {
-		ct := 0
-		if strings.ToLower(c.ChunkType) == "image" {
-			ct = 1
-		}
-		filters.Add(search.ChunkTypeFilter(search.ChunkType(ct)))
-	}
-	if c.Path != "" {
-		filters.Add(search.PathFilter(c.Path))
-	}
-	if c.Workspace != "" {
-		filters.Add(search.WorkspaceFilter(c.Workspace))
-	}
-	for _, f := range c.Field {
-		field, value, ok := strings.Cut(f, ":")
-		if !ok || field == "" || value == "" {
-			return nil, fmt.Errorf("--field must be 'name:value' (got %q)", f)
-		}
-		if !fieldKnown(field) {
-			return nil, fmt.Errorf("--field: unknown fast field %q (%s)", field, store.FieldDiscoveryHint())
-		}
-		filters.Add(search.FastFieldFilter(field, value))
-	}
-
-	return filters, nil
-}
-
-func (c *SearchCmd) executeSearch(ctx context.Context, engine *search.Engine, embedClient embed.QueryEmbedder, vlClient embed.VLQueryEmbedder, opts search.Options) ([]search.Result, error) {
-	switch {
-	case c.Lex:
-		return engine.SearchBM25(ctx, c.Query, c.Limit, opts)
-	case c.Vec:
-		if embedClient == nil && vlClient == nil {
-			return nil, fmt.Errorf("vector search requires embedding API key")
-		}
-		return engine.SearchVector(ctx, c.Query, c.Limit, opts)
-	default:
-		return engine.SearchHybrid(ctx, c.Query, c.Limit, opts)
-	}
-}
-
-func (c *SearchCmd) printAggregations(ctx context.Context, engine *search.Engine, filters *search.FilterSet) error {
-	aggResults, err := engine.RunAggregations(ctx, c.Aggs, filters)
-	if err != nil {
-		return err
-	}
-	fmt.Println("\nAggregations:")
-	for spec, buckets := range aggResults {
-		fmt.Printf("  %s:\n", spec)
-		for _, b := range buckets {
-			fmt.Printf("    %s: %d\n", b.Key, b.Count)
-		}
-	}
-	fmt.Println()
+// runAnalyze handles the --analyze flag: tokenizes and stems the query text.
+func (c *SearchCmd) runAnalyze(cfg *config.AppConfig) error {
+	lang := app.EffectiveAnalyzeLang(c.AnalyzeLang, cfg)
+	analyzer := search.NewAnalyzer(lang, true, true)
+	tokens := analyzer.Analyze(c.Query)
+	fmt.Printf("Analyzed (%s): %v\n", lang, tokens)
 	return nil
 }
 
-// computeAggregations runs the requested aggregations without printing, for
-// the JSON output path. Empty spec list returns nil (no aggregations block).
-func (c *SearchCmd) computeAggregations(ctx context.Context, engine *search.Engine, filters *search.FilterSet) (map[string][]search.Bucket, error) {
-	if len(c.Aggs) == 0 {
-		return nil, nil
+// runAutocomplete handles the --autocomplete flag: shows prefix completions.
+func (c *SearchCmd) runAutocomplete(cfg *config.AppConfig) (err error) {
+	db, err := app.OpenStore(cfg)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
 	}
-	return engine.RunAggregations(ctx, c.Aggs, filters)
-}
+	defer func() { err = errors.Join(err, db.Close()) }()
 
-// enrichJSONContent replaces FTS highlight snippets with the full chunk
-// content for JSON output. The content normalization and content_kind
-// classification live in internal/search (quality.go) as the single source
-// of truth; these wrappers preserve the historical cmd-level API used by
-// buildJSONOutput and its tests.
-func enrichJSONContent(db *store.Store, results []search.Result) {
-	for i := range results {
-		if results[i].ChunkID <= 0 {
-			results[i].Content = strings.ReplaceAll(results[i].Content, ">>>", "")
-			results[i].Content = strings.ReplaceAll(results[i].Content, "<<<", "")
-			continue
+	query := strings.TrimSpace(c.Query)
+	var results []string
+
+	// Support multi-word queries by completing the last word while preserving prefix
+	lastSpace := strings.LastIndex(query, " ")
+	if lastSpace >= 0 {
+		lead := query[:lastSpace+1]
+		word := query[lastSpace+1:]
+		if word != "" {
+			completions, err := db.AutocompleteTerms(word, c.AutocompleteMax)
+			if err != nil {
+				return fmt.Errorf("autocomplete: %w", err)
+			}
+			for _, comp := range completions {
+				results = append(results, lead+comp)
+			}
 		}
-		if db == nil {
-			continue
-		}
-		if content, err := db.GetChunkContent(results[i].ChunkID); err == nil {
-			results[i].Content = content
+	} else {
+		var err error
+		results, err = db.AutocompleteTerms(query, c.AutocompleteMax)
+		if err != nil {
+			return fmt.Errorf("autocomplete: %w", err)
 		}
 	}
-}
 
-// contentKind classifies the Content field for JSON consumers: enriched
-// results carry the complete chunk text, document-level BM25/hybrid results
-// an FTS excerpt.
-func contentKind(r search.Result) string {
-	return search.ContentKind(r)
-}
-
-// jsonSearchResult mirrors search.Result with explicit, stable JSON field
-// names for agent consumption.
-type jsonSearchResult struct {
-	ChunkID     int64   `json:"chunk_id"`
-	DocumentID  int64   `json:"document_id"`
-	Seq         int     `json:"seq"`
-	Title       string  `json:"title"`
-	Path        string  `json:"path"`
-	Collection  string  `json:"collection"`
-	Content     string  `json:"content"`
-	ContentKind string  `json:"content_kind"`
-	Score       float64 `json:"score"`
-	ChunkType   int     `json:"chunk_type"`
-	ImagePath   string  `json:"image_path,omitempty"`
-	StartLine   int     `json:"start_line"`
-	EndLine     int     `json:"end_line"`
-}
-
-// jsonSearchOutput is the top-level --json envelope.
-type jsonSearchOutput struct {
-	Query   string                     `json:"query"`
-	Total   int                        `json:"total"`
-	Results []jsonSearchResult         `json:"results"`
-	Aggs    map[string][]jsonAggBucket `json:"aggs,omitempty"`
-}
-
-type jsonAggBucket struct {
-	Key   string `json:"key"`
-	Count int    `json:"count"`
-}
-
-func (c *SearchCmd) printResultsJSON(results []search.Result, aggs map[string][]search.Bucket) error {
-	out := buildJSONOutput(c, results, aggs)
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(out)
-}
-
-// buildJSONOutput maps search results and aggregations into the stable JSON
-// envelope; separated from printing so it is directly testable.
-func buildJSONOutput(c *SearchCmd, results []search.Result, aggs map[string][]search.Bucket) *jsonSearchOutput {
-	out := jsonSearchOutput{
-		Query:   c.Query,
-		Total:   len(results),
-		Results: make([]jsonSearchResult, 0, len(results)),
+	if c.JSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(search.NewAutocompleteOutput(c.Query, results))
 	}
+
+	if len(results) == 0 {
+		fmt.Println("No suggestions found.")
+		return nil
+	}
+
+	fmt.Printf("Suggestions for %q:\n", c.Query)
 	for _, r := range results {
-		out.Results = append(out.Results, jsonSearchResult{
-			ChunkID:     r.ChunkID,
-			DocumentID:  r.DocumentID,
-			Seq:         r.Seq,
-			Title:       r.Title,
-			Path:        r.Path,
-			Collection:  r.Collection,
-			Content:     r.Content,
-			ContentKind: contentKind(r),
-			Score:       r.Score,
-			ChunkType:   int(r.ChunkType),
-			ImagePath:   r.ImagePath,
-			StartLine:   r.StartLine,
-			EndLine:     r.EndLine,
-		})
+		fmt.Printf("  %s\n", r)
 	}
-	if aggs != nil {
-		out.Aggs = make(map[string][]jsonAggBucket, len(aggs))
-		for spec, buckets := range aggs {
-			jb := make([]jsonAggBucket, 0, len(buckets))
-			for _, b := range buckets {
-				jb = append(jb, jsonAggBucket{Key: b.Key, Count: b.Count})
-			}
-			out.Aggs[spec] = jb
-		}
-	}
-	return &out
-}
-
-func (c *SearchCmd) expandContext(db *store.Store, results []search.Result) {
-	if c.Context <= 0 {
-		return
-	}
-	for idx := range results {
-		if results[idx].DocumentID > 0 {
-			expanded, sLine, eLine, err := db.GetSurroundingContext(results[idx].DocumentID, results[idx].Seq, c.Context)
-			if err == nil && expanded != "" {
-				results[idx].Content = expanded
-				if sLine > 0 {
-					results[idx].StartLine = sLine
-				}
-				if eLine > 0 {
-					results[idx].EndLine = eLine
-				}
-			}
-		}
-	}
+	return nil
 }
 
 func (c *SearchCmd) printResults(results []search.Result) {
@@ -418,80 +265,27 @@ func (c *SearchCmd) printResults(results []search.Result) {
 	fmt.Println()
 }
 
-// runAnalyze handles the --analyze flag: tokenizes and stems the query text.
-func (c *SearchCmd) runAnalyze(cfg *config.AppConfig) error {
-	lang := effectiveAnalyzeLang(c.AnalyzeLang, cfg)
-	analyzer := search.NewAnalyzer(lang, true, true)
-	tokens := analyzer.Analyze(c.Query)
-	fmt.Printf("Analyzed (%s): %v\n", lang, tokens)
-	return nil
-}
-
-// effectiveAnalyzeLang resolves the analysis language: an explicit language
-// flag wins, then search.analyze_lang from config, then the built-in default
-// ("en"). Shared by `seek search --analyze` and `seek analyze`.
-func effectiveAnalyzeLang(flagLang string, cfg *config.AppConfig) string {
-	if flagLang != "" {
-		return flagLang
+// expandContext expands each hit with surrounding chunks, shared by the CLI
+// human output and the MCP context argument. Applied after EnrichContent;
+// content_kind is unaffected (it is derived from ChunkID).
+func expandContext(db *store.Store, radius int, results []search.Result) {
+	if radius <= 0 {
+		return
 	}
-	if cfg.Config.Search.AnalyzeLang != "" {
-		return cfg.Config.Search.AnalyzeLang
-	}
-	return config.DefaultAnalyzeLang
-}
-
-// runAutocomplete handles the --autocomplete flag: shows prefix completions.
-func (c *SearchCmd) runAutocomplete(cfg *config.AppConfig) (err error) {
-	db, err := app.OpenStore(cfg)
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
-	}
-	defer func() { err = errors.Join(err, db.Close()) }()
-
-	query := strings.TrimSpace(c.Query)
-	var results []string
-
-	// Support multi-word queries by completing the last word while preserving prefix
-	lastSpace := strings.LastIndex(query, " ")
-	if lastSpace >= 0 {
-		lead := query[:lastSpace+1]
-		word := query[lastSpace+1:]
-		if word != "" {
-			completions, err := db.AutocompleteTerms(word, c.AutocompleteMax)
-			if err != nil {
-				return fmt.Errorf("autocomplete: %w", err)
-			}
-			for _, comp := range completions {
-				results = append(results, lead+comp)
+	for idx := range results {
+		if results[idx].DocumentID > 0 {
+			expanded, sLine, eLine, err := db.GetSurroundingContext(results[idx].DocumentID, results[idx].Seq, radius)
+			if err == nil && expanded != "" {
+				results[idx].Content = expanded
+				if sLine > 0 {
+					results[idx].StartLine = sLine
+				}
+				if eLine > 0 {
+					results[idx].EndLine = eLine
+				}
 			}
 		}
-	} else {
-		var err error
-		results, err = db.AutocompleteTerms(query, c.AutocompleteMax)
-		if err != nil {
-			return fmt.Errorf("autocomplete: %w", err)
-		}
 	}
-
-	if c.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(&struct {
-			Query       string   `json:"query"`
-			Suggestions []string `json:"suggestions"`
-		}{Query: c.Query, Suggestions: results})
-	}
-
-	if len(results) == 0 {
-		fmt.Println("No suggestions found.")
-		return nil
-	}
-
-	fmt.Printf("Suggestions for %q:\n", c.Query)
-	for _, r := range results {
-		fmt.Printf("  %s\n", r)
-	}
-	return nil
 }
 
 func formatSnippet(content string, maxLen int) string {
