@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ozgurulukir/seek/internal/agenthooks"
 	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/pipeline"
@@ -21,14 +22,14 @@ type SyncCmd struct {
 }
 
 func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
-	if c.NoLock && os.Getenv(hookLockEnv) != "1" {
+	if c.NoLock && os.Getenv(agenthooks.LockEnv) != "1" {
 		return fmt.Errorf("--no-lock is reserved for internal hook execution")
 	}
 	ctx := context.Background()
 	if !c.NoLock {
-		lockCtx, cancel := context.WithTimeout(ctx, hookLockWaitTimeout)
+		lockCtx, cancel := context.WithTimeout(ctx, agenthooks.WriterLockTimeout)
 		defer cancel()
-		lock, lockErr := acquireHookLock(lockCtx, hookSyncLockPath(cfg))
+		lock, lockErr := agenthooks.AcquireWriterLock(lockCtx, agenthooks.WriterLockPath(cfg))
 		if lockErr != nil {
 			return fmt.Errorf("acquire writer lock: %w", lockErr)
 		}

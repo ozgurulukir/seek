@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ozgurulukir/seek/internal/agenthooks"
 )
 
 func TestServiceTemplates_RunSyncOnce(t *testing.T) {
@@ -62,7 +64,7 @@ func TestServiceStartCmd_Helpers(t *testing.T) {
 		}
 
 		for _, tt := range tests {
-			got := shellQuote(tt.input)
+			got := agenthooks.ShellQuote(tt.input)
 			if got != tt.expected {
 				t.Errorf("shellQuote(%q) = %q, want %q", tt.input, got, tt.expected)
 			}

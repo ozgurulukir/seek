@@ -34,7 +34,7 @@ gofmt -l cmd internal main.go third_party   # must print nothing (fix with gofmt
 ## Architecture (layered, no cycles)
 
 ```
-root (main.go) ──> cmd ──> internal/{chunk,config,embed,extractor,indexer,search,source,store}
+root (main.go) ──> cmd ──> internal/{agenthooks,app,chunk,config,embed,extractor,indexer,pipeline,search,semantic,source,store}
 ```
 
 Keep the layering: `cmd/` orchestrates; `internal/` has no imports from `cmd/` or `root`. Do not introduce cross-boundary imports.
@@ -65,7 +65,9 @@ Treat every such integration the same way:
 - User/agent brings the endpoint up from the docs; `seek` degrades gracefully while it
   is down (warn + no tags, keyword search unaffected).
 
-- `internal/store` — SQLite persistence: collections, documents, chunks, embeddings, FTS5 index, vector search. **All SQL lives here** (incl. `fastfield.go`, `vector_index.go`, `compression.go`). Vector search uses an HNSW index (`VectorIndex` interface, `coder/hnsw`) with a linear-scan fallback; cosine uses SIMD via `viterin/vek`. FTS5 tokenizer is `unicode61 remove_diacritics 2` (Turkish-aware); BM25 weights title 10× content. Migrate-time logic auto-rebuilds the FTS table when the tokenizer config changes.
+- `internal/agenthooks` — the agent-hook domain: hook target registry (Claude Code, Codex), agent settings JSON surgery (backup-once-per-run, permission preservation, surgical seek-only edits), hook command identity matching (regexes over installed command strings — a compatibility surface, pinned by golden tests; never change output format), the multi-process writer lock + sync state shared by `seek sync`/`seek embed`/`seek add`/`seek rm`, and the `seek hooks sync|context` subprocess entry points. `cmd/hooks.go` is only kong structs + delegations.
+- `internal/app` — composition root: one `Runtime` owns Store, vector index, search Engine, Indexer and Pipeline; commands open it, get warnings, and `Close()` in reverse order. Also owns the search request planner (`SearchRequest` → filters/analyzer/dispatch) and the SQLite `SearchRepository` adapter, so `internal/search` stays persistence-neutral and the CLI/MCP surfaces share one request path.
+- `internal/store` — SQLite persistence: collections, documents, chunks, embeddings, FTS5 index, vector search. Fast fields are governed by the registry in `fielddef.go` (curated field names + match modes + documents-column sort fields; `seek fields` also discovers non-curated names physically present in `fast_fields`). **All SQL lives here** (incl. `fastfield.go`, `vector_index.go`, `compression.go`). **All SQL lives here** (incl. `fastfield.go`, `vector_index.go`, `compression.go`). Vector search uses an HNSW index (`VectorIndex` interface, `coder/hnsw`) with a linear-scan fallback; cosine uses SIMD via `viterin/vek`. FTS5 tokenizer is `unicode61 remove_diacritics 2` (Turkish-aware); BM25 weights title 10× content. Migrate-time logic auto-rebuilds the FTS table when the tokenizer config changes.
 - `internal/indexer` — orchestrates per-format sync: scans sources, upserts documents/chunks/FTS, writes fast-field metadata, runs orphan cleanup. This is the layer that knows about collection types (markdown/code/claude/codex/images/pdf/parser/documents); `store` and `source` stay format-agnostic.
 - `internal/extractor` — file extraction domain (`builtin` for native markdown/PDF/images and `xberg` for 100+ rich document formats via remote service).
 - `internal/embed` — providers: `Client` (any OpenAI-compatible text embeddings), `VLClient` (multimodal image+text), `OCRClient` (vision/OCR), and `RerankClient` (OpenAI/Cohere/Jina/DashScope cross-encoder reranking). The VL endpoint is configurable via `embedding.vl_base_url`, defaulting to DashScope's qwen3-vl-embedding.

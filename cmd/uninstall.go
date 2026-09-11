@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/ozgurulukir/seek/internal/agenthooks"
 	"github.com/ozgurulukir/seek/internal/config"
 )
 
@@ -66,8 +67,8 @@ func uninstallArtifacts(cfg *config.AppConfig, service, hooks, cache, configDirS
 	}
 	if want("hooks") {
 		seen := map[string]bool{}
-		for _, t := range hookTargets {
-			p := t.settingsPath()
+		for _, t := range agenthooks.Targets() {
+			p := t.SettingsPath()
 			if seen[p] {
 				continue // both Claude events share one settings file
 			}
@@ -143,7 +144,7 @@ func (c *UninstallCmd) Run(cfg *config.AppConfig) error {
 		case "hooks":
 			// Delegate to the surgical hook remover: it only touches seek's
 			// own entries and keeps other tools' configuration intact.
-			if err := removeSeekEntriesFrom(a.path); err != nil {
+			if err := agenthooks.RemoveAllSeekEntries(a.path); err != nil {
 				fmt.Printf("  WARN: hooks %s: %v\n", a.path, err)
 				continue
 			}
@@ -157,70 +158,5 @@ func (c *UninstallCmd) Run(cfg *config.AppConfig) error {
 		}
 	}
 	fmt.Println("\nuninstall complete. The binary itself was not deleted (a running binary cannot safely delete itself); remove it manually.")
-	return nil
-}
-
-// removeSeekEntriesFrom strips every seek hook entry from one agent settings
-// file without touching anything else. It iterates ALL events (not just the
-// ones whose target settingsPath equals path — callers may pass an arbitrary
-// settings file, e.g. for tests or agent layouts that differ), applying the
-// same seek-command matcher the per-target uninstallHook uses.
-func removeSeekEntriesFrom(path string) error {
-	settings, err := readHookSettings(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	changed := false
-	for _, event := range hookEvents() {
-		for {
-			idx := findSeekHookIndex(settings, event)
-			if idx < 0 {
-				break
-			}
-			if err := removeHookAtIndex(settings, event, idx); err != nil {
-				return err
-			}
-			changed = true
-		}
-	}
-	if !changed {
-		return nil
-	}
-	return writeHookSettings(path, settings)
-}
-
-// hookEvents returns the distinct hook event names from the target table.
-func hookEvents() []string {
-	seen := map[string]bool{}
-	var events []string
-	for _, t := range hookTargets {
-		if !seen[t.event] {
-			seen[t.event] = true
-			events = append(events, t.event)
-		}
-	}
-	return events
-}
-
-// removeHookAtIndex deletes the entry at idx from the event's hook list and
-// cleans up the event when it becomes empty (same semantics as uninstallHook).
-func removeHookAtIndex(settings map[string]interface{}, event string, idx int) error {
-	hooks, ok := settings["hooks"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("no hooks map")
-	}
-	eventHooks, ok := hooks[event].([]interface{})
-	if !ok || idx >= len(eventHooks) {
-		return fmt.Errorf("hook entry vanished")
-	}
-	eventHooks = append(eventHooks[:idx], eventHooks[idx+1:]...)
-	if len(eventHooks) == 0 {
-		delete(hooks, event)
-	} else {
-		hooks[event] = eventHooks
-	}
 	return nil
 }

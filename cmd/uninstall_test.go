@@ -89,40 +89,6 @@ func TestUninstall_RemovesAllClasses(t *testing.T) {
 	}
 }
 
-func TestRemoveSeekEntriesFrom_KeepsOtherTools(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "settings.json")
-	content := `{"hooks": {"Stop": [
-		{"hooks": [{"type": "command", "command": "other-tool run"}]},
-		{"hooks": [{"type": "command", "command": "'seek' hooks sync"}]}
-	]}}`
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := removeSeekEntriesFrom(path); err != nil {
-		t.Fatalf("removeSeekEntriesFrom: %v", err)
-	}
-	data, _ := os.ReadFile(path)
-	if !contains(string(data), "other-tool run") {
-		t.Errorf("other tool's entry was removed: %s", data)
-	}
-	if contains(string(data), "seek") {
-		t.Errorf("seek entry still present: %s", data)
-	}
-}
-
-func contains(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && (haystack == needle || len(needle) == 0 || indexOf(haystack, needle) >= 0)
-}
-
-func indexOf(haystack, needle string) int {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return i
-		}
-	}
-	return -1
-}
-
 func TestUninstall_DryRunMarksNotPresent(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)

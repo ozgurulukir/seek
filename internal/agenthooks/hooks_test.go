@@ -1,10 +1,11 @@
-package cmd
+package agenthooks
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,25 +15,25 @@ import (
 	"github.com/ozgurulukir/seek/internal/config"
 )
 
-func newTestTarget(t *testing.T, name string) hookTarget {
+func newTestTarget(t *testing.T, name string) Target {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
-	return hookTarget{
+	return Target{
 		name:         name,
 		settingsPath: func() string { return path },
 		event:        "Stop",
 	}
 }
 
-func newCodexTestTarget(t *testing.T) hookTarget {
+func newCodexTestTarget(t *testing.T) Target {
 	return newTestTarget(t, "Codex")
 }
 
-func newClaudeFixtureTarget(t *testing.T) hookTarget {
+func newClaudeFixtureTarget(t *testing.T) Target {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".claude", "settings.json")
-	return hookTarget{
+	return Target{
 		name:          "Claude Code",
 		agent:         "claude",
 		settingsPath:  func() string { return path },
@@ -42,10 +43,10 @@ func newClaudeFixtureTarget(t *testing.T) hookTarget {
 	}
 }
 
-func newCodexFixtureTarget(t *testing.T) hookTarget {
+func newCodexFixtureTarget(t *testing.T) Target {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".codex", "hooks.json")
-	return hookTarget{
+	return Target{
 		name:         "Codex",
 		agent:        "codex",
 		settingsPath: func() string { return path },
@@ -83,7 +84,7 @@ func readTestSettings(t *testing.T, path string) map[string]interface{} {
 func TestInstallHook_CreatesSettings(t *testing.T) {
 	tgt := newTestTarget(t, "Test Tool")
 
-	if err := installHook(tgt); err != nil {
+	if err := installHook(tgt, io.Discard); err != nil {
 		t.Fatalf("installHook: %v", err)
 	}
 
@@ -107,7 +108,7 @@ func TestInstallHook_CreatesSettings(t *testing.T) {
 
 func TestInstallHook_ClaudeFixtureIncludesStatusAndTimeout(t *testing.T) {
 	tgt := newClaudeFixtureTarget(t)
-	if err := installHook(tgt); err != nil {
+	if err := installHook(tgt, io.Discard); err != nil {
 		t.Fatalf("installHook: %v", err)
 	}
 
@@ -128,7 +129,7 @@ func TestInstallHook_UpgradesExistingClaudeFixture(t *testing.T) {
 	tgt := newClaudeFixtureTarget(t)
 	copyHookFixture(t, "claude-settings.json", tgt.settingsPath())
 
-	if err := installHook(tgt); err != nil {
+	if err := installHook(tgt, io.Discard); err != nil {
 		t.Fatalf("installHook: %v", err)
 	}
 
@@ -151,7 +152,7 @@ func TestInstallHook_UpgradesExistingClaudeFixture(t *testing.T) {
 func TestInstallHook_CodexFixtureUsesJSONOnlyCommand(t *testing.T) {
 	tgt := newCodexFixtureTarget(t)
 	copyHookFixture(t, "codex-hooks.json", tgt.settingsPath())
-	if err := installHook(tgt); err != nil {
+	if err := installHook(tgt, io.Discard); err != nil {
 		t.Fatalf("installHook: %v", err)
 	}
 
@@ -205,10 +206,10 @@ func TestSeekHookCommandMatchesQuotedPaths(t *testing.T) {
 func TestInstallHook_Idempotent(t *testing.T) {
 	tgt := newTestTarget(t, "Test Tool")
 
-	if err := installHook(tgt); err != nil {
+	if err := installHook(tgt, io.Discard); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
-	if err := installHook(tgt); err != nil {
+	if err := installHook(tgt, io.Discard); err != nil {
 		t.Fatalf("second install: %v", err)
 	}
 
@@ -223,11 +224,11 @@ func TestInstallHook_Idempotent(t *testing.T) {
 func TestInstallHook_PreservesEmbedOnRepair(t *testing.T) {
 	tgt := newClaudeFixtureTarget(t)
 	tgt.embed = true
-	if err := installHook(tgt); err != nil {
+	if err := installHook(tgt, io.Discard); err != nil {
 		t.Fatalf("install embedded hook: %v", err)
 	}
 	tgt.embed = false
-	if err := installHook(tgt); err != nil {
+	if err := installHook(tgt, io.Discard); err != nil {
 		t.Fatalf("repair hook: %v", err)
 	}
 	settings := readTestSettings(t, tgt.settingsPath())
@@ -256,7 +257,7 @@ func TestTargetHookDoesNotAcceptLegacyCommand(t *testing.T) {
 
 func TestAcquireHookLockDoesNotReclaimOldLock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hooks", "codex.lock")
-	lock, err := acquireHookLock(context.Background(), path)
+	lock, err := AcquireWriterLock(context.Background(), path)
 	if err != nil {
 		t.Fatalf("acquire first lock: %v", err)
 	}
@@ -266,13 +267,13 @@ func TestAcquireHookLockDoesNotReclaimOldLock(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	if _, err := acquireHookLock(ctx, path); err == nil {
+	if _, err := AcquireWriterLock(ctx, path); err == nil {
 		t.Fatal("active old lock was acquired")
 	}
 	if err := lock.Close(); err != nil {
 		t.Fatalf("release lock: %v", err)
 	}
-	if replacement, err := acquireHookLock(context.Background(), path); err != nil {
+	if replacement, err := AcquireWriterLock(context.Background(), path); err != nil {
 		t.Fatalf("acquire released lock: %v", err)
 	} else if err := replacement.Close(); err != nil {
 		t.Fatalf("release replacement lock: %v", err)
@@ -281,7 +282,7 @@ func TestAcquireHookLockDoesNotReclaimOldLock(t *testing.T) {
 
 func TestHookSyncLockIsSharedAcrossAgents(t *testing.T) {
 	cfg := &config.AppConfig{CacheDir: t.TempDir()}
-	if got, want := hookSyncLockPath(cfg), filepath.Join(cfg.CacheDir, "hooks", "sync.lock"); got != want {
+	if got, want := WriterLockPath(cfg), filepath.Join(cfg.CacheDir, "hooks", "sync.lock"); got != want {
 		t.Errorf("lock path = %q, want %q", got, want)
 	}
 }
@@ -337,12 +338,12 @@ func TestHookRuntimeBinaryPreservesAbsoluteArgv0(t *testing.T) {
 }
 
 func TestWithHookLockEnvReplacesExistingValue(t *testing.T) {
-	env := withHookLockEnv([]string{"PATH=/bin", hookLockEnv + "=0"})
+	env := withLockEnv([]string{"PATH=/bin", LockEnv + "=0"})
 	count := 0
 	for _, value := range env {
-		if strings.HasPrefix(value, hookLockEnv+"=") {
+		if strings.HasPrefix(value, LockEnv+"=") {
 			count++
-			if value != hookLockEnv+"=1" {
+			if value != LockEnv+"=1" {
 				t.Errorf("lock env = %q", value)
 			}
 		}
@@ -355,11 +356,11 @@ func TestWithHookLockEnvReplacesExistingValue(t *testing.T) {
 func TestRecordHookSkip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "claude.json")
 	completed := time.Now().Add(-time.Minute).Round(0)
-	if err := writeHookState(path, hookState{Agent: "claude", CompletedAt: completed}); err != nil {
+	if err := WriteState(path, State{Agent: "claude", CompletedAt: completed}); err != nil {
 		t.Fatalf("write state: %v", err)
 	}
-	recordHookSkip(path, hookState{Agent: "claude", CompletedAt: completed}, "debounced")
-	state, ok := readHookState(path)
+	recordHookSkip(path, State{Agent: "claude", CompletedAt: completed}, "debounced")
+	state, ok := ReadState(path)
 	if !ok || state.SkippedReason != "debounced" || !state.LastAttemptAt.After(completed) {
 		t.Errorf("skip state = %#v, ok=%t", state, ok)
 	}
@@ -410,7 +411,7 @@ func TestInstallHook_UpgradesLegacyCodexCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := installHook(tgt); err != nil {
+	if err := installHook(tgt, io.Discard); err != nil {
 		t.Fatalf("installHook: %v", err)
 	}
 
@@ -475,7 +476,7 @@ func TestInstallHook_PreservesExistingHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := installHook(tgt); err != nil {
+	if err := installHook(tgt, io.Discard); err != nil {
 		t.Fatalf("installHook: %v", err)
 	}
 
@@ -494,7 +495,7 @@ func TestInstallHook_PreservesExistingHooks(t *testing.T) {
 
 func TestUninstallHook_RemovesOnlySeek(t *testing.T) {
 	tgt := newTestTarget(t, "Test Tool")
-	if err := installHook(tgt); err != nil {
+	if err := installHook(tgt, io.Discard); err != nil {
 		t.Fatalf("installHook: %v", err)
 	}
 
@@ -509,11 +510,11 @@ func TestUninstallHook_RemovesOnlySeek(t *testing.T) {
 		},
 	}
 	hooks["Stop"] = append(stop, other)
-	if err := writeHookSettings(tgt.settingsPath(), settings); err != nil {
+	if err := WriteSettings(tgt.settingsPath(), settings); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := uninstallHook(tgt); err != nil {
+	if err := uninstallHook(tgt, io.Discard); err != nil {
 		t.Fatalf("uninstallHook: %v", err)
 	}
 
@@ -541,11 +542,11 @@ func TestUninstallHook_PreservesOtherCommandsInSameEntry(t *testing.T) {
 			}},
 		},
 	}
-	if err := writeHookSettings(tgt.settingsPath(), settings); err != nil {
+	if err := WriteSettings(tgt.settingsPath(), settings); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := uninstallHook(tgt); err != nil {
+	if err := uninstallHook(tgt, io.Discard); err != nil {
 		t.Fatalf("uninstallHook: %v", err)
 	}
 
@@ -560,17 +561,17 @@ func TestUninstallHook_PreservesOtherCommandsInSameEntry(t *testing.T) {
 func TestUninstallHook_NotInstalled(t *testing.T) {
 	tgt := newTestTarget(t, "Test Tool")
 	// Should be a no-op without error on a missing file.
-	if err := uninstallHook(tgt); err != nil {
+	if err := uninstallHook(tgt, io.Discard); err != nil {
 		t.Fatalf("uninstallHook on missing file: %v", err)
 	}
 }
 
 func TestUninstallHook_CleansEmptyEvent(t *testing.T) {
 	tgt := newTestTarget(t, "Test Tool")
-	if err := installHook(tgt); err != nil {
+	if err := installHook(tgt, io.Discard); err != nil {
 		t.Fatalf("installHook: %v", err)
 	}
-	if err := uninstallHook(tgt); err != nil {
+	if err := uninstallHook(tgt, io.Discard); err != nil {
 		t.Fatalf("uninstallHook: %v", err)
 	}
 	settings := readTestSettings(t, tgt.settingsPath())
@@ -581,15 +582,15 @@ func TestUninstallHook_CleansEmptyEvent(t *testing.T) {
 }
 
 func TestSelectedTargets(t *testing.T) {
-	all := selectedTargets(false, false)
+	all := Selected(false, false)
 	if len(all) != len(hookTargets) {
 		t.Errorf("no flags: got %d targets, want %d", len(all), len(hookTargets))
 	}
-	claudeOnly := selectedTargets(true, false)
+	claudeOnly := Selected(true, false)
 	if len(claudeOnly) != 2 || claudeOnly[0].name != "Claude Code" || claudeOnly[1].event != "UserPromptSubmit" {
 		t.Errorf("--claude: got %v", claudeOnly)
 	}
-	codexOnly := selectedTargets(false, true)
+	codexOnly := Selected(false, true)
 	if len(codexOnly) != 3 || codexOnly[0].name != "Codex" || codexOnly[1].event != "Interrupt" || codexOnly[2].event != "UserPromptSubmit" {
 		t.Errorf("--codex: got %v", codexOnly)
 	}
@@ -601,7 +602,7 @@ func TestInstallHook_CodexInterruptLaunchesBackgroundSync(t *testing.T) {
 	target.background = true
 	target.async = true
 	target.timeout = 3
-	if err := installHook(target); err != nil {
+	if err := installHook(target, io.Discard); err != nil {
 		t.Fatalf("installHook: %v", err)
 	}
 
@@ -672,7 +673,7 @@ func TestInstallHook_UpgradesCodexInterruptHook(t *testing.T) {
 	if err := os.WriteFile(target.settingsPath(), data, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := installHook(target); err != nil {
+	if err := installHook(target, io.Discard); err != nil {
 		t.Fatalf("installHook: %v", err)
 	}
 
@@ -732,7 +733,7 @@ func TestWriteHookSettings_BackupAndPerms(t *testing.T) {
 
 	// Fresh write: no backup, file created 0600.
 	settings := map[string]interface{}{"hooks": map[string]interface{}{}}
-	if err := writeHookSettings(path, settings); err != nil {
+	if err := WriteSettings(path, settings); err != nil {
 		t.Fatalf("fresh write: %v", err)
 	}
 	entries, _ := filepath.Glob(path + ".bak-*")
@@ -750,7 +751,7 @@ func TestWriteHookSettings_BackupAndPerms(t *testing.T) {
 	if err := os.Chmod(path, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeHookSettings(path, map[string]interface{}{"a": 1}); err != nil {
+	if err := WriteSettings(path, map[string]interface{}{"a": 1}); err != nil {
 		t.Fatalf("rewrite: %v", err)
 	}
 	baks, _ := filepath.Glob(path + ".bak-*")

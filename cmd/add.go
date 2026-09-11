@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ozgurulukir/seek/internal/agenthooks"
 	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/chunk"
 	"github.com/ozgurulukir/seek/internal/config"
@@ -52,9 +53,9 @@ type AddCmd struct {
 }
 
 func (c *AddCmd) Run(cfg *config.AppConfig) (err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), hookLockWaitTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), agenthooks.WriterLockTimeout)
 	defer cancel()
-	lock, err := acquireHookLock(ctx, hookSyncLockPath(cfg))
+	lock, err := agenthooks.AcquireWriterLock(ctx, agenthooks.WriterLockPath(cfg))
 	if err != nil {
 		return fmt.Errorf("acquire writer lock: %w", err)
 	}

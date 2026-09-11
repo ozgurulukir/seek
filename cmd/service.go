@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/ozgurulukir/seek/internal/agenthooks"
 	"github.com/ozgurulukir/seek/internal/config"
 )
 
@@ -19,7 +20,7 @@ const (
 )
 
 var plistTemplate = template.Must(template.New("plist").Funcs(template.FuncMap{
-	"shellQuote": shellQuote,
+	"shellQuote": agenthooks.ShellQuote,
 }).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
