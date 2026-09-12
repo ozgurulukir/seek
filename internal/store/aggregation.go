@@ -28,8 +28,20 @@ type AggregationBucket struct {
 func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationSpec, filters *FilterSet) ([]AggregationBucket, error) {
 	if strings.ToLower(spec.Type) == "terms" {
 		field := strings.ToLower(strings.TrimSpace(spec.Field))
-		if mode, ok := fastFieldMatchMode(field); ok && mode == FastFieldMembership {
-			return s.executeMembershipTermsAggregationContext(ctx, field, filters)
+		if mode, ok := fastFieldMatchMode(field); ok {
+			if mode == FastFieldMembership {
+				return s.executeMembershipTermsAggregationContext(ctx, field, filters)
+			}
+			// Curated exact fast field.
+			return s.executeFastFieldTermsAggregationContext(ctx, field, filters)
+		}
+		// Dynamic discovery: any field physically present in fast_fields
+		// aggregates in exact mode, mirroring --field validation. Otherwise
+		// fall through to the documents-column whitelists.
+		if present, err := s.hasFastField(ctx, field); err != nil {
+			return nil, err
+		} else if present {
+			return s.executeFastFieldTermsAggregationContext(ctx, field, filters)
 		}
 	}
 
@@ -47,11 +59,6 @@ func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationS
 	}
 	defer rows.Close()
 
-	// Fast-field terms buckets group on the raw stored value, which is
-	// JSON-encoded; decode the keys once here. Other bucket keys (strftime
-	// labels, range labels, column values) are plain text already.
-	decodeKeys := strings.ToLower(spec.Type) == "terms" && ValidFastField(strings.ToLower(strings.TrimSpace(spec.Field)))
-
 	var buckets []AggregationBucket
 	for rows.Next() {
 		var bucket AggregationBucket
@@ -63,9 +70,46 @@ func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationS
 		} else if err := rows.Scan(&bucket.Key, &bucket.Count); err != nil {
 			return nil, fmt.Errorf("scan aggregation bucket: %w", err)
 		}
-		if decodeKeys {
-			bucket.Key = decodeFastFieldText(bucket.Key)
+		buckets = append(buckets, bucket)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate aggregation rows: %w", err)
+	}
+	return buckets, nil
+}
+
+// executeFastFieldTermsAggregationContext counts whole stored values of one
+// fast field (exact semantics — membership fields take the token-unnesting
+// detour instead). It serves both curated and dynamically discovered fields:
+// buckets group on the raw stored value (JSON encoding is injective per
+// string, so raw grouping equals decoded grouping) and ride the
+// (field_name, field_value) index; keys are decoded after scanning.
+func (s *Store) executeFastFieldTermsAggregationContext(ctx context.Context, field string, filters *FilterSet) ([]AggregationBucket, error) {
+	query := `SELECT ff.field_value as key, COUNT(*) as count
+		FROM documents d
+		JOIN collections c ON c.id = d.collection_id
+		JOIN fast_fields ff ON ff.doc_id = d.id AND ff.field_name = ?
+		GROUP BY ff.field_value ORDER BY count DESC, ff.field_value ASC`
+	args := []interface{}{field}
+
+	query, args, err := applyAggregationFilters(query, args, filters)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("aggregation query: %w", err)
+	}
+	defer rows.Close()
+
+	var buckets []AggregationBucket
+	for rows.Next() {
+		var bucket AggregationBucket
+		if err := rows.Scan(&bucket.Key, &bucket.Count); err != nil {
+			return nil, fmt.Errorf("scan aggregation bucket: %w", err)
 		}
+		bucket.Key = decodeFastFieldText(bucket.Key)
 		buckets = append(buckets, bucket)
 	}
 	if err := rows.Err(); err != nil {
@@ -141,19 +185,11 @@ func buildAggregationQuery(spec AggregationSpec) (string, []interface{}, bool, e
 	}
 }
 
+// buildTermsQuery plans terms over documents/collections columns. Fast-field
+// terms never reach it: ExecuteAggregationContext routes curated and
+// dynamically indexed fields to executeFastFieldTermsAggregationContext.
 func buildTermsQuery(field string) (string, []interface{}, bool, error) {
 	field = strings.ToLower(field)
-	if ValidFastField(field) {
-		// Group on the raw stored value (JSON encoding is injective per
-		// string, so raw grouping equals decoded grouping) and ride the
-		// (field_name, field_value) index; ExecuteAggregationContext decodes
-		// the keys after scanning.
-		return `SELECT ff.field_value as key, COUNT(*) as count
-			FROM documents d
-			JOIN collections c ON c.id = d.collection_id
-			JOIN fast_fields ff ON ff.doc_id = d.id AND ff.field_name = ?
-			GROUP BY ff.field_value ORDER BY count DESC`, []interface{}{field}, false, nil
-	}
 	column, err := aggregationColumn(field, map[string]string{
 		"type": "c.type", "doc_type": "c.type", "collection": "c.name",
 		"created_at": "d.created_at", "date": "d.created_at", "line_count": "d.line_count", "path": "d.path",
@@ -259,15 +295,18 @@ func applyAggregationFilters(query string, args []interface{}, filters *FilterSe
 		return query, args, nil
 	}
 	upper := strings.ToUpper(query)
-	groupAt := strings.Index(upper, " GROUP BY ")
+	// Locate GROUP BY regardless of surrounding whitespace: the multiline
+	// query strings indent it with tabs, and appending the clause after an
+	// ORDER BY would be a syntax error.
+	groupAt := strings.Index(upper, "GROUP BY")
 	if groupAt < 0 {
 		groupAt = len(query)
 	}
-	prefix, suffix := query[:groupAt], query[groupAt:]
+	prefix, suffix := strings.TrimRight(query[:groupAt], " \t\n"), query[groupAt:]
 	if strings.Contains(strings.ToUpper(prefix), " WHERE ") {
 		prefix += " AND " + clause
 	} else {
 		prefix += " WHERE " + clause
 	}
-	return prefix + suffix, append(args, filterArgs...), nil
+	return prefix + " " + suffix, append(args, filterArgs...), nil
 }

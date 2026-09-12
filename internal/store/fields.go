@@ -180,13 +180,11 @@ func (s *Store) ListFastFieldValuesContext(ctx context.Context, field string, op
 	mode, curated := fastFieldMatchMode(field)
 	if !curated {
 		// Dynamic discovery: any field physically present in fast_fields is
-		// listable, in exact mode. The probe rides the field_name index
-		// prefix; seek fields inspects one field per invocation.
-		var present bool
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT EXISTS(SELECT 1 FROM fast_fields WHERE field_name = ?)`, field,
-		).Scan(&present); err != nil {
-			return nil, fmt.Errorf("resolve fast field: %w", err)
+		// listable, in exact mode. seek fields inspects one field per
+		// invocation, so the single probe stays cheap.
+		present, err := s.hasFastField(ctx, field)
+		if err != nil {
+			return nil, err
 		}
 		if !present {
 			return nil, fmt.Errorf("unknown fast field %q (%s)", field, FieldDiscoveryHint())
@@ -330,4 +328,22 @@ func splitMembershipTokens(decoded string) []string {
 		}
 	}
 	return tokens
+}
+
+// hasFastField reports whether the field name has at least one stored value
+// in fast_fields. The probe rides the field_name prefix of
+// idx_fast_fields_name_value; it is the dynamic-discovery check shared by
+// the field listing and the terms aggregation path. The table is created
+// lazily on first write, so its absence simply means no dynamic fields exist.
+func (s *Store) hasFastField(ctx context.Context, field string) (bool, error) {
+	var present bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM fast_fields WHERE field_name = ?)`, field,
+	).Scan(&present); err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return false, nil
+		}
+		return false, fmt.Errorf("resolve fast field: %w", err)
+	}
+	return present, nil
 }

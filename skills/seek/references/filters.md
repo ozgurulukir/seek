@@ -49,6 +49,10 @@ seek search "x"    --field repo:myproject --field lang:go
 service; all tagged sources are facetable with `--aggs tags:terms`. The old
 `--tag` flag was removed — `--field tags:<value>` gives identical behaviour.
 
+The same acceptance rule as `--field` applies to `--aggs <field>:terms`:
+curated fields plus every field physically present in the index (exact
+whole-value buckets). Histograms and ranges remain documents-column only.
+
 ## Semantic enrichment fields
 
 For pdf / documents / conversation collections, the optional local semantic

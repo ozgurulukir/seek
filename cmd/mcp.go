@@ -44,7 +44,7 @@ type mcpSearchArgs struct {
 	SortBy     string   `json:"sort_by,omitempty" jsonschema:"sort results by a field (e.g. created_at, line_count, title) instead of relevance"`
 	SortOrder  string   `json:"sort_order,omitempty" jsonschema:"sort direction with sort_by: asc or desc (default desc)"`
 	Context    int      `json:"context,omitempty" jsonschema:"expand each hit with N surrounding chunks (0 = off; raises start_line/end_line spans)"`
-	Aggs       []string `json:"aggs,omitempty" jsonschema:"aggregations to compute alongside the search (for example doc_type terms or created_at histogram month); returned as a second text block"`
+	Aggs       []string `json:"aggs,omitempty" jsonschema:"aggregations to compute alongside the search (for example doc_type terms, lang terms, created_at histogram month); terms work on any indexed fast field discoverable via seek_fields; returned as a second text block"`
 }
 
 // mcpFieldsArgs drives seek_fields: no field → summary of all fields;

@@ -128,9 +128,15 @@ The `tags`, `lang`, `repo`, `ext`, `filename`, `rel_path`, `topics`,
 at index time: markdown notes expose their YAML frontmatter keys (e.g.
 `tags`, `date`), code files expose language and repository, and the optional
 semantic service (see [docs/semantic.md](semantic.md)) adds `topics`,
-`entities` and `language` for pdf/documents/conversations. They are
-filterable too via the generic `--field <name>:<value>` flag (exact for
-single-value fields, comma-list membership for `tags`/`topics`/`entities`):
+`entities` and `language` for pdf/documents/conversations.
+
+Terms facets are not limited to the curated names: every fast field
+physically present in the index is aggregatable (run `seek fields` to
+discover what the index holds), each distinct stored value counting as one
+bucket. Histograms and ranges stay on the numeric/date documents columns.
+All these fields are filterable too via the generic `--field <name>:<value>`
+flag (exact for single-value fields, comma-list membership for
+`tags`/`topics`/`entities`):
 
 ```bash
 # Filter to documents tagged in frontmatter / semantic tags

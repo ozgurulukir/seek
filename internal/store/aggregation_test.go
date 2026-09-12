@@ -124,3 +124,74 @@ func TestExecuteAggregationContextReturnsDatabaseErrors(t *testing.T) {
 		t.Fatal("aggregation on closed store returned nil error")
 	}
 }
+
+func TestDynamicFastFieldTermsAggregation(t *testing.T) {
+	s := newTestStore(t)
+	col, err := s.CreateCollection("notes", CollectionTypeMarkdown, "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	var ids []int64
+	for _, name := range []string{"a.md", "b.md", "c.md"} {
+		id, err := s.UpsertDocument(col.ID, "/tmp/"+name, name, "h", 1, 1)
+		if err != nil {
+			t.Fatalf("UpsertDocument: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	// A frontmatter-style key with no curated registry entry.
+	for id, author := range []string{"jane", "jane", "bob"} {
+		if err := s.FastFields().Set(ids[id], "author", author); err != nil {
+			t.Fatalf("set author: %v", err)
+		}
+	}
+	// Exact semantics: a comma-joined value stays ONE bucket (only curated
+	// membership fields unnest tokens).
+	if err := s.FastFields().Set(ids[0], "series", "a,b"); err != nil {
+		t.Fatalf("set series: %v", err)
+	}
+	if err := s.UpsertFTS(ids[0], "a.md", "body"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	got, err := s.ExecuteAggregationContext(ctx, AggregationSpec{Type: "terms", Field: "author"}, nil)
+	if err != nil {
+		t.Fatalf("dynamic terms: %v", err)
+	}
+	want := []AggregationBucket{{Key: "jane", Count: 2}, {Key: "bob", Count: 1}}
+	if len(got) != len(want) {
+		t.Fatalf("buckets = %#v, want %#v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("bucket %d = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+
+	got, err = s.ExecuteAggregationContext(ctx, AggregationSpec{Type: "terms", Field: "series"}, nil)
+	if err != nil {
+		t.Fatalf("dynamic exact terms: %v", err)
+	}
+	if len(got) != 1 || got[0].Key != "a,b" || got[0].Count != 1 {
+		t.Errorf("series buckets = %#v, want one whole-value a,b bucket", got)
+	}
+
+	// Filters apply to dynamic fast-field terms like every other plan.
+	filters := NewFilterSet()
+	filters.Add(&FastFieldFilter{Field: "author", Value: "bob"})
+	got, err = s.ExecuteAggregationContext(ctx, AggregationSpec{Type: "terms", Field: "author"}, filters)
+	if err != nil {
+		t.Fatalf("filtered dynamic terms: %v", err)
+	}
+	if len(got) != 1 || got[0].Key != "bob" || got[0].Count != 1 {
+		t.Errorf("filtered buckets = %#v, want bob=1", got)
+	}
+
+	// Unknown names (neither indexed nor a whitelisted column) still error.
+	if _, err := s.ExecuteAggregationContext(ctx, AggregationSpec{Type: "terms", Field: "nonexistent"}, nil); err == nil {
+		t.Fatal("unknown aggregation field was accepted")
+	} else if !strings.Contains(err.Error(), "unsupported aggregation field") {
+		t.Errorf("error = %v, want unsupported aggregation field", err)
+	}
+}
