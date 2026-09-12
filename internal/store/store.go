@@ -177,7 +177,9 @@ func (s *Store) migrate() error {
 		return err
 	}
 
-	s.applyAlterStatements()
+	if err := s.applyAlterStatements(); err != nil {
+		return err
+	}
 
 	if err := s.initFTS(); err != nil {
 		return err
@@ -227,7 +229,7 @@ func (s *Store) initCoreSchema() error {
 	return nil
 }
 
-func (s *Store) applyAlterStatements() {
+func (s *Store) applyAlterStatements() error {
 	// Add new columns for multimodal support (backward compat via ALTER TABLE)
 	alterStmts := []string{
 		`ALTER TABLE chunks ADD COLUMN chunk_type INTEGER DEFAULT 0`,
@@ -241,19 +243,21 @@ func (s *Store) applyAlterStatements() {
 		`ALTER TABLE chunks ADD COLUMN end_line INTEGER DEFAULT 0`,
 	}
 	for _, stmt := range alterStmts {
-		s.execIgnoreDuplicate(stmt)
+		if err := s.execIgnoreDuplicate(stmt); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (s *Store) execIgnoreDuplicate(stmt string) {
+func (s *Store) execIgnoreDuplicate(stmt string) error {
 	_, err := s.db.Exec(stmt)
-	if err != nil {
-		errMsg := err.Error()
-		// SQLite returns "duplicate column name" when column already exists
-		if strings.Contains(errMsg, "duplicate column") {
-			return
-		}
-		// Log unexpected ALTER TABLE errors so they are not silently lost.
-		fmt.Fprintf(os.Stderr, "WARN: migration statement failed: %v\n  SQL: %s\n", err, stmt)
+	if err == nil {
+		return nil
 	}
+	// SQLite returns "duplicate column name" when column already exists.
+	if strings.Contains(err.Error(), "duplicate column") {
+		return nil
+	}
+	return fmt.Errorf("migration statement %q: %w", stmt, err)
 }

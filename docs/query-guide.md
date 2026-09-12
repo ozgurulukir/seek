@@ -21,8 +21,12 @@ By default (`search.query_mode: parsed`), queries are parsed into an AST. If syn
 - **Boolean Operators:**
   `authentication AND middleware`
   `react OR vue`
-  `NOT deprecated`
+  `current NOT deprecated`
   `(postgres OR sqlite) AND "connection pool"`
+
+  FTS5 requires a positive match set for negation, so a standalone query such
+  as `NOT deprecated` returns no keyword matches. Combine `NOT` with a positive
+  term as shown above.
 - **Exact Phrases:** `"deploy the gateway"`
 - **Prefix Matching:** `handl*` (matches `handle`, `handler`, `handling`)
 - **Field-Scoped Queries:** `title:migration`, `content:sql`
@@ -86,8 +90,12 @@ seek search "parser" --sort-by line_count --sort-order desc
 
 ## 📍 Precision Source Addressing & Context Expansion (`-C`)
 
-### 1. Precise 1-Based Line Spans
-Search outputs exact 1-based start and end line ranges (`path/to/file.go:L25-L68`), enabling immediate IDE and AI agent navigation.
+### 1. Best-Effort 1-Based Line Spans
+Search outputs 1-based start and end line ranges (`path/to/file.go:L25-L68`) for
+immediate IDE and AI agent navigation. These ranges are exact when normalized
+chunk text maps directly to source lines. Paragraph normalization and
+character-based overlap can prevent an exact match; in those cases the range
+is an approximate navigation hint rather than a parser-grade source location.
 
 ### 2. Surrounding Context Expansion (`-C` / `--context`)
 Pass `-C <radius>` to expand adjacent chunk text and compute expanded line numbers:

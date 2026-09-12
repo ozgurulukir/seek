@@ -99,7 +99,11 @@ func ChunkConversation(content string, maxSize int) []Chunk {
 	return AssignLineNumbers(content, chunks)
 }
 
-// AssignLineNumbers computes 1-based start and end line numbers for each chunk within content.
+// AssignLineNumbers computes best-effort 1-based line spans by matching each
+// chunk against content. Chunk normalization and character-based overlap can
+// make an exact source match impossible; callers must not treat these spans as
+// parser-grade source locations. Exact spans require future chunker APIs to
+// carry source offsets while constructing chunks.
 func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 	if len(chunks) == 0 {
 		return chunks
@@ -119,15 +123,23 @@ func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 			chunks[i].EndLine = 1
 			continue
 		}
-		firstLine := strings.TrimSpace(strings.SplitN(cText, "\n", 2)[0])
-		chunkLineCount := strings.Count(cText, "\n") + 1
+		chunkLines := strings.Split(cText, "\n")
+		chunkLineCount := len(chunkLines)
 
 		startLine := searchPos + 1
-		for j := searchPos; j < len(lines); j++ {
-			trimmedLine := strings.TrimSpace(lines[j])
-			if trimmedLine == firstLine || (len(firstLine) > 5 && strings.Contains(trimmedLine, firstLine)) {
+		for j := searchPos; j+chunkLineCount <= len(lines); j++ {
+			matches := true
+			for k := range chunkLines {
+				if strings.TrimSpace(lines[j+k]) != strings.TrimSpace(chunkLines[k]) {
+					matches = false
+					break
+				}
+			}
+			if matches {
 				startLine = j + 1
-				searchPos = j
+				// Advance by one line rather than by the whole chunk so an
+				// overlapping successor can still match shared source lines.
+				searchPos = j + 1
 				break
 			}
 		}

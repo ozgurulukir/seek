@@ -7,8 +7,12 @@ Structured queries are parsed by default. Invalid syntax falls back to raw FTS5 
 ```bash
 seek search "term1 AND term2"
 seek search "term1 OR term2"
-seek search "NOT term"
+seek search "current NOT deprecated"
 ```
+
+FTS5 negation requires a positive match set. A standalone query such as
+`NOT deprecated` returns no keyword matches; combine `NOT` with a positive
+term as shown above.
 
 ## Phrase
 

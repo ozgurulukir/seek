@@ -31,12 +31,10 @@ func (s *Store) initFTS() error {
 			return fmt.Errorf("begin fts rebuild tx: %w", err)
 		}
 		if _, err := s.db.Exec(`DROP TABLE IF EXISTS documents_fts_vocab`); err != nil {
-			s.db.Exec(`ROLLBACK`)
-			return fmt.Errorf("drop documents_fts_vocab: %w", err)
+			return fmt.Errorf("drop documents_fts_vocab: %w", s.rollbackFTS(err))
 		}
 		if _, err := s.db.Exec(`DROP TABLE IF EXISTS documents_fts`); err != nil {
-			s.db.Exec(`ROLLBACK`)
-			return fmt.Errorf("drop documents_fts: %w", err)
+			return fmt.Errorf("drop documents_fts: %w", s.rollbackFTS(err))
 		}
 	}
 	// NOTE: FTS5 requires the tokenize argument as a literal in the DDL —
@@ -51,7 +49,7 @@ func (s *Store) initFTS() error {
 	)
 	if _, err := s.db.Exec(ftsDDL); err != nil {
 		if needRebuild {
-			s.db.Exec(`ROLLBACK`)
+			err = s.rollbackFTS(err)
 		}
 		return fmt.Errorf("create documents_fts: %w", err)
 	}
@@ -63,14 +61,18 @@ func (s *Store) initFTS() error {
 	}
 	if needRebuild {
 		if err := s.rebuildFTSFromDocuments(); err != nil {
-			s.db.Exec(`ROLLBACK`)
-			return fmt.Errorf("rebuild fts: %w", err)
+			return fmt.Errorf("rebuild fts: %w", s.rollbackFTS(err))
 		}
 		if _, err := s.db.Exec(`COMMIT`); err != nil {
 			return fmt.Errorf("commit fts rebuild: %w", err)
 		}
 	}
 	return nil
+}
+
+func (s *Store) rollbackFTS(cause error) error {
+	_, rollbackErr := s.db.Exec(`ROLLBACK`)
+	return errors.Join(cause, rollbackErr)
 }
 
 // ftsNeedsRebuild reports whether documents_fts is missing or was created

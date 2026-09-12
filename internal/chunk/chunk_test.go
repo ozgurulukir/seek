@@ -180,6 +180,34 @@ func TestChunkConversationEmpty(t *testing.T) {
 	}
 }
 
+func TestAssignLineNumbersMatchesWholeChunk(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		chunk   string
+	}{
+		{
+			name:    "does not accept a substring of an earlier line",
+			content: "prefix target line suffix\nother\ntarget line\nunique follower",
+			chunk:   "target line\nunique follower",
+		},
+		{
+			name:    "uses following lines to disambiguate a repeated first line",
+			content: "repeat\nwrong follower\nrepeat\nright follower",
+			chunk:   "repeat\nright follower",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := AssignLineNumbers(tt.content, []Chunk{{Content: tt.chunk}})
+			if got[0].StartLine != 3 || got[0].EndLine != 4 {
+				t.Fatalf("line span = %d-%d, want 3-4", got[0].StartLine, got[0].EndLine)
+			}
+		})
+	}
+}
+
 func TestSplitByHeaders(t *testing.T) {
 	content := "intro line\n# Header One\nbody one\n# Header Two\nbody two"
 	sections := splitByHeaders(content)

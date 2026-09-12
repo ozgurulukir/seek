@@ -63,7 +63,7 @@ seek search "conceptual question" --vec -l 10
 ## Reading Results
 
 ```
-# Text result with precise source line range
+# Text result with best-effort source line range
 [1] internal/embed/rerank.go
     ~/internal/embed/rerank.go:L1-L41  (seek)  score=0.9500
     Snippet of matching content...
@@ -75,7 +75,7 @@ seek search "conceptual question" --vec -l 10
     context: the dialog layout is broken, content overflows...
 ```
 
-- Results include exact line spans like `path/to/file.go:L10-L45` for instant IDE/agent jumping and referencing.
+- Results include best-effort line spans like `path/to/file.go:L10-L45` for IDE/agent navigation. Treat them as hints: paragraph normalization and character-based overlap can make a span approximate.
 - Pass `-C 1` or `-C 2` to expand surrounding chunk context before and after matching lines.
 - `collection-name` tells you which collection the result came from (run `seek status` to see all)
 - For conversation results, the title is the first user message
@@ -311,7 +311,7 @@ extractor:
 **Vector Index (HNSW):**
 ```yaml
 vector_index:
-  backend: hnsw     # or: linear (exhaustive scan)
+  backend: hnsw     # or: linear (explicit exhaustive scan)
   hnsw:
     persist_path: ~/.cache/seek/hnsw.index
 ```
@@ -324,7 +324,7 @@ vector_index:
 - If search returns no results, try rephrasing or switching between `--lex` and hybrid
 - Multilingual queries work — the index supports mixed-language content
 - Works with any OpenAI-compatible endpoint (OpenAI, DashScope, Ollama, vLLM, etc.); `dimensions` in `config.yaml` must match the model output dimension (e.g. 1536 for OpenAI small, 768 for Nomic, 1024 for BGE-M3)
-- Vector search uses HNSW index (persisted at `~/.cache/seek/hnsw.index`) for fast approximate nearest neighbor search; falls back to linear scan if the index is missing or corrupt
+- Vector search uses HNSW by default and rebuilds a missing or corrupt persisted graph from SQLite embeddings. Linear scan is used only with `vector_index.backend: linear`; unknown backend names are configuration errors.
 - Chunk content is compressed with Zstd by default to reduce storage; uncompressed content remains readable
 - Query parsing is enabled by default; invalid syntax falls back to raw FTS5 MATCH automatically
 - Changing `model` or `dimensions` requires re-indexing: `seek rm <collection>` then `seek add`

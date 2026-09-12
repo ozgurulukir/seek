@@ -154,6 +154,10 @@ seek search "complex AND syntax OR that might break" --query-mode raw
 seek search "term1 AND term2" --query-mode parsed
 ```
 
+Parsed queries follow FTS5's negation constraint: `current NOT deprecated`
+is valid, while standalone `NOT deprecated` has no positive match set and
+returns no keyword matches.
+
 **When to use raw mode:**
 - Your query contains special characters that confuse the parser
 - You want to search for literal `AND`, `OR`, `NOT` words
@@ -173,4 +177,3 @@ seek search "query" \
   --sort-order desc \
   -l 20
 ```
-

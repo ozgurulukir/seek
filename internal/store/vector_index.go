@@ -443,7 +443,7 @@ func NewVectorIndex(cfg *config.AppConfig) (VectorIndex, error) {
 	case "linear":
 		return newLinearIndex(dim), nil
 	default:
-		return newLinearIndex(dim), nil
+		return nil, fmt.Errorf("unsupported vector index backend %q", backend)
 	}
 }
 

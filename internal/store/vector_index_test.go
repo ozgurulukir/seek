@@ -65,7 +65,7 @@ func TestNewVectorIndex(t *testing.T) {
 			wantType: "*store.linearIndex",
 		},
 		{
-			name: "unknown_backend_fallback_to_linear",
+			name: "unknown_backend_returns_error",
 			cfg: func(cacheDir string) *config.AppConfig {
 				return &config.AppConfig{
 					Config: config.Config{
@@ -77,7 +77,7 @@ func TestNewVectorIndex(t *testing.T) {
 					CacheDir: cacheDir,
 				}
 			},
-			wantType: "*store.linearIndex",
+			expectErr: true,
 		},
 	}
 
