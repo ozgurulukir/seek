@@ -288,7 +288,7 @@ func newTestStore(t *testing.T) *store.Store {
 	s, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags fts5 ./... or make test")
+			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
 		}
 		t.Fatalf("Open: %v", err)
 	}

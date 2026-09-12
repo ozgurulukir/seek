@@ -13,23 +13,23 @@ Go 1.24 module `github.com/ozgurulukir/seek`. ~18,000 LOC across a root package 
 ```bash
 # Build the real binary (FTS5 tag is REQUIRED):
 # Linux / macOS:
-CGO_ENABLED=1 go build -tags fts5 -o /dev/null .     # or: make build
+CGO_ENABLED=1 go build -tags "fts5 sqlite_fts5" -o /dev/null .     # or: make build
 
 # Windows (PowerShell with Zig or MinGW GCC):
-$env:CC="zig cc"; $env:CGO_ENABLED="1"; go build -tags fts5 -o seek.exe .
+$env:CC="zig cc"; $env:CGO_ENABLED="1"; go build -tags "fts5 sqlite_fts5" -o seek.exe .
 
-# Test — requires the fts5 tag (mattn/go-sqlite3 with FTS5). `make test` already
+# Test — requires the fts5 and sqlite_fts5 tags (mattn/go-sqlite3 with FTS5). `make test` already
 # includes it; the store tests open a real SQLite DB that needs FTS5.
-go test -tags fts5 ./...        # or: make test
+go test -tags "fts5 sqlite_fts5" ./...        # or: make test
 
 # Sanity:
-go vet ./...        # clean
+go vet -tags "fts5 sqlite_fts5" ./...        # clean
 gofmt -l cmd internal main.go third_party   # must print nothing (fix with gofmt -w)
 ```
 
 - `mattn/go-sqlite3` is **cgo** — `CGO_ENABLED=1` is required to build.
-- FTS5 is enabled by the `fts5` build tag. Without it, `store.Open` errors out at migrate time. This is why **every** build/test invocation needs `-tags fts5`.
-- The `Makefile` `test` target runs `go test -tags fts5 ./...` (it was fixed to include the tag).
+- FTS5 requires both the project `fts5` tag and go-sqlite3’s `sqlite_fts5` tag. Without them, `store.Open` errors out at migrate time. This is why **every** build/test invocation needs `-tags "fts5 sqlite_fts5"`.
+- The `Makefile` `test` target runs `go test -tags "fts5 sqlite_fts5" ./...`.
 
 ## Architecture (layered, no cycles)
 
@@ -116,9 +116,9 @@ ocr:
 ## Testing conventions
 
 - Test files exist across all internal packages (`internal/{chunk,config,embed,extractor,indexer,search,source,store}` and `internal/source/parserdef`), including comprehensive tests for embedding clients and batching.
-- `internal/store` tests open a **real temp SQLite DB** via `t.TempDir()` and require the `fts5` tag.
+- `internal/store` tests open a **real temp SQLite DB** via `t.TempDir()` and require the `fts5 sqlite_fts5` tags.
 - For new store tests, follow `internal/store/store_test.go` (uses `newTestStore(t)` helper + `t.Cleanup`).
-- Benchmarks live in `internal/store/store_test.go` — run with `go test -tags fts5 -bench . ./internal/store/`.
+- Benchmarks live in `internal/store/store_test.go` — run with `go test -tags "fts5 sqlite_fts5" -bench . ./internal/store/`.
 
 ## Performance notes (things already optimized / to keep in mind)
 

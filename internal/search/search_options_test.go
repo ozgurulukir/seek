@@ -15,7 +15,7 @@ func TestEngine_SearchWithOptions(t *testing.T) {
 	s, err := store.Open(dbPath)
 	if err != nil {
 		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags fts5 ./... or make test")
+			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
 		}
 		t.Fatalf("failed to open store: %v", err)
 	}

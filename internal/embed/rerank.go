@@ -32,11 +32,15 @@ type RerankClient struct {
 
 // NewRerankClient creates a new rerank client.
 func NewRerankClient(baseURL, apiKey, model string) *RerankClient {
+	return newRerankClient(baseURL, apiKey, model, false)
+}
+
+func newRerankClient(baseURL, apiKey, model string, offline bool) *RerankClient {
 	return &RerankClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		model:   model,
-		http:    &http.Client{Timeout: 30 * time.Second},
+		http:    newHTTPClient(30*time.Second, offline),
 	}
 }
 

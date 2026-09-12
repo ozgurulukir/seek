@@ -1,4 +1,4 @@
-// Build with: make build (or: CGO_ENABLED=1 go build -tags "fts5" -o seek .)
+// Build with: make build (or: CGO_ENABLED=1 go build -tags "fts5 sqlite_fts5" -o seek .)
 // FTS5 tag is required for SQLite full-text search.
 package main
 

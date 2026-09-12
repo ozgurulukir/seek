@@ -72,18 +72,19 @@ func configuredProvider(cfg *config.AppConfig) (Provider, error) {
 		p.VLText = vl
 		p.VLImage = vl
 	}
-	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.APIKey != "" && !cfg.Config.OfflineOnly() {
-		p.Reranker = NewRerankClient(cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.APIKey, cfg.Config.Rerank.Model)
+	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.APIKey != "" &&
+		(!cfg.Config.OfflineOnly() || config.IsNumericLoopbackURL(cfg.Config.Rerank.BaseURL)) {
+		p.Reranker = newRerankClient(cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.APIKey, cfg.Config.Rerank.Model, cfg.Config.OfflineOnly())
 	}
 	return p, nil
 }
 
-// NewClientFromConfig builds the text-embedding client from config. Returns
-// the offline (network-refusing) client when privacy.offline_only is set, and
-// nil when no API key is configured. Centralizing this here keeps the
-// command layer free of provider-construction branches.
+// NewClientFromConfig builds the text-embedding client from config. Under
+// privacy.offline_only, numeric loopback endpoints remain usable while all
+// other endpoints receive a network-refusing client. It returns nil when no
+// API key is configured.
 func NewClientFromConfig(cfg *config.AppConfig) *Client {
-	if cfg.Config.OfflineOnly() {
+	if cfg.Config.OfflineOnly() && !config.IsNumericLoopbackURL(cfg.Config.Embedding.BaseURL) {
 		return NewOfflineClient(cfg.Config.Embedding.Model)
 	}
 	key, err := cfg.RequireEmbeddingKey()
@@ -101,23 +102,29 @@ func NewClientFromConfig(cfg *config.AppConfig) *Client {
 }
 
 // NewVLClientFromConfig builds the multimodal (vision+text) client from
-// config. Returns nil when offline, when no API key is configured, or when
-// the configured model is not multimodal.
+// config. Returns nil when no API key is configured, when the configured model
+// is not multimodal, or when offline_only rejects the configured endpoint.
 func NewVLClientFromConfig(cfg *config.AppConfig) *VLClient {
-	if cfg.Config.OfflineOnly() {
-		return nil // offline: never build a multimodal network client
+	ec := cfg.Config.Embedding
+	vlURL := ec.VLBaseURL
+	if vlURL == "" {
+		vlURL = ec.BaseURL
+	}
+	if cfg.Config.OfflineOnly() && !config.IsNumericLoopbackURL(vlURL) {
+		return nil
 	}
 	key, err := cfg.RequireEmbeddingKey()
 	if err != nil {
 		return nil
 	}
-	ec := cfg.Config.Embedding
 	// Only create VL client for multimodal models.
 	if !ec.IsMultimodal() {
 		return nil
 	}
 	q, d := ec.TaskPrefixes()
-	return NewVLClient(key, ec.Model, ec.Dimensions, ec.VLBaseURL, TaskPrefix{Query: q, Document: d})
+	// Use the validated fallback URL as the actual endpoint too. Otherwise an
+	// empty vl_base_url would silently select the remote DashScope default.
+	return newVLClient(key, ec.Model, ec.Dimensions, vlURL, TaskPrefix{Query: q, Document: d}, cfg.Config.OfflineOnly())
 }
 
 // EmbeddingCapability reports whether the embedding pipeline can run for the
@@ -126,8 +133,8 @@ func NewVLClientFromConfig(cfg *config.AppConfig) *VLClient {
 // capability is a configuration state (skip with a pointer to how to fix
 // it), not a runtime failure.
 func EmbeddingCapability(cfg *config.AppConfig) (bool, string) {
-	if cfg.Config.OfflineOnly() {
-		return false, "privacy.offline_only is set — embeddings are disabled (keyword search unaffected)"
+	if cfg.Config.OfflineOnly() && !config.IsNumericLoopbackURL(cfg.Config.Embedding.BaseURL) {
+		return false, "privacy.offline_only blocks the non-loopback embedding endpoint (keyword search unaffected)"
 	}
 	if _, err := cfg.RequireEmbeddingKey(); err != nil {
 		return false, "embedding API key not configured — run: seek auth login (keyword search unaffected)"

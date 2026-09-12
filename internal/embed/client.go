@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ozgurulukir/seek/internal/config"
 )
@@ -76,9 +77,31 @@ func newClient(baseURL, apiKey, model string, dimensions int, taskPrefix TaskPre
 		model:      model,
 		dimensions: dimensions,
 		taskPrefix: taskPrefix,
-		http:       &http.Client{Timeout: config.DefaultEmbeddingTimeout},
+		http:       newHTTPClient(config.DefaultEmbeddingTimeout, offline),
 		offline:    offline,
 	}
+}
+
+// newHTTPClient applies the additional transport restrictions required by
+// offline-only mode. The default path deliberately keeps Go's normal proxy
+// and redirect behavior for remote providers.
+func newHTTPClient(timeout time.Duration, offline bool) *http.Client {
+	client := &http.Client{Timeout: timeout}
+	if !offline {
+		return client
+	}
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if ok {
+		transport = transport.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.Proxy = nil
+	client.Transport = transport
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return client
 }
 
 type embeddingRequest struct {

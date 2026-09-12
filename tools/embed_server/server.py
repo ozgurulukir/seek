@@ -2,21 +2,78 @@
 # dependencies = [
 #   "fastembed>=0.4.0",
 #   "fastapi>=0.110.0",
+#   "pyyaml>=6.0",
 #   "uvicorn>=0.28.0",
 #   "pydantic>=2.0.0",
 # ]
 # ///
+
+import ipaddress
+import os
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Union, Optional
 from fastembed import TextEmbedding
 import uvicorn
-import os
-import argparse
 
-# Default ultra-lightweight ONNX model from Seek docs: all-MiniLM-L6-v2 (~22MB, 384 dims, ~2-5ms on CPU)
-DEFAULT_MODEL = os.environ.get("FASTEMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+def load_config() -> dict[str, Any]:
+    """Load seek's user config; environment variables remain overrides."""
+    config_path = Path(os.environ.get(
+        "SEEK_CONFIG", Path.home() / ".config" / "seek" / "config.yaml"
+    ))
+    try:
+        import yaml
+        with config_path.open(encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+            if isinstance(config, Mapping):
+                return dict(config)
+            print(f"warning: ignoring non-mapping config in {config_path}")
+    except Exception as exc:
+        print(f"warning: unable to read {config_path}: {exc}")
+    return {}
+
+
+CONFIG = load_config()
+EMBEDDING_CONFIG = CONFIG.get("embedding")
+if not isinstance(EMBEDDING_CONFIG, Mapping):
+    EMBEDDING_CONFIG = {}
+PRIVACY_CONFIG = CONFIG.get("privacy")
+if not isinstance(PRIVACY_CONFIG, Mapping):
+    PRIVACY_CONFIG = {}
+
+
+def as_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
+OFFLINE_ONLY = as_bool(PRIVACY_CONFIG.get("offline_only", False))
+
+
+def loopback_host(value: Any) -> str:
+    candidate = str(value or "127.0.0.1")
+    try:
+        if ipaddress.ip_address(candidate).is_loopback:
+            return candidate
+    except ValueError:
+        pass
+    print(f"warning: refusing non-loopback embedding host {candidate!r}")
+    return "127.0.0.1"
+
+
+MODEL = os.environ.get("FASTEMBED_MODEL") or EMBEDDING_CONFIG.get(
+    "model", "sentence-transformers/all-MiniLM-L6-v2"
+)
+if not isinstance(MODEL, str) or not MODEL.strip():
+    MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+DEFAULT_MODEL = MODEL
 
 DIMENSIONS_MAP = {
     "sentence-transformers/all-MiniLM-L6-v2": 384,
@@ -27,11 +84,37 @@ DIMENSIONS_MAP = {
     "nomic-embed-text": 768,
     "BAAI/bge-base-en-v1.5": 768,
     "BAAI/bge-large-en-v1.5": 1024,
+    "intfloat/multilingual-e5-small": 384,
 }
+
+try:
+    model_dim = int(EMBEDDING_CONFIG.get("dimensions") or DIMENSIONS_MAP.get(DEFAULT_MODEL, 384))
+    if model_dim <= 0:
+        raise ValueError
+except (TypeError, ValueError):
+    model_dim = DIMENSIONS_MAP.get(DEFAULT_MODEL, 384)
+
+HOST = os.environ.get(
+    "EMBED_SERVER_HOST",
+    EMBEDDING_CONFIG.get("host") or "127.0.0.1",
+)
+if OFFLINE_ONLY:
+    HOST = loopback_host(HOST)
+else:
+    HOST = str(HOST or "127.0.0.1")
+try:
+    PORT = int(os.environ.get(
+        "EMBED_SERVER_PORT",
+        os.environ.get("PORT") or
+        EMBEDDING_CONFIG.get("port") or 8002,
+    ))
+    if PORT <= 0 or PORT > 65535:
+        raise ValueError
+except (TypeError, ValueError):
+    PORT = 8002
 
 print(f"Loading FastEmbed ONNX model: {DEFAULT_MODEL}...")
 embedding_model = TextEmbedding(model_name=DEFAULT_MODEL)
-model_dim = DIMENSIONS_MAP.get(DEFAULT_MODEL, 384)
 print(f"Model loaded successfully (dimensions: {model_dim}).")
 
 app = FastAPI(title="Local FastEmbed OpenAI-Compatible Server")
@@ -99,6 +182,5 @@ def create_embeddings(req: EmbeddingRequest):
     }
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "8002"))
-    print(f"Starting FastEmbed OpenAI-compatible server on http://127.0.0.1:{port}")
-    uvicorn.run(app, host="127.0.0.1", port=port)
+    print(f"Starting FastEmbed OpenAI-compatible server on http://{HOST}:{PORT}")
+    uvicorn.run(app, host=HOST, port=PORT)

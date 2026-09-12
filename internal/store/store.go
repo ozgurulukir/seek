@@ -167,10 +167,10 @@ func (s *Store) ConfigureCompression(cfg config.CompressionConfig) {
 // syncs (e.g. after each `seek embed`) would accumulate duplicate/stale
 // entries and grow the HNSW graph indefinitely.
 func (s *Store) migrate() error {
-	// Verify FTS5 is available (requires build tag: -tags "fts5")
+	// Verify FTS5 is available (requires build tags: -tags "fts5 sqlite_fts5")
 	var fts5ok int
 	if err := s.db.QueryRow(`SELECT 1 FROM pragma_compile_options WHERE compile_options = 'ENABLE_FTS5'`).Scan(&fts5ok); err != nil {
-		return fmt.Errorf("SQLite FTS5 not enabled. Build with: make build (or: go build -tags \"fts5\")")
+		return fmt.Errorf("SQLite FTS5 not enabled. Build with: make build (or: go build -tags \"fts5 sqlite_fts5\")")
 	}
 
 	if err := s.initCoreSchema(); err != nil {

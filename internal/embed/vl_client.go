@@ -46,6 +46,10 @@ type VLClient struct {
 // DefaultVLEndpoint (DashScope) is used. The task prefix is applied to query
 // texts (EmbedText) and document texts (EmbedBatch) like the text Client.
 func NewVLClient(apiKey, model string, dimensions int, endpoint string, taskPrefix TaskPrefix) *VLClient {
+	return newVLClient(apiKey, model, dimensions, endpoint, taskPrefix, false)
+}
+
+func newVLClient(apiKey, model string, dimensions int, endpoint string, taskPrefix TaskPrefix, offline bool) *VLClient {
 	if endpoint == "" {
 		endpoint = DefaultVLEndpoint
 	}
@@ -55,7 +59,7 @@ func NewVLClient(apiKey, model string, dimensions int, endpoint string, taskPref
 		dimensions: dimensions,
 		endpoint:   endpoint,
 		taskPrefix: taskPrefix,
-		http:       &http.Client{Timeout: config.DefaultVLTimeout},
+		http:       newHTTPClient(config.DefaultVLTimeout, offline),
 	}
 }
 

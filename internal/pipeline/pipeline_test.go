@@ -39,7 +39,7 @@ func TestEmbedVLTextChunks(t *testing.T) {
 	db, err := store.Open(dbPath)
 	if err != nil {
 		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags fts5 ./... or make test")
+			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
 		}
 		t.Fatalf("failed to open store: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestEmbedVLImageChunks(t *testing.T) {
 	db, err := store.Open(dbPath)
 	if err != nil {
 		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags fts5 ./... or make test")
+			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
 		}
 		t.Fatalf("failed to open store: %v", err)
 	}

@@ -34,6 +34,10 @@ type EmbeddingConfig struct {
 	APIKey     string `yaml:"api_key"`
 	Model      string `yaml:"model"`
 	Dimensions int    `yaml:"dimensions,omitempty"`
+	// Host and Port configure the optional local embedding helper service.
+	// They are consumed by tools/embed_server; seek itself uses BaseURL.
+	Host string `yaml:"host,omitempty"`
+	Port int    `yaml:"port,omitempty"`
 	// VLBaseURL is the multimodal (vision-language) embedding endpoint.
 	// Leave empty to use the DashScope default when the model is multimodal.
 	VLBaseURL string `yaml:"vl_base_url,omitempty"`
@@ -121,6 +125,10 @@ type RerankConfig struct {
 	APIKey  string `yaml:"api_key,omitempty"`
 	Model   string `yaml:"model,omitempty"`
 	TopN    int    `yaml:"top_n,omitempty"`
+	// Host and Port configure the optional local reranker service.
+	// They are consumed by tools/flashrank_server; seek itself uses BaseURL.
+	Host string `yaml:"host,omitempty"`
+	Port int    `yaml:"port,omitempty"`
 }
 
 // SearchConfig configures the search engine behavior.
@@ -228,6 +236,9 @@ type SemanticConfig struct {
 	MaxTags int `yaml:"max_tags,omitempty"`
 	// Timeout is the per-request timeout (default DefaultSemanticTimeout).
 	Timeout time.Duration `yaml:"timeout,omitempty"`
+	// Host and Port configure the optional local semantic service.
+	Host string `yaml:"host,omitempty"`
+	Port int    `yaml:"port,omitempty"`
 }
 
 // EffectiveBaseURL returns the configured endpoint, or the default local

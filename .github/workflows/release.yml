@@ -31,11 +31,11 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Build
-        run: CGO_ENABLED=1 go build -tags fts5 -o /dev/null .
+        run: CGO_ENABLED=1 go build -tags "fts5 sqlite_fts5" -o /dev/null .
       - name: Test
-        run: CGO_ENABLED=1 go test -tags fts5 ./...
+        run: CGO_ENABLED=1 go test -tags "fts5 sqlite_fts5" ./...
       - name: Vet
-        run: CGO_ENABLED=1 go vet ./...
+        run: CGO_ENABLED=1 go vet -tags "fts5 sqlite_fts5" ./...
       - name: Gofmt
         run: test -z "$(gofmt -l cmd internal main.go)"
 
@@ -101,7 +101,7 @@ jobs:
           fi
 
           mkdir -p bin
-          CGO_ENABLED=1 go build -tags fts5 \
+          CGO_ENABLED=1 go build -tags "fts5 sqlite_fts5" \
             -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT}" \
             -o "bin/seek${EXT}" .
 

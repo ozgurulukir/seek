@@ -54,7 +54,7 @@ ln -sf $(pwd)/bin/seek /usr/local/bin/seek
 **Windows (PowerShell):**
 ```powershell
 $env:CC="zig cc"; $env:CGO_ENABLED="1"
-go build -tags fts5 -o seek.exe .
+go build -tags "fts5 sqlite_fts5" -o seek.exe .
 ```
 </details>
 

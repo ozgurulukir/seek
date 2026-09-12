@@ -12,6 +12,17 @@ import (
 	"github.com/ozgurulukir/seek/internal/config"
 )
 
+func TestOfflineClientDisablesProxy(t *testing.T) {
+	client := newClient("http://127.0.0.1", time.Second, true)
+	transport, ok := client.http.Transport.(*http.Transport)
+	if !ok || transport.Proxy != nil {
+		t.Fatalf("offline semantic transport proxy = %v, want nil", transport)
+	}
+	if err := client.http.CheckRedirect(nil, nil); err != http.ErrUseLastResponse {
+		t.Fatalf("offline semantic redirect error = %v, want %v", err, http.ErrUseLastResponse)
+	}
+}
+
 // TestClientTagRoundtrip verifies the envelope against a fake service.
 func TestClientTagRoundtrip(t *testing.T) {
 	var gotReq Request
@@ -111,6 +122,16 @@ func TestNewClientFromConfigDisabled(t *testing.T) {
 	}
 	if got := NewClientFromConfig(nil); got != nil {
 		t.Fatalf("want nil client for nil config, got %T", got)
+	}
+}
+
+func TestNewClientFromConfigOfflineRejectsRemoteEndpoint(t *testing.T) {
+	cfg := &config.AppConfig{}
+	cfg.Config.Semantic.Enabled = true
+	cfg.Config.Privacy.OfflineOnly = true
+	cfg.Config.Semantic.BaseURL = "https://semantic.example/v1"
+	if got := NewClientFromConfig(cfg); got != nil {
+		t.Fatal("offline semantic client must reject a remote endpoint")
 	}
 }
 

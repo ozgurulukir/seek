@@ -2,6 +2,7 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #   "fastapi",
+#   "pyyaml",
 #   "uvicorn",
 #   "yake",
 # ]
@@ -36,7 +37,9 @@ Endpoints:
 from __future__ import annotations
 
 import os
+import ipaddress
 from typing import Optional
+from collections.abc import Mapping
 
 import uvicorn
 from fastapi import FastAPI
@@ -45,6 +48,83 @@ from pydantic import BaseModel, Field
 from tagger import TagPipeline
 
 app = FastAPI(title="seek semantic tag service")
+
+def load_config() -> dict:
+    """Load seek's semantic service settings from the user config."""
+    config_path = os.environ.get(
+        "SEEK_CONFIG", os.path.expanduser("~/.config/seek/config.yaml")
+    )
+    try:
+        import yaml
+        with open(config_path, encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+            if isinstance(config, Mapping):
+                return dict(config)
+            print(f"warning: ignoring non-mapping config in {config_path}")
+            return {}
+    except Exception as exc:
+        print(f"warning: unable to read {config_path}: {exc}")
+        return {}
+
+
+CONFIG = load_config()
+SEMANTIC_CONFIG = CONFIG.get("semantic")
+if not isinstance(SEMANTIC_CONFIG, Mapping):
+    SEMANTIC_CONFIG = {}
+PRIVACY_CONFIG = CONFIG.get("privacy")
+if not isinstance(PRIVACY_CONFIG, Mapping):
+    PRIVACY_CONFIG = {}
+
+
+def as_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
+OFFLINE_ONLY = as_bool(PRIVACY_CONFIG.get("offline_only", False))
+
+
+def configured_host(value: object) -> str:
+    """Apply loopback enforcement only when offline_only is enabled."""
+    if not OFFLINE_ONLY:
+        return str(value or "127.0.0.1")
+    return loopback_host(value)
+
+
+def loopback_host(value: object) -> str:
+    """Keep the local helper bound to a loopback interface."""
+    candidate = str(value or "127.0.0.1")
+    try:
+        if ipaddress.ip_address(candidate).is_loopback:
+            return candidate
+    except ValueError:
+        pass
+    print(f"warning: refusing non-loopback semantic host {candidate!r}")
+    return "127.0.0.1"
+
+
+SEMANTIC_ENABLED = as_bool(SEMANTIC_CONFIG.get("enabled", False))
+try:
+    DEFAULT_MAX_TAGS = min(max(int(SEMANTIC_CONFIG.get("max_tags", 5)), 1), 20)
+except (TypeError, ValueError):
+    DEFAULT_MAX_TAGS = 5
+SERVICE_HOST = os.environ.get(
+    "SEMANTIC_HOST",
+    SEMANTIC_CONFIG.get("host") or "127.0.0.1",
+)
+SERVICE_HOST = configured_host(SERVICE_HOST)
+try:
+    SERVICE_PORT = int(os.environ.get(
+        "SEMANTIC_PORT",
+        SEMANTIC_CONFIG.get("port") or 8003,
+    ))
+    if SERVICE_PORT <= 0 or SERVICE_PORT > 65535:
+        raise ValueError
+except (TypeError, ValueError):
+    SERVICE_PORT = 8003
 
 pipeline = TagPipeline()
 
@@ -64,7 +144,7 @@ class TagChunk(BaseModel):
 
 class TagRequest(BaseModel):
     chunks: list[TagChunk]
-    max_tags: int = Field(default=5, ge=1, le=MAX_TAGS_HARD_LIMIT)
+    max_tags: int = Field(default=DEFAULT_MAX_TAGS, ge=1, le=MAX_TAGS_HARD_LIMIT)
 
 
 class Entity(BaseModel):
@@ -146,8 +226,8 @@ def tag(req: TagRequest) -> TagResponse:
 
 
 if __name__ == "__main__":
-    host = os.environ.get("SEMANTIC_HOST", "127.0.0.1")
-    port = int(os.environ.get("SEMANTIC_PORT", "8003"))
+    if not SEMANTIC_ENABLED:
+        print("warning: semantic.enabled is false; serving anyway for diagnostics")
     # SEMANTIC_WARMUP=1 eagerly loads the heavy models at startup so the
     # first /tag call (and therefore the first document indexed by seek)
     # already has topic + NER + LID available instead of cold-starting on
@@ -157,4 +237,4 @@ if __name__ == "__main__":
         pipeline._get_spacy("en")
         pipeline._bertopic_available()
         pipeline._get_yake()
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=SERVICE_HOST, port=SERVICE_PORT)

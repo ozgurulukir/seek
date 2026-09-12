@@ -125,6 +125,22 @@ func TestNewProviderFromConfigBuildsConfiguredBundle(t *testing.T) {
 	}
 }
 
+func TestNewVLClientFromConfigOfflineUsesLocalEmbeddingFallback(t *testing.T) {
+	cfg := &config.AppConfig{Config: config.Config{}}
+	cfg.Config.Privacy.OfflineOnly = true
+	cfg.Config.Embedding.BaseURL = "http://127.0.0.1:11434/v1"
+	cfg.Config.Embedding.APIKey = "local"
+	cfg.Config.Embedding.Model = "qwen3-vl-embedding"
+
+	client := NewVLClientFromConfig(cfg)
+	if client == nil {
+		t.Fatal("expected local VL client")
+	}
+	if client.endpoint != cfg.Config.Embedding.BaseURL {
+		t.Fatalf("endpoint = %q, want %q", client.endpoint, cfg.Config.Embedding.BaseURL)
+	}
+}
+
 func TestNewProviderFromConfigWithoutKeyHasNilTextCapabilities(t *testing.T) {
 	cfg := &config.AppConfig{Config: config.Config{}}
 	cfg.Config.Embedding.Model = "text-embedding-3-small"

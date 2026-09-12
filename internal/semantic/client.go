@@ -112,19 +112,34 @@ type Client struct {
 
 // NewClient builds a Provider against baseURL with the given timeout.
 func NewClient(baseURL string, timeout time.Duration) *Client {
+	return newClient(baseURL, timeout, false)
+}
+
+func newClient(baseURL string, timeout time.Duration, offline bool) *Client {
 	if timeout <= 0 {
 		timeout = config.DefaultSemanticTimeout
 	}
+	httpClient := &http.Client{
+		// Local endpoints must not be able to redirect requests to an
+		// external host.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Timeout: timeout,
+	}
+	if offline {
+		transport, ok := http.DefaultTransport.(*http.Transport)
+		if ok {
+			transport = transport.Clone()
+		} else {
+			transport = &http.Transport{}
+		}
+		transport.Proxy = nil
+		httpClient.Transport = transport
+	}
 	return &Client{
 		baseURL: baseURL,
-		http: &http.Client{
-			// Local endpoints must not be able to redirect requests to an
-			// external host.
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-			Timeout: timeout,
-		},
+		http:    httpClient,
 	}
 }
 
@@ -134,7 +149,11 @@ func NewClientFromConfig(cfg *config.AppConfig) *Client {
 	if cfg == nil || !cfg.Config.Semantic.Enabled {
 		return nil
 	}
-	return NewClient(cfg.Config.Semantic.EffectiveBaseURL(), cfg.Config.Semantic.EffectiveTimeout())
+	baseURL := cfg.Config.Semantic.EffectiveBaseURL()
+	if cfg.Config.OfflineOnly() && !config.IsNumericLoopbackURL(baseURL) {
+		return nil
+	}
+	return newClient(baseURL, cfg.Config.Semantic.EffectiveTimeout(), cfg.Config.OfflineOnly())
 }
 
 // Health reports the service's status and active capabilities.
