@@ -81,10 +81,27 @@ jobs:
 
       - name: Configure MinGW on Windows
         if: matrix.os == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          update: true
+          install: mingw-w64-x86_64-gcc
+
+      - name: Select MinGW compiler
+        if: matrix.os == 'windows'
+        shell: bash
+        run: |
+          echo "CC=gcc" >> "$GITHUB_ENV"
+          echo "CXX=g++" >> "$GITHUB_ENV"
+
+      - name: Verify Windows CGO toolchain
+        if: matrix.os == 'windows'
         shell: pwsh
         run: |
-          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "CC=gcc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          go clean -cache
+          go env GOOS GOARCH CGO_ENABLED CC CXX
+          gcc --version | Select-Object -First 1
 
       - name: Build binary
         shell: bash
@@ -104,6 +121,26 @@ jobs:
           CGO_ENABLED=1 go build -tags "fts5 sqlite_fts5" \
             -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT}" \
             -o "bin/seek${EXT}" .
+
+      - name: Smoke test binary (FTS5 runtime)
+        shell: bash
+        run: |
+          # Keep the smoke test completely isolated from runner/user config.
+          # `status` opens the SQLite store, so this fails if the produced
+          # artifact was compiled without SQLite FTS5.
+          SMOKE_ROOT="$(mktemp -d)"
+          trap 'rm -rf "$SMOKE_ROOT"' EXIT
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            export APPDATA="$SMOKE_ROOT/AppData/Roaming"
+            export LOCALAPPDATA="$SMOKE_ROOT/AppData/Local"
+            mkdir -p "$APPDATA" "$LOCALAPPDATA"
+            bin/seek.exe status
+          else
+            export XDG_CONFIG_HOME="$SMOKE_ROOT/config"
+            export XDG_CACHE_HOME="$SMOKE_ROOT/cache"
+            mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
+            bin/seek status
+          fi
 
       - name: Package release archive
         shell: bash
