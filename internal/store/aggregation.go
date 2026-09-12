@@ -47,6 +47,11 @@ func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationS
 
 	query, args, countOnly, err := buildAggregationQuery(spec)
 	if err != nil {
+		// Point users at discovery the way every --field error does; MCP
+		// agents self-correct off this hint.
+		if strings.ToLower(spec.Type) == "terms" && strings.Contains(err.Error(), "unsupported aggregation field") {
+			return nil, fmt.Errorf("%w; %s", err, FieldDiscoveryHint())
+		}
 		return nil, err
 	}
 	query, args, err = applyAggregationFilters(query, args, filters)

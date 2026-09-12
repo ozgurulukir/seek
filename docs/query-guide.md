@@ -133,7 +133,9 @@ semantic service (see [docs/semantic.md](semantic.md)) adds `topics`,
 Terms facets are not limited to the curated names: every fast field
 physically present in the index is aggregatable (run `seek fields` to
 discover what the index holds), each distinct stored value counting as one
-bucket. Histograms and ranges stay on the numeric/date documents columns.
+bucket. Histograms and ranges stay on the numeric/date documents columns. One caveat: a fast field whose name collides with a documents column
+(`type`, `path`, `created_at`, ...) shadows it in terms facets whenever any
+value is indexed, even outside the collections you filtered to.
 All these fields are filterable too via the generic `--field <name>:<value>`
 flag (exact for single-value fields, comma-list membership for
 `tags`/`topics`/`entities`):

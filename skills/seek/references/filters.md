@@ -51,7 +51,9 @@ service; all tagged sources are facetable with `--aggs tags:terms`. The old
 
 The same acceptance rule as `--field` applies to `--aggs <field>:terms`:
 curated fields plus every field physically present in the index (exact
-whole-value buckets). Histograms and ranges remain documents-column only.
+whole-value buckets). Histograms and ranges remain documents-column only. One caveat: a fast field whose name collides with a documents column
+(`type`, `path`, `created_at`, ...) shadows it in terms facets whenever any
+value is indexed, even outside the collections you filtered to.
 
 ## Semantic enrichment fields
 

@@ -195,3 +195,53 @@ func TestDynamicFastFieldTermsAggregation(t *testing.T) {
 		t.Errorf("error = %v, want unsupported aggregation field", err)
 	}
 }
+
+func TestTermsAggregationOnFreshStoreUsesColumnPath(t *testing.T) {
+	// fast_fields is created lazily; the very first aggregation on a fresh
+	// index must take the documents-column path instead of failing on the
+	// missing table (the hasFastField probe's tolerance branch).
+	s := newTestStore(t)
+	col, err := s.CreateCollection("docs", CollectionTypeMarkdown, "/docs", "**/*.md")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if _, err := s.UpsertDocument(col.ID, "/docs/a.md", "a", "h", 1, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.ExecuteAggregationContext(t.Context(), AggregationSpec{Type: "terms", Field: "type"}, nil)
+	if err != nil {
+		t.Fatalf("terms on fresh store: %v", err)
+	}
+	if len(got) != 1 || got[0].Key != "markdown" || got[0].Count != 1 {
+		t.Errorf("buckets = %#v, want markdown=1", got)
+	}
+}
+
+func TestHistogramOnDynamicFastFieldErrors(t *testing.T) {
+	// Histograms and ranges stay on the numeric/date documents columns;
+	// a dynamically indexed string field must error, not strftime garbage.
+	s := newTestStore(t)
+	col, err := s.CreateCollection("notes", CollectionTypeMarkdown, "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "/tmp/a.md", "a", "h", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FastFields().Set(docID, "author", "jane"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, spec := range []AggregationSpec{
+		{Type: "histogram", Field: "author"},
+		{Type: "range", Field: "author"},
+	} {
+		if _, err := s.ExecuteAggregationContext(t.Context(), spec, nil); err == nil {
+			t.Errorf("spec %+v on a dynamic field was accepted", spec)
+		} else if !strings.Contains(err.Error(), "unsupported aggregation field") {
+			t.Errorf("spec %+v error = %v, want unsupported aggregation field", spec, err)
+		}
+	}
+}
