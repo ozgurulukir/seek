@@ -15,8 +15,10 @@ Go 1.24 module `github.com/ozgurulukir/seek`. ~18,000 LOC across a root package 
 # Linux / macOS:
 CGO_ENABLED=1 go build -tags "fts5 sqlite_fts5" -o /dev/null .     # or: make build
 
-# Windows (PowerShell with Zig or MinGW GCC):
-$env:CC="zig cc"; $env:CGO_ENABLED="1"; go build -tags "fts5 sqlite_fts5" -o seek.exe .
+# Windows (PowerShell): use Zig for local builds. The Scoop GCC 15.x
+# toolchain cannot link go-fitz's bundled MuPDF archives (see note below).
+$env:CC="zig cc"; $env:CXX="zig c++"; $env:CGO_ENABLED="1"
+go build -tags "fts5 sqlite_fts5" -o seek.exe .
 
 # Test — requires the fts5 and sqlite_fts5 tags (mattn/go-sqlite3 with FTS5). `make test` already
 # includes it; the store tests open a real SQLite DB that needs FTS5.
@@ -30,6 +32,14 @@ gofmt -l cmd internal main.go third_party   # must print nothing (fix with gofmt
 - `mattn/go-sqlite3` is **cgo** — `CGO_ENABLED=1` is required to build.
 - FTS5 requires both the project `fts5` tag and go-sqlite3’s `sqlite_fts5` tag. Without them, `store.Open` errors out at migrate time. This is why **every** build/test invocation needs `-tags "fts5 sqlite_fts5"`.
 - The `Makefile` `test` target runs `go test -tags "fts5 sqlite_fts5" ./...`.
+- **Windows local build toolchain:** prefer `CC="zig cc"` and
+  `CXX="zig c++"` for every full build/test that links `go-fitz`. Scoop's
+  GCC 15.x fails against go-fitz's prebuilt MuPDF Windows archives with
+  `undefined reference to '__intrinsic_setjmpex'`. This is a toolchain/archive
+  ABI mismatch, not an FTS5 failure. Zig 0.16 has been verified with the root
+  binary, SQLite FTS5 runtime, and `internal/extractor/builtin` PDF tests. The
+  GitHub release workflow uses its separately provisioned MSYS2 MinGW compiler,
+  which is also verified by the release smoke test.
 
 ## Architecture (layered, no cycles)
 

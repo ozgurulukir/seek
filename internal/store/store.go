@@ -167,10 +167,8 @@ func (s *Store) ConfigureCompression(cfg config.CompressionConfig) {
 // syncs (e.g. after each `seek embed`) would accumulate duplicate/stale
 // entries and grow the HNSW graph indefinitely.
 func (s *Store) migrate() error {
-	// Verify FTS5 is available (requires build tags: -tags "fts5 sqlite_fts5")
-	var fts5ok int
-	if err := s.db.QueryRow(`SELECT 1 FROM pragma_compile_options WHERE compile_options = 'ENABLE_FTS5'`).Scan(&fts5ok); err != nil {
-		return fmt.Errorf("SQLite FTS5 not enabled. Build with: make build (or: go build -tags \"fts5 sqlite_fts5\")")
+	if err := s.verifyFTS5(); err != nil {
+		return err
 	}
 
 	if err := s.initCoreSchema(); err != nil {
@@ -185,6 +183,31 @@ func (s *Store) migrate() error {
 		return err
 	}
 
+	return nil
+}
+
+// verifyFTS5 checks the capability itself instead of relying on
+// pragma_compile_options metadata. The latter is not a capability contract and
+// previously caused every query error (including transient SQLite errors) to be
+// misreported as a build without FTS5.
+func (s *Store) verifyFTS5() error {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("verify SQLite FTS5 capability: acquire connection: %w", err)
+	}
+	defer conn.Close()
+
+	const probeTable = `temp.__seek_fts5_probe`
+	if _, err := conn.ExecContext(ctx, `CREATE VIRTUAL TABLE `+probeTable+` USING fts5(content)`); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such module: fts5") {
+			return fmt.Errorf("SQLite FTS5 not enabled. Build with: make build (or: go build -tags \"fts5 sqlite_fts5\"): %w", err)
+		}
+		return fmt.Errorf("verify SQLite FTS5 capability: create probe table: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `DROP TABLE `+probeTable); err != nil {
+		return fmt.Errorf("verify SQLite FTS5 capability: drop probe table: %w", err)
+	}
 	return nil
 }
 
