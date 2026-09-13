@@ -253,6 +253,22 @@ func (s *Store) HasEmbeddedChunks(ctx context.Context) (bool, error) {
 	return count > 0, nil
 }
 
+// HasEmbeddedChunksExcept reports whether any chunk outside the given
+// collection carries an embedding. It backs the collection-scoped reindex
+// guard: the embedding profile is store-global, so clearing it to establish a
+// new vector space is only safe when no OTHER collection holds chunks in the
+// stored vector space.
+func (s *Store) HasEmbeddedChunksExcept(ctx context.Context, collectionID int64) (bool, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM chunks ch
+		JOIN documents d ON d.id = ch.document_id
+		WHERE ch.embedding IS NOT NULL AND d.collection_id != ?`, collectionID).Scan(&count); err != nil {
+		return false, fmt.Errorf("count embedded chunks outside collection: %w", err)
+	}
+	return count > 0, nil
+}
+
 func profileLabel(p *EmbeddingProfile) string {
 	if p == nil {
 		return "<none>"

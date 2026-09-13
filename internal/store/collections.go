@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,9 @@ import (
 
 // Collection CRUD. Extracted from store.go as part of the god-object
 // decomposition — a mechanical move, no changes.
+
+// ErrCollectionExists is returned when a rename target name is already taken.
+var ErrCollectionExists = errors.New("collection name already exists")
 
 // --- Collections ---
 
@@ -139,4 +143,108 @@ func (s *Store) DeleteCollection(id int64) error {
 		return fmt.Errorf("delete collection: %w", err)
 	}
 	return nil
+}
+
+// RenameCollection atomically renames a collection to a new unique name. Only
+// the collections row (and its updated_at) changes: documents, chunks, FTS
+// entries, and fast fields reference the collection by id, so their storage
+// and counts are untouched — the HNSW graph is keyed by chunk id and is also
+// unaffected.
+//
+// A rename to an existing name fails with ErrCollectionExists; a missing
+// source name fails with a not-found error; renaming a collection to itself is
+// a no-op. The transaction follows the store's Pattern A (BeginTx/Rollback/
+// Commit).
+func (s *Store) RenameCollection(ctx context.Context, oldName, newName string) error {
+	oldName = strings.TrimSpace(oldName)
+	newName = strings.TrimSpace(newName)
+	if oldName == "" || newName == "" {
+		return fmt.Errorf("rename collection: names must not be empty")
+	}
+	if oldName == newName {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin rename transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM collections WHERE name = ?`, oldName).Scan(&exists); err != nil {
+		return fmt.Errorf("check source collection: %w", err)
+	}
+	if exists == 0 {
+		return fmt.Errorf("collection %q not found", oldName)
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM collections WHERE name = ?`, newName).Scan(&exists); err != nil {
+		return fmt.Errorf("check target collection: %w", err)
+	}
+	if exists > 0 {
+		return fmt.Errorf("%w: %q", ErrCollectionExists, newName)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := tx.ExecContext(ctx, `UPDATE collections SET name = ?, updated_at = ? WHERE name = ?`, newName, now, oldName); err != nil {
+		return fmt.Errorf("rename collection: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit rename transaction: %w", err)
+	}
+	return nil
+}
+
+// CollectionDetail is the per-collection accounting used by collection
+// listing and show. It is produced by one batched GROUP BY query so commands
+// never issue N+1 per-collection count queries.
+type CollectionDetail struct {
+	Collection
+	Documents       int
+	Chunks          int
+	EmbeddedChunks  int
+	SemanticCurrent int
+	SemanticStale   int
+	SemanticError   int
+}
+
+// CollectionDetails returns every collection with its document, chunk,
+// embedded-chunk, and semantic-state counts in a single query.
+func (s *Store) CollectionDetails(ctx context.Context) ([]CollectionDetail, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id, c.name, c.type, c.path, c.pattern, c.parser_name, c.parser_version, c.backend,
+		       COUNT(DISTINCT d.id) AS documents,
+		       COUNT(ch.id) AS chunks,
+		       COALESCE(SUM(CASE WHEN ch.embedding IS NOT NULL THEN 1 ELSE 0 END), 0) AS embedded,
+		       COALESCE(COUNT(DISTINCT CASE WHEN d.semantic_status = 'current' THEN d.id END), 0) AS sem_current,
+		       COALESCE(COUNT(DISTINCT CASE WHEN d.semantic_status = 'stale' THEN d.id END), 0) AS sem_stale,
+		       COALESCE(COUNT(DISTINCT CASE WHEN d.semantic_status = 'error' THEN d.id END), 0) AS sem_error
+		FROM collections c
+		LEFT JOIN documents d ON d.collection_id = c.id
+		LEFT JOIN chunks ch ON ch.document_id = d.id
+		GROUP BY c.id
+		ORDER BY c.name`)
+	if err != nil {
+		return nil, fmt.Errorf("collection details: %w", err)
+	}
+	defer rows.Close()
+
+	var details []CollectionDetail
+	for rows.Next() {
+		var d CollectionDetail
+		var parserName, backend sql.NullString
+		if err := rows.Scan(&d.ID, &d.Name, &d.Type, &d.Path, &d.Pattern,
+			&parserName, &d.ParserVersion, &backend,
+			&d.Documents, &d.Chunks, &d.EmbeddedChunks,
+			&d.SemanticCurrent, &d.SemanticStale, &d.SemanticError); err != nil {
+			return nil, fmt.Errorf("scan collection detail: %w", err)
+		}
+		d.ParserName = parserName.String
+		d.Backend = backend.String
+		details = append(details, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("collection details rows: %w", err)
+	}
+	return details, nil
 }

@@ -58,7 +58,7 @@ seek search "conceptual question" --vec -l 10
    - `--doc-type <type>`: `code`, `markdown`, `claude`, `codex`, `images`, `pdf`, `documents`, `parser`
    - `--after/--before`, `--chunk-type`, `--path`, `--workspace`
 6. **Increase `-l 20`** if the first 10 results aren't enough.
-7. **Use `--aggs`** to get facet counts and statistics alongside search results — including metadata facets `tags:terms`, `lang:terms`, `repo:terms`, `topics:terms`, `entities:terms`, `language:terms` (from frontmatter/code metadata and, for pdf/documents/conversations, semantic enrichment):
+7. **Use `--aggs`** to get facet counts and statistics alongside search results — including metadata facets `tags:terms`, `lang:terms`, `repo:terms`, `topics:terms`, `entities:terms`, `language:terms` (from source metadata and optional semantic enrichment, which is available on all text-bearing collection types when `semantic.enabled: true`):
 
 ## Reading Results
 
@@ -146,16 +146,31 @@ seek embed -b          # force async provider batch (hosted providers only)
 # Force re-embed all chunks (e.g. after model or dimensions change)
 seek embed -f
 
-# Check index status
+# Collection lifecycle (index-only commands — source files are never touched)
+seek collection list                             # list collections with semantic coverage
+seek collection show mycollection                # detailed per-collection info
+seek collection rename mycollection mynotes      # rename the index label; source path unchanged
+seek collection reindex mycollection             # full rebuild (re-read source; rebuild chunks/FTS/fast-fields, re-embed)
+seek collection reindex mycollection --semantic-only  # semantic backfill: re-enrich from indexed chunks only
+                                                  # (source files, FTS, embeddings, vector index untouched)
+seek sync mycollection --path <file-or-dir>      # validate path is inside the collection,
+                                                  # then sync the WHOLE collection (path is a guard, not a filter)
+
+# Check index status (compatibility alias for `seek collection list`)
 seek status
 
-# Remove a collection (deletes all indexed documents and chunks)
+# Remove a collection from the index (deletes all indexed documents and chunks)
 seek rm mycollection
 
 # Show or validate schema
 seek schema --show
 seek schema --validate
 ```
+
+No `seek` management command — `add`, `sync` (incl. `--path`), `embed`,
+`collection rename`/`reindex`, `rm`, or `status` — ever modifies, deletes, or
+renames source files. These commands only manage the local index
+(SQLite/FTS/fast fields/vector index); source files stay the source of truth.
 
 If no embedding provider is configured (`~/.config/seek/config.yaml`), `seek
 sync` still succeeds — it prints a single "skip embeddings" hint, leaves chunks

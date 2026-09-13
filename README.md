@@ -134,7 +134,7 @@ Deep-dive documentation and specialized guides:
 | 🔍 [**Query Syntax & Filters Guide**](docs/query-guide.md) | Structured AST syntax (AND/OR/NOT), filters (`--repo`, `--lang`), line spans (`:L10-L45`), and `-C`. |
 | 🤖 [**Schema-Driven Parsers**](docs/parsers.md) | Opencode, Copilot CLI, Zed threads, and `--workspace` filtering. |
 | 🛠️ [**AI Agent Skill Reference**](skills/seek/SKILL.md) | Agent prompt instructions, query strategies, and CLI reference. |
-| 🏷️ [**Semantic Tag Service**](docs/semantic.md) | Optional local NLP service (NER, keyphrases, topics, LID) that generates `tags`/`topics`/`entities`/`language` fast fields for pdf/documents/conversations. |
+| 🏷️ [**Semantic Tag Service**](docs/semantic.md) | Optional local NLP service (NER, keyphrases, topics, LID) that generates `tags`/`topics`/`entities`/`language` fast fields for all text-bearing collections (markdown, code, conversations, PDF, documents, parser). |
 | 🔌 [**MCP Server**](docs/mcp.md) | `seek mcp` — Model Context Protocol tools (`seek_search`, `seek_fields`, `seek_status`, `seek_autocomplete`) for Claude Code and other agents. |
 
 ---
@@ -179,7 +179,17 @@ seek add --opencode | --copilot | --hermes # add schema-driven agent sessions
 seek sync                          # incremental index update then embed new chunks
 seek sync --no-embed               # index only (keyword-first: skip embedding entirely)
 seek sync --realtime               # force the realtime request batch (used by stop-hooks)
+seek sync <col> --path <p>         # validate <p> is inside <col>, then sync the whole collection
 seek embed [-f] [-r] [-b]          # generate embeddings (auto → realtime; -b forces async batch)
+
+# Collection lifecycle (index-only — source files are never modified)
+seek collection list               # list collections with semantic coverage
+seek collection show <name>        # detailed per-collection info
+seek collection rename <old> <new> # rename the index label; source path unchanged
+seek collection reindex <name>     # re-read source, rebuild chunks/FTS/fast-fields + re-embed
+seek collection reindex <name> --semantic-only  # semantic fast-field backfill (no source/FTS/embeddings)
+seek rm <name>                     # remove a collection from the index (compatibility alias)
+seek status                        # view collections & counts (compatibility alias)
 
 # Search & Navigation
 seek search "<query>"              # hybrid search (BM25 + Vector + Re-ranking)
@@ -197,7 +207,6 @@ seek search "<query>" --aggs "type:terms"  # faceted aggregations (also lang:ter
 seek fields [name] [--json]        # discover fast-field values & taxonomy (tags, topics, entities, etc.)
 
 # System & Management
-seek status                        # view collections, document & chunk counts
 seek auth login | status           # configure / inspect embedding & rerank providers
 seek service start | stop | status # manage periodic OS background sync service
 seek hooks install | uninstall     # install automatic conversation sync hooks
@@ -206,6 +215,13 @@ seek uninstall --dry-run           # remove service/hooks/cache/config (preview 
 seek analyze "<text>" --lang en|tr # tokenize and stem text
 seek parsers list                  # view parser schemas and detection status
 ```
+
+> **🔒 Source files are never modified.** No `seek` management command — `add`,
+> `sync` (incl. `sync <collection> --path`), `embed`, `collection
+> rename`/`reindex`, the `--semantic-only` backfill, or `rm` — ever modifies,
+> deletes, or renames your source files. Every command only reads your files
+> and manages the local index (SQLite database, FTS, fast fields, vector
+> index); your files remain the source of truth.
 
 If no embedding provider is configured, `seek sync` still succeeds — it prints
 a single "skip embeddings … run `seek auth login`" hint, leaves chunks pending,
@@ -255,8 +271,10 @@ compression:
   level: 3
 
 semantic:
-  enabled: false            # optional local tag enrichment (pdf, documents,
-                            # conversations gain generated tags/topics/entities/language)
+  enabled: false            # optional local tag enrichment; all text-bearing
+                            # collections gain generated tags/topics/entities/language
+                            # (conversations/PDF/documents during sync, markdown/
+                            # code via `seek collection reindex --semantic-only`)
   base_url: http://127.0.0.1:8003
   max_tags: 5               # 1..20
   # timeout: 60s

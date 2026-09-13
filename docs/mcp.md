@@ -13,6 +13,15 @@
 
 `content_kind` tells the agent what `content` holds: `"full"` (whole chunk text, chunk-level vector hits) or `"snippet"` (40-token FTS excerpt, document-level BM25/hybrid hits). See the [JSON output](#) contract in the README for details.
 
+## Read-only surface
+
+Every `seek mcp` tool is **read-only**: `seek_search`, `seek_fields`,
+`seek_status`, and `seek_autocomplete` only query the local index. There are no
+write tools — collection lifecycle commands (`seek collection
+rename`/`reindex`, `seek sync --path`, `seek rm`) intentionally stay on the
+CLI and are never exposed to agents. `seek_status` keeps its stable
+`{name, type, documents, chunks}` shape.
+
 ## Wiring up your agent
 
 `seek mcp` is a standard stdio MCP server, so any MCP client can register it.

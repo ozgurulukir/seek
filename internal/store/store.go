@@ -316,6 +316,10 @@ func (s *Store) applyAlterStatements() error {
 		`ALTER TABLE collections ADD COLUMN backend TEXT`,
 		`ALTER TABLE chunks ADD COLUMN start_line INTEGER DEFAULT 0`,
 		`ALTER TABLE chunks ADD COLUMN end_line INTEGER DEFAULT 0`,
+		// Document-scoped semantic enrichment state (card S2). NULL fingerprint
+		// means no enrichment has been recorded for the document.
+		`ALTER TABLE documents ADD COLUMN semantic_fingerprint TEXT`,
+		`ALTER TABLE documents ADD COLUMN semantic_status TEXT`,
 	}
 	for _, stmt := range alterStmts {
 		if err := s.execIgnoreDuplicate(stmt); err != nil {

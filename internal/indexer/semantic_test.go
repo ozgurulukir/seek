@@ -263,6 +263,109 @@ func TestSyncPdfWritesSemanticFastFields(t *testing.T) {
 			t.Errorf("fast field %q = %q, want %q", field, got, want)
 		}
 	}
+
+	// M2: the sync pass also records the fingerprint/status — the document is
+	// current, not semantic_none, so collection coverage is accurate.
+	states, err := db.GetSemanticStates(context.Background(), []int64{doc.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := states[doc.ID]
+	if st.Fingerprint == "" || st.Status != store.SemanticStatusCurrent {
+		t.Fatalf("sync state = %+v, want current with fingerprint", st)
+	}
+	chunks, err := db.ListChunksForDocumentContext(context.Background(), doc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFP := store.SemanticFingerprint{
+		ServiceModel:  cfg.Config.Semantic.EffectiveBaseURL(),
+		Capabilities:  store.SemanticCapabilities{Language: true, NER: true, Keyphrase: true, Topic: true},
+		SchemaVersion: store.SemanticSchemaVersion,
+		ContentHash:   semanticContentHash(chunks),
+	}.Compute()
+	if st.Fingerprint != wantFP {
+		t.Fatalf("sync fingerprint %q != desired %q", st.Fingerprint, wantFP)
+	}
+}
+
+// TestSyncPdfServiceDownMarksStaleAndPreservesFields verifies the sync-time
+// fingerprint contract when the semantic service is down (review M2): the
+// sync does not fail, a re-enriched document keeps its previously stored
+// semantic fast fields (nil map preserves them), and the document is marked
+// stale so the next backfill re-enriches it.
+func TestSyncPdfServiceDownMarksStaleAndPreservesFields(t *testing.T) {
+	tmp := t.TempDir()
+	db, err := store.Open(filepath.Join(tmp, "test.db"))
+	if err != nil {
+		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
+			t.Skip("SQLite FTS5 not enabled")
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	// Phase 1: service up — the document is enriched and current.
+	srv := startFakeSemantic(t, []string{"finance", "2024-report"}, "en")
+	cfg := cfgFromTest(t, tmp, filepath.Join(tmp, "test.db"))
+	cfg.Config.Semantic.Enabled = true
+	cfg.Config.Semantic.BaseURL = srv.URL
+
+	col, err := db.CreateCollection("papers", store.CollectionTypePDF, tmp, "*.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdfPath := filepath.Join(tmp, "report.pdf")
+	writeMinimalPDF(t, pdfPath)
+
+	idx := New(cfg, db).WithLogger(nopLogger{})
+	if err := idx.SyncCollectionContext(context.Background(), col); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := db.GetDocumentContext(context.Background(), col.ID, pdfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := db.FastFields().Get(doc.ID, "tags"); v == nil {
+		t.Fatal("phase 1: tags missing after healthy sync")
+	}
+	states, err := db.GetSemanticStates(context.Background(), []int64{doc.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := states[doc.ID]; st.Status != store.SemanticStatusCurrent {
+		t.Fatalf("phase 1 state = %+v, want current", st)
+	}
+	srv.Close()
+
+	// Phase 2: same file, changed content, service down. The re-index keeps
+	// the prior fast fields (nil map), records stale, and succeeds.
+	writeMinimalPDFText(t, pdfPath, "A completely different report body now.")
+	cfgDown := cfgFromTest(t, tmp, filepath.Join(tmp, "test.db"))
+	cfgDown.Config.Semantic.Enabled = true
+	cfgDown.Config.Semantic.BaseURL = "http://127.0.0.1:1" // closed port
+	idxDown := New(cfgDown, db).WithLogger(nopLogger{})
+	if err := idxDown.SyncCollectionContext(context.Background(), col); err != nil {
+		t.Fatalf("sync with service down must not fail: %v", err)
+	}
+
+	doc2, err := db.GetDocumentContext(context.Background(), col.ID, pdfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc2.ContentHash == doc.ContentHash {
+		t.Fatal("expected the rewritten PDF to change the content hash")
+	}
+	if v, _ := db.FastFields().Get(doc2.ID, "tags"); v == nil {
+		t.Fatal("phase 2: prior tags must be preserved when the service is down")
+	}
+	states, err = db.GetSemanticStates(context.Background(), []int64{doc2.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := states[doc2.ID]; st.Status != store.SemanticStatusStale {
+		t.Fatalf("phase 2 state = %+v, want stale", st)
+	}
 }
 
 // captureLogger records output for assertions.
@@ -277,13 +380,20 @@ func (c captureLogger) Printf(format string, v ...interface{}) {
 // xref table is correct.
 func writeMinimalPDF(t *testing.T, path string) {
 	t.Helper()
+	writeMinimalPDFText(t, path, "Hello semantic test")
+}
+
+// writeMinimalPDFText is writeMinimalPDF with a caller-supplied page text, so
+// tests can force a content change between two sync passes.
+func writeMinimalPDFText(t *testing.T, path, text string) {
+	t.Helper()
 	var objs []string
 	objs = append(objs,
 		`<< /Type /Catalog /Pages 2 0 R >>`,
 		`<< /Type /Pages /Kids [3 0 R] /Count 1 >>`,
 		`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>`,
 	)
-	stream := "BT /F1 24 Tf 72 720 Td (Hello semantic test) Tj ET"
+	stream := "BT /F1 24 Tf 72 720 Td (" + text + ") Tj ET"
 	objs = append(objs, fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(stream), stream))
 	objs = append(objs, `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>`)
 

@@ -88,6 +88,7 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 			cursorUnix = float64(session.Cursor.UnixMilli())
 		}
 		maxSize, _ := idx.chunkSize()
+		parserChunks := toIndexChunks(chunk.ChunkConversation(text, maxSize), false)
 		_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
 			CollectionID: col.ID,
 			Path:         docPath,
@@ -95,8 +96,8 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 			Mtime:        cursorUnix,
 			LineCount:    len(session.Messages),
 			FTSContent:   text,
-			Chunks:       toIndexChunks(chunk.ChunkConversation(text, maxSize), false),
-			FastFields:   session.Metadata,
+			Chunks:       parserChunks,
+			FastFields:   idx.enricher.Enrich(idx.ctx(), col.Type, docPath, session.Metadata, parserChunks),
 		})
 		if err != nil {
 			idx.warnf("  WARN: index %s: %v\n", docPath, err)

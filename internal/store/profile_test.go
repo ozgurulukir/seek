@@ -237,3 +237,67 @@ func TestSearchVectorSucceedsAfterReindex(t *testing.T) {
 		t.Fatalf("search after reindex should succeed: %v", err)
 	}
 }
+
+func TestHasEmbeddedChunksExcept(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// No embedded chunks anywhere: nothing outside the target collection.
+	before, err := s.HasEmbeddedChunksExcept(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before {
+		t.Error("HasEmbeddedChunksExcept = true on an empty store")
+	}
+
+	col, err := s.CreateCollection("target", CollectionTypeMarkdown, "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "/tmp/a.md", "a", "h1", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertChunk(docID, 0, "a", []float32{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The only embedded chunk belongs to the target collection.
+	other, err := s.HasEmbeddedChunksExcept(ctx, col.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other {
+		t.Error("HasEmbeddedChunksExcept = true with only the target collection embedded")
+	}
+
+	// A second collection with an embedded chunk flips the guard.
+	otherCol, err := s.CreateCollection("other", CollectionTypeMarkdown, "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDoc, err := s.UpsertDocument(otherCol.ID, "/tmp/b.md", "b", "h2", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertChunk(otherDoc, 0, "b", []float32{3, 4}); err != nil {
+		t.Fatal(err)
+	}
+	other, err = s.HasEmbeddedChunksExcept(ctx, col.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !other {
+		t.Error("HasEmbeddedChunksExcept = false despite an embedded chunk in another collection")
+	}
+	// Each collection sees the other's chunk as outside it: there is no
+	// collection that owns every embedding anymore.
+	other, err = s.HasEmbeddedChunksExcept(ctx, otherCol.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !other {
+		t.Error("HasEmbeddedChunksExcept = false despite an embedded chunk outside the second collection")
+	}
+}

@@ -43,6 +43,7 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 			continue
 		}
 
+		chunks := []store.IndexChunk{{Seq: 0, Content: f.Name, ChunkType: store.ChunkTypeImage, ImagePath: f.Path}}
 		_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
 			CollectionID: col.ID,
 			Path:         f.Path,
@@ -50,7 +51,8 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 			ContentHash:  f.ContentHash,
 			Mtime:        f.Mtime,
 			FTSContent:   f.Name,
-			Chunks:       []store.IndexChunk{{Seq: 0, Content: f.Name, ChunkType: store.ChunkTypeImage, ImagePath: f.Path}},
+			Chunks:       chunks,
+			FastFields:   idx.enricher.Enrich(idx.ctx(), col.Type, f.Name, nil, chunks),
 		})
 		if err != nil {
 			idx.warnf("  WARN: index %s: %v\n", f.Path, err)
@@ -144,7 +146,8 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 			pageText.WriteString(res.Content)
 		}
 
-		_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+		fastFields := idx.enricher.Enrich(idx.ctx(), col.Type, f.Name, nil, indexChunks)
+		docID, err := idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
 			CollectionID: col.ID,
 			Path:         f.Path,
 			Title:        f.Name,
@@ -153,12 +156,15 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 			LineCount:    pageCount,
 			FTSContent:   pageText.String(),
 			Chunks:       indexChunks,
-			FastFields:   idx.semanticFastFields(idx.ctx(), f.Name, indexChunks),
+			FastFields:   fastFields,
 		})
 		if err != nil {
 			idx.warnf("  WARN: index %s: %v\n", f.Path, err)
 			failed++
 			continue
+		}
+		if err := idx.recordSemanticSyncState(idx.ctx(), col.Type, docID, fastFields, indexChunks, f.Name); err != nil {
+			idx.warnf("  WARN: record semantic state %s: %v\n", f.Path, err)
 		}
 
 		indexed++

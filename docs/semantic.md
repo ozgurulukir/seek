@@ -45,11 +45,19 @@ model formats never leak into the contract):
 
 ## How seek consumes it
 
-When `semantic.enabled: true` in `~/.config/seek/config.yaml`, seek sends each
-document's chunks to `POST /tag` and stores four fast fields on the document
-(pdf / documents / conversation collections only):
+Semantic enrichment works the same way across every text-bearing collection
+type — markdown, code, conversations (claude/codex), PDF, documents, and
+parser. There is no per-format support matrix. When
+`semantic.enabled: true` in `~/.config/seek/config.yaml` and the service is
+healthy, seek sends each document's chunks to `POST /tag` and stores four
+fast fields on the document:
 
 - `tags`, `topics`, `entities`, `language`
+
+Conversations, PDF, and documents are enriched during the regular
+`seek sync` pass. Markdown and code collections are brought to parity by the
+semantic backfill (`seek collection reindex <name> --semantic-only`), which
+re-enriches every document whose fingerprint is stale or absent.
 
 All four are filterable with the generic fast-field flag `--field
 <name>:<value>`, and facetable with `--aggs`:
@@ -69,10 +77,77 @@ comma-list membership (match a whole comma-separated token), while
 `language` and the code fields (`lang`, `repo`, ...) match exactly. The old
 `--tag` flag was removed; `--field tags:<value>` gives identical behaviour.
 
-Enrichment is always optional and degrades gracefully: if the service is down
-or the capability is disabled, seek emits a WARN and proceeds without tags —
-keyword search is unaffected. Under `privacy.offline_only` only numeric
-loopback endpoints (`127.0.0.0/8`, `[::1]`) are accepted.
+### Service-down behavior
+
+Enrichment is always optional and degrades gracefully. If the service is down,
+times out, returns malformed data, or lacks a capability, seek still succeeds:
+
+- the sync or backfill pass completes — failures surface as `WARN` lines, never
+  as a hard error, and keyword (BM25) search is unaffected;
+- previously stored semantic fast fields are preserved — a failed enrichment
+  never wipes existing `tags`/`topics`/`entities`/`language` values;
+- during **backfill**, an enrichment failure records status `error` for the
+  document (its prior fields are kept) and the next backfill pass retries it;
+- during **sync**, a document re-enriched while the service is down records
+  status `stale` (prior fields kept) so the next backfill re-enriches it; a
+  document whose enrichment was never attempted stays `none`. The service-down
+  `stale`/`error` markers are written by the precise pass that failed — sync
+  and backfill each record their own outcome.
+
+Under `privacy.offline_only` only numeric loopback endpoints (`127.0.0.0/8`,
+`[::1]`) are accepted.
+
+### Semantic fingerprinting and status
+
+Every document stores a `semantic_fingerprint` and a `semantic_status`
+(`current`, `stale`, or `error`), computed from:
+
+- the semantic service identity (base URL),
+- the capability set the service reports via `/health` (LID, NER,
+  keyphrases, topics),
+- the enrichment schema version (`v1`), and
+- a per-document hash of its indexed chunk content.
+
+Sync and backfill compute the same fingerprint. **Sync** records it on every
+document it enriches (conversations, PDFs, documents): a successful enrichment
+marks the document `current`; a re-sync while the service is down marks it
+`stale` (prior fields preserved). **Backfill** — and the backfill alone —
+_consults_ the stored fingerprint: a document whose fingerprint matches the
+current desired identity is `current` and the backfill skips it (no re-call),
+while a change in the service identity, capabilities, schema version, or
+document content leaves the document `stale`, so the next backfill re-enriches
+it. A document with no recorded state is reported as `none` by
+`seek collection list/show` (e.g. semantic enrichment disabled, or a type never
+synced with the service up); it becomes `current`/`stale` on the next sync or
+backfill that actually attempts enrichment.
+
+### Backfill (`seek collection reindex <name> --semantic-only`)
+
+The semantic backfill is the tool for bringing a collection up to date when
+documents are `stale` or unenriched (e.g. the service was down during
+indexing). It:
+
+- selects every document whose fingerprint is stale or absent,
+- re-enriches it **from its already-indexed chunks**,
+- atomically updates the fast fields and the fingerprint/status.
+
+It never re-reads source files, and never touches the FTS index, embeddings,
+or the vector index — only the semantic fast fields and fingerprint/status
+change. Progress prints `N processed, M skipped, K failed`; documents that
+fail keep their prior fields and get status `error`, so the next pass retries
+them.
+
+A normal `seek collection reindex <name>` (without `--semantic-only`) instead
+re-reads the source files and rebuilds chunks, FTS, fast fields, and
+embeddings for the collection.
+
+### Source files are never modified
+
+No `seek` command — `add`, `sync` (incl. `sync <collection> --path`), `embed`,
+`collection rename`/`reindex`/`--semantic-only` backfill, `status`, or `rm` —
+ever modifies, deletes, or renames source files. All management commands only
+read your files and manage the local index (SQLite database, FTS, fast fields,
+vector index). Your files remain the source of truth.
 
 ## Run it
 

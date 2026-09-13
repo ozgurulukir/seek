@@ -20,6 +20,26 @@ func (s *Store) GetDocumentContext(ctx context.Context, collectionID int64, path
 	return s.repositories.documents.getContext(ctx, collectionID, path)
 }
 
+// GetDocumentByID returns a document by its primary key, regardless of
+// collection. Used by the semantic backfill, which selects stale documents by
+// ID so it can re-enrich their chunks without re-reading source files.
+func (s *Store) GetDocumentByID(docID int64) (*Document, error) {
+	return s.GetDocumentByIDContext(context.Background(), docID)
+}
+
+// GetDocumentByIDContext returns a document by ID while honoring cancellation.
+func (s *Store) GetDocumentByIDContext(ctx context.Context, docID int64) (*Document, error) {
+	document := &Document{}
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, collection_id, path, title, content_hash, mtime, line_count, created_at, updated_at
+		 FROM documents WHERE id = ?`, docID,
+	).Scan(&document.ID, &document.CollectionID, &document.Path, &document.Title, &document.ContentHash, &document.Mtime, &document.LineCount, &document.CreatedAt, &document.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return document, nil
+}
+
 func (s *Store) UpsertDocument(collectionID int64, path, title, contentHash string, mtime float64, lineCount int) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	var id int64

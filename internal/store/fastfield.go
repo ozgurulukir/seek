@@ -155,6 +155,41 @@ func (f *FastFieldStore) DeleteForDocument(docID int64) error {
 	return err
 }
 
+// ListForDocument returns every fast field of one document decoded to plain
+// text. The semantic backfill reads the current fields so the merged
+// native+semantic set it writes via UpdateSemanticState preserves them.
+func (f *FastFieldStore) ListForDocument(documentID int64) (map[string]string, error) {
+	return f.ListForDocumentContext(context.Background(), documentID)
+}
+
+// ListForDocumentContext is the cancellation-aware variant of ListForDocument.
+func (f *FastFieldStore) ListForDocumentContext(ctx context.Context, documentID int64) (map[string]string, error) {
+	if err := f.ensureTable(); err != nil {
+		return nil, err
+	}
+	rows, err := f.db.QueryContext(ctx,
+		`SELECT field_name, field_value FROM fast_fields WHERE doc_id = ?`, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	fields := make(map[string]string)
+	for rows.Next() {
+		var name, encoded string
+		if err := rows.Scan(&name, &encoded); err != nil {
+			return nil, err
+		}
+		if value := decodeFastFieldText(encoded); value != "" {
+			fields[name] = value
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return fields, nil
+}
+
 // encodeFastFieldValue encodes a value to a JSON string for storage.
 func encodeFastFieldValue(value interface{}) (string, error) {
 	b, err := json.Marshal(value)

@@ -57,9 +57,10 @@ value is indexed, even outside the collections you filtered to.
 
 ## Semantic enrichment fields
 
-For pdf / documents / conversation collections, the optional local semantic
-tag service (see [docs/semantic.md](docs/semantic.md)) adds three more fast
-fields alongside `tags`. All are facetable with `--aggs <field>:terms` and
+When `semantic.enabled: true`, the optional local semantic tag service (see
+[docs/semantic.md](docs/semantic.md)) adds three more fast fields alongside
+`tags` for every text-bearing collection type (markdown, code, conversations,
+pdf, documents, parser). All are facetable with `--aggs <field>:terms` and
 filterable with `--field`:
 
 ```bash
@@ -69,8 +70,10 @@ seek search "file" --aggs language:terms           # language
 seek search "x"    --field language:en
 ```
 
-These fields exist only when `semantic.enabled: true`; without the service
-they are absent (no error, no empty facets).
+These fields exist only when `semantic.enabled: true` and the service is
+healthy; without the service they are absent (no error, no empty facets) and
+enrichment degrades gracefully with WARN lines, preserving any previously
+stored values.
 
 ## Document Type
 

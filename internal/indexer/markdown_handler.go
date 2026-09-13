@@ -47,6 +47,7 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 		}
 
 		maxSize, overlap := idx.chunkSize()
+		mdChunks := toIndexChunks(chunk.ChunkMarkdown(f.Content, maxSize, overlap), true)
 		_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
 			CollectionID: col.ID,
 			Path:         f.Path,
@@ -55,8 +56,8 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 			Mtime:        f.Mtime,
 			LineCount:    f.LineCount,
 			FTSContent:   f.Content,
-			Chunks:       toIndexChunks(chunk.ChunkMarkdown(f.Content, maxSize, overlap), true),
-			FastFields:   f.Metadata,
+			Chunks:       mdChunks,
+			FastFields:   idx.enricher.Enrich(idx.ctx(), col.Type, f.Path, f.Metadata, mdChunks),
 		})
 		if err != nil {
 			idx.warnf("  WARN: index %s: %v\n", f.Path, err)

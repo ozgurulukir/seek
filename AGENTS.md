@@ -76,9 +76,9 @@ Treat every such integration the same way:
   is down (warn + no tags, keyword search unaffected).
 
 - `internal/agenthooks` — the agent-hook domain: hook target registry (Claude Code, Codex), agent settings JSON surgery (backup-once-per-run, permission preservation, surgical seek-only edits), hook command identity matching (regexes over installed command strings — a compatibility surface, pinned by golden tests; never change output format), the multi-process writer lock + sync state shared by `seek sync`/`seek embed`/`seek add`/`seek rm`, and the `seek hooks sync|context` subprocess entry points. `cmd/hooks.go` is only kong structs + delegations.
-- `internal/app` — composition root: one `Runtime` owns Store, vector index, search Engine, Indexer and Pipeline; commands open it, get warnings, and `Close()` in reverse order. Also owns the search request planner (`SearchRequest` → filters/analyzer/dispatch) and the SQLite `SearchRepository` adapter, so `internal/search` stays persistence-neutral and the CLI/MCP surfaces share one request path.
+- `internal/app` — composition root: one `Runtime` owns Store, vector index, search Engine, Indexer and Pipeline; commands open it, get warnings, and `Close()` in reverse order. Also owns the search request planner (`SearchRequest` → filters/analyzer/dispatch) and the SQLite `SearchRepository` adapter, so `internal/search` stays persistence-neutral and the CLI/MCP surfaces share one request path. `NewCollectionService` is the collection lifecycle boundary (list/show/rename/reindex/backfill/sync --path) between commands and persistence; rename/reindex/backfill manage the index only and never touch source files.
 - `internal/store` — SQLite persistence: collections, documents, chunks, embeddings, FTS5 index, vector search. Fast fields are governed by the registry in `fielddef.go` (curated field names + match modes + documents-column sort fields; `seek fields` also discovers non-curated names physically present in `fast_fields`). **All SQL lives here** (incl. `fastfield.go`, `vector_index.go`, `compression.go`). **All SQL lives here** (incl. `fastfield.go`, `vector_index.go`, `compression.go`). Vector search uses an HNSW index (`VectorIndex` interface, `coder/hnsw`) or the explicitly configured linear-scan backend; unknown backend names are configuration errors. Cosine uses SIMD via `viterin/vek`. FTS5 tokenizer is `unicode61 remove_diacritics 2` (Turkish-aware); BM25 weights title 10× content. Migrate-time logic auto-rebuilds the FTS table when the tokenizer config changes.
-- `internal/indexer` — orchestrates per-format sync: scans sources, upserts documents/chunks/FTS, writes fast-field metadata, runs orphan cleanup. This is the layer that knows about collection types (markdown/code/claude/codex/images/pdf/parser/documents); `store` and `source` stay format-agnostic.
+- `internal/indexer` — orchestrates per-format sync: scans sources, upserts documents/chunks/FTS, writes fast-field metadata, runs orphan cleanup. This is the layer that knows about collection types (markdown/code/claude/codex/images/pdf/parser/documents); `store` and `source` stay format-agnostic. Semantic fast-field enrichment is centralized behind a `DocumentEnricher` seam (`enrich.go`, gated by `semanticEligible` — conversations/PDF/documents enrich during sync) with a collection-scoped semantic backfill (`backfill.go`, `BackfillSemantic` — the `reindex --semantic-only` path that also reaches markdown/code) for stale/absent documents.
 - `internal/extractor` — file extraction domain (`builtin` for native markdown/PDF/images and `xberg` for 100+ rich document formats via remote service).
 - `internal/embed` — providers: `Client` (any OpenAI-compatible text embeddings), `VLClient` (multimodal image+text), `OCRClient` (vision/OCR), and `RerankClient` (OpenAI/Cohere/Jina/DashScope cross-encoder reranking). The VL endpoint is configurable via `embedding.vl_base_url`, defaulting to DashScope's qwen3-vl-embedding.
 - `internal/search` — BM25 + vector + RRF hybrid fusion + optional Cross-Encoder reranking, plus structured query parser (`query.go`), aggregations (`aggregation.go`), autocomplete (`autocomplete.go`), and stemming analyzer (`tokenizer.go`).
@@ -158,13 +158,26 @@ seek add <path> --code       # add source code collection (Go, Rust, Python, TS/
 seek add --claude | --codex | --images <path> | --pdf <path>
 seek add --opencode | --copilot | --zed | --hermes | --parser <name>   # schema-driven parser collections
 seek sync                    # incremental sync
+seek sync <collection> --path <p>   # security guard: validate <p> inside the collection, then sync the WHOLE collection (not a scope filter)
 seek embed                   # generate embeddings (realtime or batch)
 seek search "<query>" [--lex] [--vec] [-l N] [--collection ...] [--aggs ...]
 seek analyze "<text>"        # tokenize + stem
-seek status                  # collections + counts
+seek collection list         # list collections with semantic coverage
+seek collection show <name>  # detail view (type, path, pattern, counts, semantic coverage)
+seek collection rename <old> <new>   # index label only; source path unchanged
+seek collection reindex <name> [--semantic-only]   # full rebuild, or semantic fast-field backfill
 seek schema --show|--validate
 seek parsers list            # list parser schemas + detection status
 seek config                  # show/edit config
 seek auth login|status       # configure/show embedding provider
 seek service|hooks           # periodic sync+embed service management
+seek status                  # compatibility alias for `seek collection list`
+seek rm <collection>         # compatibility alias (delete path; index only)
 ```
+
+**Source-file guarantee:** no `seek` management command — `add`, `sync` (incl.
+`sync <collection> --path`), `embed`, `collection rename`/`reindex`, the
+`--semantic-only` backfill, `status`, or `rm` — ever modifies, deletes, or
+renames source files. Every command only reads your files and manages the
+local index (SQLite/FTS/fast fields/vector index); source files remain the
+source of truth (plan §1, §3.4).

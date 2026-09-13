@@ -97,7 +97,8 @@ func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFil
 	lineCount := strings.Count(res.Content, "\n") + 1
 	maxSize, overlap := idx.chunkSize()
 	docChunks := toIndexChunks(chunk.ChunkMarkdown(res.Content, maxSize, overlap), true)
-	if _, err := idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
+	fastFields := idx.enricher.Enrich(idx.ctx(), col.Type, f.Path, nil, docChunks)
+	docID, err := idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
 		CollectionID: col.ID,
 		Path:         f.Path,
 		Title:        res.Title,
@@ -106,11 +107,15 @@ func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFil
 		LineCount:    lineCount,
 		FTSContent:   res.Content,
 		Chunks:       docChunks,
-		FastFields:   idx.semanticFastFields(idx.ctx(), f.Path, docChunks),
-	}); err != nil {
+		FastFields:   fastFields,
+	})
+	if err != nil {
 		idx.warnf("  WARN: index %s: %v\n", f.Path, err)
 		idx.recordFailure(f.Path, "persistence", err)
 		return docStatusFailed
+	}
+	if err := idx.recordSemanticSyncState(idx.ctx(), col.Type, docID, fastFields, docChunks, f.Path); err != nil {
+		idx.warnf("  WARN: record semantic state %s: %v\n", f.Path, err)
 	}
 	return docStatusIndexed
 }

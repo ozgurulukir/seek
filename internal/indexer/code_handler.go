@@ -67,6 +67,14 @@ func (idx *Indexer) indexCodeFile(col *store.Collection, file source.CodeFileInf
 	}
 
 	maxSize, overlap := idx.chunkSize()
+	codeChunks := toIndexChunks(chunk.ChunkCode(file.Content, file.Language, maxSize, overlap), true)
+	native := map[string]string{
+		"lang":     file.Language,
+		"ext":      file.Extension,
+		"filename": filepath.Base(file.Path),
+		"rel_path": file.RelativePath,
+		"repo":     col.Name,
+	}
 	_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), store.DocumentIndex{
 		CollectionID: col.ID,
 		Path:         file.Path,
@@ -75,14 +83,8 @@ func (idx *Indexer) indexCodeFile(col *store.Collection, file source.CodeFileInf
 		Mtime:        file.Mtime,
 		LineCount:    file.LineCount,
 		FTSContent:   file.Content,
-		Chunks:       toIndexChunks(chunk.ChunkCode(file.Content, file.Language, maxSize, overlap), true),
-		FastFields: map[string]string{
-			"lang":     file.Language,
-			"ext":      file.Extension,
-			"filename": filepath.Base(file.Path),
-			"rel_path": file.RelativePath,
-			"repo":     col.Name,
-		},
+		Chunks:       codeChunks,
+		FastFields:   idx.enricher.Enrich(idx.ctx(), col.Type, file.Path, native, codeChunks),
 	})
 	if err != nil {
 		return false, fmt.Errorf("index %s: %w", file.Path, err)

@@ -16,6 +16,7 @@ import (
 type SyncCmd struct {
 	Collection string `arg:"" optional:"" help:"Sync a specific collection (default: all)"`
 	Type       string `help:"Sync only collections of this type"`
+	Path       string `help:"Validate that PATH is inside the named collection, then sync the whole collection (security guard: the sync is collection-scoped, not path-scoped)"`
 	NoEmbed    bool   `help:"Skip embedding newly synced chunks (keyword-only)"`
 	Realtime   bool   `help:"Force the realtime request batch for embedding"`
 	NoLock     bool   `hidden:""`
@@ -46,6 +47,37 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 	}()
 	for _, warning := range runtime.Warnings {
 		fmt.Fprintf(os.Stderr, "WARN: %s\n", warning)
+	}
+
+	// --path is a security guard, not a scope filter (plan §3.3, accepted
+	// design): the path is canonicalized and validated to be inside the named
+	// collection (rejecting outside paths, symlink/junction escapes, and
+	// Windows case-normalization escapes) BEFORE any index work, but the sync
+	// itself runs over the whole collection — the path does not restrict which
+	// files are indexed. The collection name is required (unlike a plain
+	// `seek sync`, which defaults to all collections), and `--type` is
+	// meaningless here since the dispatch is type-aware per collection.
+	if c.Path != "" {
+		if c.Collection == "" {
+			return errors.New("sync --path requires a collection name: seek sync <collection> --path <path>")
+		}
+		if c.Type != "" {
+			return errors.New("sync --path cannot be combined with --type; --path targets one named collection")
+		}
+		svc := app.NewCollectionService(runtime)
+		report, err := svc.SyncPath(context.Background(), c.Collection, c.Path, pipeline.Options{
+			Realtime:    c.Realtime,
+			VectorIndex: true,
+			SkipEmbed:   c.NoEmbed,
+		}, pipeline.NewStdoutLogger(os.Stdout))
+		if err != nil {
+			return fmt.Errorf("sync %q with path %q: %w", c.Collection, c.Path, err)
+		}
+		// The counts are collection-wide (the path is only a validated guard,
+		// not the scope), so the message must not attribute them to the path.
+		fmt.Printf("Synced %q: %d indexed, %d skipped, %d unsupported, %d failed (path %q validated inside collection)\n",
+			c.Collection, report.Indexed, report.Skipped, report.Unsupported, report.Failed, c.Path)
+		return nil
 	}
 
 	collections, err := runtime.Store.ListCollections()

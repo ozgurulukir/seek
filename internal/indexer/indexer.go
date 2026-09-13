@@ -45,6 +45,18 @@ type Indexer struct {
 	// run sequentially.
 	semChecked bool
 	semClient  semantic.Provider
+	// semBasis caches the semantic enrichment identity (service identity +
+	// capability set + schema version, WITHOUT the per-document content hash)
+	// used by the sync path to record fingerprints. It is computed lazily and
+	// cached because a sync pass records one fingerprint per document and must
+	// not health-check the service for every one of them; WithSemanticProvider
+	// resets it so provider swaps recompute the identity.
+	semBasis    store.SemanticFingerprint
+	semBasisSet bool
+	// enricher is the document-finalization seam all handlers route fast
+	// fields through. Defaults to the config-backed indexerEnricher; inject
+	// via WithEnricher.
+	enricher DocumentEnricher
 }
 
 func New(cfg *config.AppConfig, db *store.Store) *Indexer {
@@ -55,7 +67,7 @@ func New(cfg *config.AppConfig, db *store.Store) *Indexer {
 // convenience constructor remains for package callers and tests, while the
 // runtime supplies extractor and writer dependencies explicitly.
 func NewWithDependencies(cfg *config.AppConfig, db *store.Store, resolver ExtractorResolver, writer IndexWriter) *Indexer {
-	return &Indexer{
+	idx := &Indexer{
 		cfg:      cfg,
 		db:       db,
 		writer:   writer,
@@ -63,6 +75,8 @@ func NewWithDependencies(cfg *config.AppConfig, db *store.Store, resolver Extrac
 		ctxValue: context.Background(),
 		resolver: resolver,
 	}
+	idx.enricher = &indexerEnricher{idx: idx}
+	return idx
 }
 
 // WithExtractor overrides the extraction backend for all collections (e.g. from
@@ -83,6 +97,25 @@ func (idx *Indexer) WithExtractorResolver(resolver ExtractorResolver) *Indexer {
 // format handlers. The default writer is the Store passed to New.
 func (idx *Indexer) WithIndexWriter(writer IndexWriter) *Indexer {
 	idx.writer = writer
+	return idx
+}
+
+// WithEnricher injects the document-finalization seam. The default is the
+// config-backed enricher that lazily resolves the semantic provider; tests
+// and composition roots may substitute a fake.
+func (idx *Indexer) WithEnricher(enricher DocumentEnricher) *Indexer {
+	idx.enricher = enricher
+	return idx
+}
+
+// WithSemanticProvider injects the semantic tag provider directly, marking
+// the lazy resolution as already done. Tests substitute a fake provider via
+// this hook instead of running a real service; the production path resolves
+// the provider from config on first use.
+func (idx *Indexer) WithSemanticProvider(p semantic.Provider) *Indexer {
+	idx.semChecked = true
+	idx.semClient = p
+	idx.semBasisSet = false
 	return idx
 }
 
@@ -413,10 +446,11 @@ func (idx *Indexer) syncConversation(
 		// the initial tags survive; they are refreshed on the next full
 		// sync of the session.
 		if fromLine == 0 && text != "" {
-			request.FastFields = idx.semanticFastFields(idx.ctx(), f.Path, indexChunks)
+			request.FastFields = idx.enricher.Enrich(idx.ctx(), col.Type, f.Path, nil, indexChunks)
 		}
+		var docID int64
 		if fromLine == 0 {
-			_, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), request)
+			docID, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), request)
 		} else {
 			_, err = idx.writer.UpsertAndAppendIndex(idx.ctx(), request)
 		}
@@ -424,6 +458,15 @@ func (idx *Indexer) syncConversation(
 			idx.warnf("  WARN: index %s: %v\n", f.Path, err)
 			failed++
 			continue
+		}
+		// Record the fingerprint only on the initial write that actually
+		// enriched the session. Append passes do not recompute semantic
+		// fields (their content hash would claim a "current" state the tags
+		// do not match), so their fingerprint stays untouched.
+		if fromLine == 0 && text != "" {
+			if err := idx.recordSemanticSyncState(idx.ctx(), col.Type, docID, request.FastFields, indexChunks, f.Path); err != nil {
+				idx.warnf("  WARN: record semantic state %s: %v\n", f.Path, err)
+			}
 		}
 
 		indexed++

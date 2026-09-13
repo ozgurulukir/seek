@@ -25,9 +25,22 @@ const (
 )
 
 // semanticFastFields returns the fast fields produced by the semantic
-// service for one document, or nil when the capability is disabled,
-// unavailable, or the service fails. Semantic enrichment is always optional:
-// it must never fail a sync, and keyword search is unaffected either way.
+// service for one document. The return contract deliberately distinguishes
+// "enrichment did not run/failed" from "enrichment succeeded but produced
+// nothing", because the callers (backfill and the sync seam) must treat the
+// two differently:
+//
+//   - nil means the capability is disabled, the service is unavailable or
+//     failed (timeout, malformed response), or there was no readable text to
+//     send. Nothing was recomputed, so previously stored fast fields must be
+//     preserved (the store's nil-map semantics).
+//   - a non-nil map — even an empty map[string]string{} — means the service
+//     responded and the document was recomputed to exactly this field set:
+//     an empty map is a successful recompute-to-nothing and must replace
+//     (clear) previously stored semantic fields.
+//
+// Semantic enrichment is always optional: it must never fail a sync, and
+// keyword search is unaffected either way.
 //
 // chunks must be the same chunks written to the FTS index (per-page / per-
 // section), so the service sees exactly what is searchable and topics fit

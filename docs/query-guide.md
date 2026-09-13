@@ -119,7 +119,7 @@ seek search "signal" --aggs "tags:terms"        # tags (frontmatter + semantic)
 seek search "error" --aggs "lang:terms"          # code language (go, rust, python, ts, …)
 seek search "req"   --aggs "repo:terms"          # repository/collection name
 
-# Semantic enrichment facets (pdf/documents/conversations, semantic.enabled)
+# Semantic enrichment facets (all text-bearing collections, semantic.enabled)
 seek search "note"  --aggs "topics:terms"        # BERTopic labels
 seek search "rust"  --aggs "entities:terms"      # "TYPE:Text" NER pairs
 seek search "x"     --aggs "language:terms"      # detected ISO 639-1 (e.g. "en")
@@ -135,8 +135,9 @@ The `tags`, `lang`, `repo`, `ext`, `filename`, `rel_path`, `topics`,
 `entities`, and `language` facets come from the fast-field metadata written
 at index time: markdown notes expose their YAML frontmatter keys (e.g.
 `tags`, `date`), code files expose language and repository, and the optional
-semantic service (see [docs/semantic.md](semantic.md)) adds `topics`,
-`entities` and `language` for pdf/documents/conversations.
+semantic service adds `topics`, `entities` and `language` for all text-bearing
+collection types when `semantic.enabled: true` (see
+[docs/semantic.md](semantic.md)).
 
 Terms facets are not limited to the curated names: every fast field
 physically present in the index is aggregatable (run `seek fields` to

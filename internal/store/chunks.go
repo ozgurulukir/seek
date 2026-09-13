@@ -37,6 +37,50 @@ func (s *Store) MaxChunkSeqContext(ctx context.Context, docID int64) (int, error
 	return int(seq.Int64), nil
 }
 
+// ListChunksForDocument returns every chunk of one document in seq order with
+// decompressed content. It is the read side of the semantic backfill: the
+// backfill re-enriches already-indexed content without re-reading source
+// files, so it needs exactly the chunks the FTS index holds.
+func (s *Store) ListChunksForDocument(docID int64) ([]IndexChunk, error) {
+	return s.ListChunksForDocumentContext(context.Background(), docID)
+}
+
+// ListChunksForDocumentContext is the cancellation-aware variant of
+// ListChunksForDocument. Chunk content is decompressed transparently
+// (mirroring GetChunksWithoutEmbedding*), so callers see the same text the
+// FTS and embedding paths search on.
+func (s *Store) ListChunksForDocumentContext(ctx context.Context, docID int64) ([]IndexChunk, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT seq, content, content_zstd, COALESCE(chunk_type, ?), COALESCE(image_path, ''),
+		 COALESCE(start_line, 0), COALESCE(end_line, 0)
+		 FROM chunks WHERE document_id = ? ORDER BY seq ASC`,
+		ChunkTypeText, docID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chunks []IndexChunk
+	for rows.Next() {
+		var c IndexChunk
+		var contentZstd []byte
+		if err := rows.Scan(&c.Seq, &c.Content, &contentZstd, &c.ChunkType, &c.ImagePath, &c.StartLine, &c.EndLine); err != nil {
+			return nil, err
+		}
+		if len(contentZstd) > 0 {
+			c.Content, err = DecompressString(contentZstd)
+			if err != nil {
+				return nil, fmt.Errorf("decompress chunk %d: %w", c.Seq, err)
+			}
+		}
+		chunks = append(chunks, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return chunks, nil
+}
+
 func (s *Store) InsertChunk(docID int64, seq int, content string, embedding []float32) error {
 	return s.InsertChunkWithLines(docID, seq, content, 0, 0, embedding)
 }
