@@ -11,7 +11,24 @@
 
 - Vector search requires an embedding API key
 - Check `~/.config/seek/config.yaml` for `embedding.api_key`
-- If missing, add the key and run `seek embed`
+- If missing, add the key and run `seek embed`. For Ollama or the local
+  FastEmbed helper, run `seek embed --realtime`.
+
+### Ollama returns `upload batch file: ... 404`
+
+Ollama provides `POST /v1/embeddings`, but not the `/v1/files` and
+`/v1/batches` workflow required by `seek`'s asynchronous Batch API mode. Use:
+
+```bash
+seek embed --realtime
+# Rebuild every vector when necessary:
+seek embed --force --realtime
+```
+
+Batch mode is optional. It exists to submit large embedding workloads to
+compatible hosted providers asynchronously, often with better throughput or
+provider-specific discounted pricing. Realtime embedding is the intended local
+mode and creates equivalent vectors for search.
 
 ## Scanned PDF OCR is empty or fails
 
@@ -34,21 +51,21 @@
 
 ```bash
 seek sync    # incremental sync
-seek embed   # generate embeddings for new chunks
+seek embed --realtime   # local Ollama/FastEmbed: generate embeddings now
 ```
 
 ## Force re-embed & Re-indexing
 
 - **After changing model or task prefixes:**
   ```bash
-  seek embed -f
+  seek embed --force --realtime  # local Ollama/FastEmbed
   ```
 - **After changing chunk size (`chunk.max_size`) or dimensions:**
   Re-index collection so files are sliced into new chunk boundaries:
   ```bash
   seek rm <collection>
   seek add <path> [--code|--documents|...]
-  seek embed
+  seek embed --realtime          # local Ollama/FastEmbed
   ```
 
 ## Collection not found

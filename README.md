@@ -107,9 +107,16 @@ seek search "functional programming architecture"   # hybrid: BM25 + vector + RR
 ollama pull nomic-embed-text               # local embedding
 uv run tools/flashrank_server/server.py    # local cross-encoder reranker
 seek auth login                            # choose option 3 (ollama)
-seek embed -f -r                           # local realtime embedding
+seek embed --force --realtime              # Ollama requires realtime embedding
 seek search "how does vector search work" -C 1
 ```
+
+Ollama implements the OpenAI-compatible realtime `/v1/embeddings` endpoint,
+but not the Files and Batch endpoints that `seek`'s async mode uses. Therefore,
+run `seek embed --realtime` with Ollama; otherwise the upload to `/v1/files`
+fails with `404`. Batch mode is optional: providers that support it can process
+large initial indexes asynchronously and may offer lower pricing, while
+realtime mode is the correct local path and produces the same stored vectors.
 
 ---
 

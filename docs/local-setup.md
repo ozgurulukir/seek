@@ -405,11 +405,26 @@ seek add ~/docs --documents --name docs     # builtin-supported documents
 
 # Sync and embed locally
 seek sync
-seek embed -f -r
+seek embed --force --realtime
 
 # Execute local hybrid search with context expansion
 seek search "how does vector search work" -C 1
 ```
+
+#### Why Ollama needs `--realtime`
+
+Ollama supports the OpenAI-compatible realtime embeddings endpoint
+(`POST /v1/embeddings`), but it does not implement the OpenAI Files and Batch
+API workflow used by `seek`'s async batch mode. That workflow uploads a JSONL
+request file to `POST /v1/files`, creates and polls a batch job, and downloads
+the result file. With Ollama, the first upload therefore returns `404`.
+
+Use `seek embed --realtime` (or `seek embed --force --realtime` when rebuilding
+all vectors) for both Ollama and the local FastEmbed helper. Batch mode is not
+required for semantic search: it is an optional throughput/cost optimization
+for compatible hosted providers, especially when embedding a large initial
+collection asynchronously. Realtime mode sends normal embedding requests
+immediately and writes the same kind of vectors to the local index.
 
 ---
 
