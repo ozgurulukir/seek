@@ -134,12 +134,14 @@ seek sync
 # you want to defer semantic indexing)
 seek sync --no-embed
 
-# Embed with the realtime API instead of the async batch API
+# Force the realtime request batch (auto already selects realtime for local providers)
 seek sync --realtime
 
-# Generate embeddings for any remaining unembedded chunks (batch or realtime)
+# Generate embeddings for any remaining unembedded chunks (auto → realtime;
+# -b forces the async provider batch on hosted providers that support it)
 seek embed
-seek embed -r          # realtime
+seek embed -r          # force realtime
+seek embed -b          # force async provider batch (hosted providers only)
 
 # Force re-embed all chunks (e.g. after model or dimensions change)
 seek embed -f

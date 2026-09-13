@@ -40,8 +40,10 @@ The installed hooks:
 2. On Codex `Interrupt`, launch a detached `seek hooks sync --agent codex` worker so the sync survives Codex's short interrupt-hook timeout.
 3. Debounce repeated syncs for 15 seconds and record the last outcome; inspect it with `seek hooks status`.
 4. On `UserPromptSubmit`, search the local index and provide capped relevant context to the agent.
-5. With `seek hooks install --embed`, the sync child also runs a realtime
-   embedding pass for the same agent collection as part of that same sync.
+5. With `seek hooks install --embed`, the sync child also runs an embedding
+   pass for the same agent collection as part of that same sync. The embedding
+   mode (realtime vs async batch) is selected by the pipeline policy from
+   `embedding.mode` and the provider capability, not forced by the hook.
 
 ## What Gets Modified
 

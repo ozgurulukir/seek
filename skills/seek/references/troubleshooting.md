@@ -12,23 +12,27 @@
 - Vector search requires an embedding API key
 - Check `~/.config/seek/config.yaml` for `embedding.api_key`
 - If missing, add the key and run `seek embed`. For Ollama or the local
-  FastEmbed helper, run `seek embed --realtime`.
+  FastEmbed helper, `embedding.mode: auto` (the default) already selects the
+  realtime request batch, so plain `seek embed` works.
 
 ### Ollama returns `upload batch file: ... 404`
 
 Ollama provides `POST /v1/embeddings`, but not the `/v1/files` and
-`/v1/batches` workflow required by `seek`'s asynchronous Batch API mode. Use:
+`/v1/batches` workflow required by `seek`'s asynchronous Batch API mode. With
+`embedding.mode: auto` (the default) `seek` detects the local provider and uses
+the realtime request batch automatically:
 
 ```bash
-seek embed --realtime
+seek embed
 # Rebuild every vector when necessary:
-seek embed --force --realtime
+seek embed --force
 ```
 
-Batch mode is optional. It exists to submit large embedding workloads to
+Async batch is optional. It exists to submit large embedding workloads to
 compatible hosted providers asynchronously, often with better throughput or
 provider-specific discounted pricing. Realtime embedding is the intended local
-mode and creates equivalent vectors for search.
+mode and creates equivalent vectors for search. The legacy `--realtime` flag
+still works and is a no-op when auto already selects realtime.
 
 ## Scanned PDF OCR is empty or fails
 
@@ -51,21 +55,21 @@ mode and creates equivalent vectors for search.
 
 ```bash
 seek sync    # incremental sync
-seek embed --realtime   # local Ollama/FastEmbed: generate embeddings now
+seek embed   # local Ollama/FastEmbed: generate embeddings now (auto → realtime)
 ```
 
 ## Force re-embed & Re-indexing
 
 - **After changing model or task prefixes:**
   ```bash
-  seek embed --force --realtime  # local Ollama/FastEmbed
+  seek embed --force  # local Ollama/FastEmbed
   ```
 - **After changing chunk size (`chunk.max_size`) or dimensions:**
   Re-index collection so files are sliced into new chunk boundaries:
   ```bash
   seek rm <collection>
   seek add <path> [--code|--documents|...]
-  seek embed --realtime          # local Ollama/FastEmbed
+  seek embed --force          # local Ollama/FastEmbed
   ```
 
 ## Collection not found

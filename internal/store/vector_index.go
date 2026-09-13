@@ -2,15 +2,11 @@ package store
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/coder/hnsw"
@@ -55,6 +51,9 @@ type VectorIndexMetadata interface {
 	ManifestGeneration() string
 	SetManifestGeneration(string)
 	SetWarning(string)
+	// ConfigFingerprint returns the vector-space fingerprint the persisted
+	// graph was built for (a cache copy of the SQLite embedding profile).
+	ConfigFingerprint() string
 }
 
 // VectorIndexRecovery is implemented by persistent indexes whose on-disk
@@ -282,6 +281,12 @@ func (h *hnswIndex) ManifestGeneration() string {
 	return h.generation
 }
 
+func (h *hnswIndex) ConfigFingerprint() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.configFingerprint
+}
+
 func (h *hnswIndex) Len() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -447,20 +452,15 @@ func NewVectorIndex(cfg *config.AppConfig) (VectorIndex, error) {
 	}
 }
 
+// vectorConfigFingerprint is the HNSW manifest's cache copy of the SQLite
+// embedding profile fingerprint. It is computed over the semantic vector-space
+// identity (provider kind, model, dimensions, task prefixes, normalization) and
+// deliberately excludes the endpoint host so a provider URL change does not
+// invalidate an otherwise identical vector space. The SQLite profile record is
+// the source of truth; this value is cross-validated against it at runtime.
 func vectorConfigFingerprint(cfg *config.AppConfig) string {
 	if cfg == nil {
 		return ""
 	}
-	e := cfg.Config.Embedding
-	h := sha256.Sum256([]byte(strings.Join([]string{
-		e.BaseURL,
-		e.Model,
-		strconv.Itoa(e.Dimensions),
-		e.VLBaseURL,
-		strconv.FormatBool(e.Multimodal),
-		e.TaskPrefix.Query,
-		e.TaskPrefix.Document,
-		strconv.FormatBool(e.TaskPrefix.DisableAutoDetect),
-	}, "\x00")))
-	return hex.EncodeToString(h[:])
+	return ProfileFromConfig(cfg).ComputeFingerprint()
 }

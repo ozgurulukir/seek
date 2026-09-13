@@ -81,6 +81,9 @@ func ConfigureVectorIndex(ctx context.Context, s *store.Store, cfg *config.AppCo
 		return nil, false, fmt.Errorf("open vector index: %w", err)
 	}
 	s.SetVectorIndex(vectorIndex)
+	// Record the desired embedding profile so vector search fails fast when the
+	// persisted embeddings were produced by a different vector space.
+	s.SetDesiredEmbeddingProfile(profilePtr(store.ProfileFromConfig(cfg)))
 	if backend != "linear" {
 		if err := s.RecoverVectorIndex(ctx); err != nil {
 			return nil, false, fmt.Errorf("recover vector index: %w", err)
@@ -145,4 +148,12 @@ func (r *Runtime) Close() error {
 		return nil
 	}
 	return r.Store.Close()
+}
+
+// profilePtr returns a pointer to p, or nil when p is the zero profile.
+func profilePtr(p store.EmbeddingProfile) *store.EmbeddingProfile {
+	if p.Model == "" && p.Dimensions == 0 {
+		return nil
+	}
+	return &p
 }

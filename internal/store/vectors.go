@@ -178,6 +178,12 @@ func (s *Store) SearchVectorContext(ctx context.Context, queryEmb []float32, lim
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// Fail fast when the persisted embeddings were produced by a different
+	// vector space than the current config. This is the primary guard against
+	// querying old vectors after a model/dimensions/task-prefix change.
+	if err := s.validateVectorProfile(ctx); err != nil {
+		return nil, err
+	}
 	// Use HNSW index if available
 	if s.vector() != nil {
 		// HNSW returns chunk IDs; we push filters into the SQL fetch query

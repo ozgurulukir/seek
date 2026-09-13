@@ -1,13 +1,17 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 
+	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/embed"
+	"github.com/ozgurulukir/seek/internal/store"
 )
 
 // DoctorCmd inspects the local installation and can repair common issues.
@@ -87,6 +91,7 @@ func fixPermissions(paths []privatePath) ([]string, []error) {
 
 func (c *DoctorCmd) Run(cfg *config.AppConfig) error {
 	c.reportPrivacy(cfg)
+	c.reportEmbedding(cfg)
 
 	loose, err := checkPermissions(cfg)
 	if err != nil {
@@ -165,4 +170,59 @@ func (c *DoctorCmd) reportPrivacy(cfg *config.AppConfig) {
 		fmt.Println("  (no embedding endpoint configured)")
 	}
 	fmt.Println("  keyword (BM25/FTS) search is fully local; no telemetry is sent anywhere")
+}
+
+// reportEmbedding prints the embedding mode, provider capability, active
+// profile, and any config/profile divergence. It opens the store read-only to
+// read the persisted profile; a missing profile is reported, never created.
+func (c *DoctorCmd) reportEmbedding(cfg *config.AppConfig) {
+	fmt.Println("embedding:")
+	ec := cfg.Config.Embedding
+	if ec.BaseURL == "" || ec.Model == "" {
+		fmt.Println("  not configured (set embedding.base_url/model/api_key)")
+		return
+	}
+
+	mode := ec.EffectiveMode()
+	fmt.Printf("  mode: %s (config embedding.mode=%q; resolves to %s)\n", mode, ec.Mode, modeLabel(mode))
+
+	caps := embed.ProviderCapabilities(cfg)
+	fmt.Printf("  capability: realtime=%v async_batch=%v (provider kind %s)\n",
+		caps.RealtimeEmbeddings, caps.AsyncBatch, embed.DetectProviderKind(cfg))
+
+	db, err := app.OpenStore(cfg)
+	if err != nil {
+		fmt.Printf("  profile: (unreadable: %v)\n", err)
+		return
+	}
+	defer db.Close()
+
+	stored, err := db.GetEmbeddingProfile(context.Background())
+	if err != nil {
+		fmt.Printf("  profile: (unreadable: %v)\n", err)
+		return
+	}
+	desired := store.ProfileFromConfig(cfg)
+	if stored == nil {
+		fmt.Printf("  profile: none (run: seek embed)\n")
+		return
+	}
+	if stored.Fingerprint == desired.ComputeFingerprint() {
+		fmt.Printf("  profile: %s/%d, ready\n", stored.Model, stored.Dimensions)
+		return
+	}
+	fmt.Printf("  profile: %s/%d, STALE — config wants %s/%d\n", stored.Model, stored.Dimensions, desired.Model, desired.Dimensions)
+	fmt.Printf("  fix: reindex with: seek rm <collection> && seek add && seek embed -f\n")
+}
+
+// modeLabel maps a config embedding.mode value to its resolved behavior.
+func modeLabel(mode string) string {
+	switch mode {
+	case config.ModeRealtime:
+		return "realtime request batch"
+	case config.ModeBatch:
+		return "async provider batch"
+	default:
+		return "realtime request batch (auto)"
+	}
 }

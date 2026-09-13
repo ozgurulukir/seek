@@ -225,6 +225,15 @@ func (p *Pipeline) embedPendingContext(ctx context.Context, opts Options, log Lo
 	}
 	log.Printf("embedding mode: %s (%s)\n", mode, rationale)
 
+	// Claim the embedding profile before any chunk embedding is written. This
+	// is the pass's transaction boundary: a fingerprint mismatch on a full
+	// index fails fast here, before any content is fetched or any embedding is
+	// persisted, so old vectors can never be silently mixed with a new vector
+	// space. On an empty index a config change may establish a new profile.
+	if err := db.ClaimEmbeddingProfile(ctx, store.ProfileFromConfig(cfg)); err != nil {
+		return err
+	}
+
 	var (
 		chunks []store.Chunk
 	)

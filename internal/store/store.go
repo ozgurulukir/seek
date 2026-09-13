@@ -19,8 +19,14 @@ type Store struct {
 	repositories       storeRepositories
 	compressionEnabled bool
 	compressionLevel   int
-	closeOnce          sync.Once
-	closeErr           error
+	// desiredProfile is the embedding profile derived from the current config.
+	// It is set by the composition root (app.ConfigureVectorIndex) and used to
+	// fail fast on vector search when the persisted embeddings were produced by
+	// a different vector space. Nil means no validation is enforced (e.g. the
+	// lightweight OpenStore path used by status/add/rm).
+	desiredProfile *EmbeddingProfile
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 func Open(dbPath string) (*Store, error) {
@@ -101,6 +107,12 @@ func (s *Store) RecoverVectorIndex(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
+	// Cross-validate the manifest fingerprint against the SQLite embedding
+	// profile before any recovery decision. A divergence is surfaced as a
+	// warning so the user can reindex; data is never deleted automatically.
+	if err := s.crossValidateManifestProfile(ctx, metadata); err != nil {
+		return err
+	}
 	recovery, needsRecovery := s.vector().(VectorIndexRecovery)
 	needsRebuild := needsRecovery && recovery.NeedsRebuild()
 	if !needsRebuild && metadata.ManifestGeneration() == "" {
@@ -129,6 +141,34 @@ func (s *Store) RecoverVectorIndex(ctx context.Context) error {
 	if needsRecovery {
 		recovery.SetNeedsRebuild(false)
 	}
+	return nil
+}
+
+// crossValidateManifestProfile verifies the HNSW manifest's vector-space
+// fingerprint against the SQLite embedding profile. The manifest is a cache
+// copy of the profile; a divergence means the persisted graph was built from
+// embeddings that no longer match the active vector space. It is surfaced as a
+// warning (never an auto-delete) so the user can reindex safely.
+func (s *Store) crossValidateManifestProfile(ctx context.Context, metadata VectorIndexMetadata) error {
+	fp := metadata.ConfigFingerprint()
+	if fp == "" {
+		return nil
+	}
+	stored, err := s.GetEmbeddingProfile(ctx)
+	if err != nil {
+		return err
+	}
+	if stored == nil || stored.Fingerprint == fp {
+		return nil
+	}
+	has, err := s.HasEmbeddedChunks(ctx)
+	if err != nil {
+		return err
+	}
+	if !has {
+		return nil
+	}
+	metadata.SetWarning(fmt.Sprintf("vector index fingerprint does not match embedding profile %s; reindex with: seek rm <collection> && seek add && seek embed -f", profileLabel(stored)))
 	return nil
 }
 
@@ -243,6 +283,18 @@ func (s *Store) initCoreSchema() error {
 			created_at TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id)`,
+		`CREATE TABLE IF NOT EXISTS embedding_profile (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			provider_kind TEXT NOT NULL,
+			model TEXT NOT NULL,
+			dimensions INTEGER NOT NULL,
+			document_task_prefix TEXT NOT NULL,
+			query_task_prefix TEXT NOT NULL,
+			normalization TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {

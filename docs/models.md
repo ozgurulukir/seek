@@ -83,3 +83,5 @@ Cross-Encoder re-ranking evaluates query + document pairs together with full att
 > The `dimensions` setting in `config.yaml` **must exactly match** the output dimension of your chosen embedding model (e.g. `1536` for OpenAI small, `768` for Nomic, `1024` for BGE-M3 / DashScope, `384` for MiniLM).
 >
 > Dimensions are fixed per chunk at index time and define the HNSW vector index layout. If you switch to a model with a different dimension, run `seek rm <collection>`, `seek add`, and `seek embed -f` to rebuild the vector index.
+>
+> `seek` records the active vector space (provider kind, model, dimensions, task prefixes) in a persisted embedding profile. Changing any of these makes the stored vectors incompatible: `seek embed` and vector search fail fast with a clear reindex message instead of silently mixing old and new vectors. `seek doctor` and `seek status` show the active profile and whether it is `ready` or `stale`. Data is never deleted automatically.

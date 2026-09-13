@@ -107,16 +107,17 @@ seek search "functional programming architecture"   # hybrid: BM25 + vector + RR
 ollama pull nomic-embed-text               # local embedding
 uv run tools/flashrank_server/server.py    # local cross-encoder reranker
 seek auth login                            # choose option 3 (ollama)
-seek embed --force --realtime              # Ollama requires realtime embedding
+seek embed --force                         # auto mode → realtime for local providers
 seek search "how does vector search work" -C 1
 ```
 
 Ollama implements the OpenAI-compatible realtime `/v1/embeddings` endpoint,
-but not the Files and Batch endpoints that `seek`'s async mode uses. Therefore,
-run `seek embed --realtime` with Ollama; otherwise the upload to `/v1/files`
-fails with `404`. Batch mode is optional: providers that support it can process
-large initial indexes asynchronously and may offer lower pricing, while
-realtime mode is the correct local path and produces the same stored vectors.
+but not the Files and Batch endpoints that `seek`'s async mode uses. `seek`
+detects this automatically: with `embedding.mode: auto` (the default) a local
+provider resolves to the realtime request batch, so no `--realtime` flag is
+needed. Async batch is an optional throughput/cost optimization for hosted
+providers that expose the Files + Batch API; it is never inferred from a
+loopback address. Both paths produce the same stored vectors.
 
 ---
 
@@ -177,8 +178,8 @@ seek add --claude | --codex        # add agent conversation sessions (+images)
 seek add --opencode | --copilot | --hermes # add schema-driven agent sessions
 seek sync                          # incremental index update then embed new chunks
 seek sync --no-embed               # index only (keyword-first: skip embedding entirely)
-seek sync --realtime               # embed with the realtime API (used by stop-hooks)
-seek embed [-f] [-r]               # generate embeddings (batch or realtime)
+seek sync --realtime               # force the realtime request batch (used by stop-hooks)
+seek embed [-f] [-r] [-b]          # generate embeddings (auto → realtime; -b forces async batch)
 
 # Search & Navigation
 seek search "<query>"              # hybrid search (BM25 + Vector + Re-ranking)
