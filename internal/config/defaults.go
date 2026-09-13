@@ -19,6 +19,16 @@ const (
 	DefaultVLTimeout = 120 * time.Second
 )
 
+// Embedding mode selection. "auto" (the default) resolves to realtime
+// embeddings; "realtime" forces the synchronous /embeddings path; "batch"
+// forces the async provider batch (Files + Batch API) and requires a provider
+// that declares async batch support.
+const (
+	ModeAuto     = "auto"
+	ModeRealtime = "realtime"
+	ModeBatch    = "batch"
+)
+
 const (
 	// DefaultDirPerms is the default permission for created directories.
 	DefaultDirPerms = 0755

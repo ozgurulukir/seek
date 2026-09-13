@@ -57,11 +57,9 @@ func RunSync(cfg *config.AppConfig, opts SyncOptions, stdout io.Writer) error {
 	}
 	// M4: sync now embeds in the same process by default. A hook installed
 	// without --embed must stay keyword-only, so pass --no-embed explicitly.
-	if opts.Embed {
-		// The historical hook used `seek embed --realtime`: the async batch
-		// API can outlive the hook budget, so keep embedding synchronous.
-		args = append(args, "--realtime")
-	} else {
+	// Mode selection (realtime vs async batch) is left to the pipeline policy
+	// (embedding.mode + provider capability), not forced here.
+	if !opts.Embed {
 		args = append(args, "--no-embed")
 	}
 	// With --embed the single child covers sync + incremental embedding, so

@@ -153,3 +153,125 @@ func TestNewProviderFromConfigWithoutKeyHasNilTextCapabilities(t *testing.T) {
 		t.Fatalf("missing-key provider exposes text capabilities: %#v", provider)
 	}
 }
+
+func TestProviderCapabilitiesTable(t *testing.T) {
+	tests := []struct {
+		name           string
+		baseURL        string
+		model          string
+		wantKind       ProviderKind
+		wantRealtime   bool
+		wantAsyncBatch bool
+	}{
+		{
+			name:           "numeric loopback -> local, no async batch",
+			baseURL:        "http://127.0.0.1:8000/v1",
+			model:          "custom-embed",
+			wantKind:       ProviderKindLocal,
+			wantRealtime:   true,
+			wantAsyncBatch: false,
+		},
+		{
+			name:           "ollama loopback port -> ollama, no async batch",
+			baseURL:        "http://127.0.0.1:11434/v1",
+			model:          "nomic-embed-text",
+			wantKind:       ProviderKindOllama,
+			wantRealtime:   true,
+			wantAsyncBatch: false,
+		},
+		{
+			name:           "ollama localhost hostname -> ollama, no async batch",
+			baseURL:        "http://localhost:11434/v1",
+			model:          "nomic-embed-text",
+			wantKind:       ProviderKindOllama,
+			wantRealtime:   true,
+			wantAsyncBatch: false,
+		},
+		{
+			name:           "ollama model name on loopback -> ollama",
+			baseURL:        "http://127.0.0.1:8000/v1",
+			model:          "ollama/nomic-embed-text",
+			wantKind:       ProviderKindOllama,
+			wantRealtime:   true,
+			wantAsyncBatch: false,
+		},
+		{
+			name:           "fastembed local helper -> local, no async batch",
+			baseURL:        "http://127.0.0.1:8001/v1",
+			model:          "BAAI/bge-small-en-v1.5",
+			wantKind:       ProviderKindLocal,
+			wantRealtime:   true,
+			wantAsyncBatch: false,
+		},
+		{
+			name:           "generic remote -> generic, no async batch",
+			baseURL:        "https://embeddings.example.com/v1",
+			model:          "custom-embed",
+			wantKind:       ProviderKindGeneric,
+			wantRealtime:   true,
+			wantAsyncBatch: false,
+		},
+		{
+			name:           "dashscope hosted -> hosted, async batch",
+			baseURL:        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+			model:          "text-embedding-v4",
+			wantKind:       ProviderKindHosted,
+			wantRealtime:   true,
+			wantAsyncBatch: true,
+		},
+		{
+			name:           "openai hosted -> hosted, async batch",
+			baseURL:        "https://api.openai.com/v1",
+			model:          "text-embedding-3-small",
+			wantKind:       ProviderKindHosted,
+			wantRealtime:   true,
+			wantAsyncBatch: true,
+		},
+		{
+			name:           "offline-only loopback -> local, no async batch",
+			baseURL:        "http://127.0.0.1:11434/v1",
+			model:          "nomic-embed-text",
+			wantKind:       ProviderKindOllama,
+			wantRealtime:   true,
+			wantAsyncBatch: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.AppConfig{Config: config.Config{}}
+			cfg.Config.Embedding.BaseURL = tt.baseURL
+			cfg.Config.Embedding.Model = tt.model
+			cfg.Config.Embedding.APIKey = "sk"
+
+			if got := DetectProviderKind(cfg); got != tt.wantKind {
+				t.Errorf("DetectProviderKind = %q, want %q", got, tt.wantKind)
+			}
+			caps := ProviderCapabilities(cfg)
+			if caps.RealtimeEmbeddings != tt.wantRealtime {
+				t.Errorf("RealtimeEmbeddings = %v, want %v", caps.RealtimeEmbeddings, tt.wantRealtime)
+			}
+			if caps.AsyncBatch != tt.wantAsyncBatch {
+				t.Errorf("AsyncBatch = %v, want %v", caps.AsyncBatch, tt.wantAsyncBatch)
+			}
+		})
+	}
+}
+
+func TestConfiguredProviderExposesCapabilities(t *testing.T) {
+	cfg := &config.AppConfig{Config: config.Config{}}
+	cfg.Config.Embedding.BaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	cfg.Config.Embedding.Model = "text-embedding-v4"
+	cfg.Config.Embedding.APIKey = "sk"
+
+	provider, err := NewProviderFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("NewProviderFromConfig: %v", err)
+	}
+	if !provider.Capabilities.RealtimeEmbeddings {
+		t.Error("configured provider should support realtime embeddings")
+	}
+	if !provider.Capabilities.AsyncBatch {
+		t.Error("dashscope configured provider should declare async batch")
+	}
+}

@@ -6,6 +6,23 @@ import (
 	"time"
 )
 
+// Capabilities describes what a provider can do beyond the concrete client
+// interfaces. The pipeline uses it to select between the realtime request
+// batch and the async provider batch without probing the endpoint.
+//
+// The two "batch" concepts are deliberately distinct:
+//   - RealtimeEmbeddings: the provider serves the synchronous /embeddings
+//     endpoint and can accept multiple inputs in one request (a "realtime
+//     request batch"). Every supported provider exposes this.
+//   - AsyncBatch: the provider exposes the Files + Batch API (/files,
+//     /batches) so seek can upload a JSONL job and poll for results (an
+//     "async provider batch"). This is a hosted-provider optimization and is
+//     never inferred from a loopback address.
+type Capabilities struct {
+	RealtimeEmbeddings bool
+	AsyncBatch         bool
+}
+
 // Provider is the capability bundle owned by the application composition
 // root. Keeping capabilities as interfaces lets search and pipeline depend on
 // what they use while one runtime still owns the concrete clients.
@@ -17,6 +34,10 @@ type Provider struct {
 	VLText   VLTextBatcher
 	VLImage  VLImageBatcher
 	Reranker Reranker
+	// Capabilities describes the provider's embedding surface. It is set by
+	// the factory that builds the bundle and consumed by the pipeline's mode
+	// selection policy.
+	Capabilities Capabilities
 }
 
 // NormalizeCapabilities converts typed-nil capability values into nil
@@ -48,6 +69,12 @@ func (p Provider) NormalizeCapabilities() Provider {
 	}
 	if isNilCapability(p.Reranker) {
 		p.Reranker = nil
+	}
+	// Every provider that exposes a realtime embedder (query, document, or VL)
+	// supports realtime embeddings. Default the capability so a bundle built
+	// without an explicit Capabilities value still reports it correctly.
+	if p.Capabilities.RealtimeEmbeddings == false && (p.Query != nil || p.Document != nil || p.VLQuery != nil) {
+		p.Capabilities.RealtimeEmbeddings = true
 	}
 	return p
 }

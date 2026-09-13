@@ -6,6 +6,29 @@ import (
 	"testing"
 )
 
+func TestEmbeddingModeValidation(t *testing.T) {
+	valid := []string{"", "auto", "realtime", "batch"}
+	for _, mode := range valid {
+		if err := validateEmbeddingMode(mode); err != nil {
+			t.Errorf("validateEmbeddingMode(%q) = %v, want nil", mode, err)
+		}
+	}
+	for _, mode := range []string{"async", "BATCH", "realtime ", "1"} {
+		if err := validateEmbeddingMode(mode); err == nil {
+			t.Errorf("validateEmbeddingMode(%q) = nil, want error", mode)
+		}
+	}
+}
+
+func TestEmbeddingConfigEffectiveMode(t *testing.T) {
+	if got := (EmbeddingConfig{}).EffectiveMode(); got != ModeAuto {
+		t.Errorf("empty EffectiveMode = %q, want %q", got, ModeAuto)
+	}
+	if got := (EmbeddingConfig{Mode: "batch"}).EffectiveMode(); got != ModeBatch {
+		t.Errorf("batch EffectiveMode = %q, want %q", got, ModeBatch)
+	}
+}
+
 func TestEmbeddingConfigIsMultimodal(t *testing.T) {
 	cases := []struct {
 		name     string

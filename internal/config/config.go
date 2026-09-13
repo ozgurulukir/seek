@@ -48,6 +48,18 @@ type EmbeddingConfig struct {
 	// that require them. When unset, well-known model families are detected
 	// from the model name.
 	TaskPrefix TaskPrefixConfig `yaml:"task_prefix,omitempty"`
+	// Mode selects the embedding path: "auto" (default, resolves to realtime),
+	// "realtime", or "batch" (async provider batch). The CLI --realtime and
+	// --batch flags override this value.
+	Mode string `yaml:"mode,omitempty"`
+}
+
+// EffectiveMode returns the configured embedding mode, defaulting to auto.
+func (e EmbeddingConfig) EffectiveMode() string {
+	if e.Mode == "" {
+		return ModeAuto
+	}
+	return e.Mode
 }
 
 // TaskPrefixes resolves the input prefixes to prepend to query and document
@@ -450,7 +462,22 @@ func Load() (*AppConfig, error) {
 
 	applyFallbacks(&ac.Config)
 
+	if err := validateEmbeddingMode(ac.Config.Embedding.Mode); err != nil {
+		return nil, err
+	}
+
 	return ac, nil
+}
+
+// validateEmbeddingMode rejects an unknown embedding.mode value. The empty
+// value is allowed (it means auto) and is normalized by EffectiveMode.
+func validateEmbeddingMode(mode string) error {
+	switch mode {
+	case "", ModeAuto, ModeRealtime, ModeBatch:
+		return nil
+	default:
+		return fmt.Errorf("invalid embedding.mode %q (want auto|realtime|batch)", mode)
+	}
 }
 
 func (ac *AppConfig) RequireEmbeddingKey() (string, error) {

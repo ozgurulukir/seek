@@ -34,16 +34,86 @@ type Logger interface {
 
 // newline stands in for a bare fmt.Println so loggers stay one-method.
 
+// Mode is the resolved embedding path for one pass. It is produced by
+// SelectMode from the config embedding.mode plus the CLI --realtime/--batch
+// overrides and the provider capability contract.
+type Mode string
+
+const (
+	// ModeAuto is the config default; SelectMode resolves it to realtime.
+	ModeAuto Mode = "auto"
+	// ModeRealtime uses the synchronous /embeddings endpoint (a "realtime
+	// request batch").
+	ModeRealtime Mode = "realtime"
+	// ModeBatch uses the async provider batch (Files + Batch API). It is only
+	// valid when the provider declares AsyncBatch support.
+	ModeBatch Mode = "batch"
+)
+
+// SelectMode resolves the effective embedding mode from the config value, the
+// CLI overrides, and the provider capability contract. It is the single
+// selection path shared by `seek embed` and `seek sync`.
+//
+// Rules:
+//   - --realtime and --batch are mutually exclusive (validation error).
+//   - A CLI flag overrides the config value.
+//   - batch requires AsyncBatch capability and fails before any content is
+//     fetched or any /files request is made.
+//   - realtime requires RealtimeEmbeddings capability.
+//   - auto (the default) resolves to realtime.
+func SelectMode(cfgMode string, realtime, batch bool, caps embed.Capabilities) (Mode, string, error) {
+	if realtime && batch {
+		return "", "", fmt.Errorf("--realtime and --batch are mutually exclusive")
+	}
+	if realtime {
+		if !caps.RealtimeEmbeddings {
+			return "", "", fmt.Errorf("realtime embeddings are not supported by this provider")
+		}
+		return ModeRealtime, "forced by --realtime", nil
+	}
+	if batch {
+		if !caps.AsyncBatch {
+			return "", "", fmt.Errorf("async provider batch is not supported by this provider (provider kind %s); use realtime mode or a provider that exposes the Files/Batch API", providerKindLabel(caps))
+		}
+		return ModeBatch, "forced by --batch", nil
+	}
+	switch cfgMode {
+	case "", string(ModeAuto):
+		return ModeRealtime, "auto: provider defaults to realtime", nil
+	case string(ModeRealtime):
+		if !caps.RealtimeEmbeddings {
+			return "", "", fmt.Errorf("embedding.mode=realtime requires a provider with realtime embeddings")
+		}
+		return ModeRealtime, "config embedding.mode=realtime", nil
+	case string(ModeBatch):
+		if !caps.AsyncBatch {
+			return "", "", fmt.Errorf("embedding.mode=batch requires a provider with async batch support (provider kind %s); use realtime mode or a provider that exposes the Files/Batch API", providerKindLabel(caps))
+		}
+		return ModeBatch, "config embedding.mode=batch", nil
+	default:
+		return "", "", fmt.Errorf("invalid embedding.mode %q (want auto|realtime|batch)", cfgMode)
+	}
+}
+
+// providerKindLabel is a best-effort human label for the capability contract.
+// The provider bundle does not carry its kind, so the label is derived from
+// the capability flags.
+func providerKindLabel(caps embed.Capabilities) string {
+	if caps.AsyncBatch {
+		return "hosted"
+	}
+	return "local/generic"
+}
+
 // Options controls one EmbedPending pass.
 type Options struct {
 	// Force re-embeds every chunk instead of only pending ones.
 	Force bool
-	// Realtime uses the synchronous per-batch API instead of the async
-	// batch API.
+	// Realtime forces the realtime request batch (overrides config
+	// embedding.mode). Mutually exclusive with Batch.
 	Realtime bool
-	// Batch, when false, forces the realtime API (mirrors `seek embed
-	// --no-batch`). Zero value is false, so callers that want the default
-	// batch behaviour must set it explicitly.
+	// Batch forces the async provider batch (overrides config
+	// embedding.mode). Mutually exclusive with Realtime.
 	Batch bool
 	// Type restricts embedding to collections of this type ("" = all).
 	Type string
@@ -69,7 +139,10 @@ type Pipeline struct {
 }
 
 func New(cfg *config.AppConfig, db *store.Store, idx *indexer.Indexer, provider embed.Provider) *Pipeline {
-	return &Pipeline{cfg: cfg, db: db, indexer: idx, provider: provider}
+	// Normalize typed-nil capabilities and default RealtimeEmbeddings so mode
+	// selection sees a consistent capability contract regardless of how the
+	// bundle was constructed.
+	return &Pipeline{cfg: cfg, db: db, indexer: idx, provider: provider.NormalizeCapabilities()}
 }
 
 // Sync indexes one collection and, unless disabled, embeds only the chunks
@@ -143,10 +216,19 @@ func (p *Pipeline) embedPendingContext(ctx context.Context, opts Options, log Lo
 		return nil
 	}
 
+	// Resolve the embedding mode from config + CLI overrides + provider
+	// capability. This fails fast (before any content is fetched or any
+	// /files request is made) when an unsupported mode is forced.
+	mode, rationale, err := SelectMode(cfg.Config.Embedding.Mode, opts.Realtime, opts.Batch, p.provider.Capabilities)
+	if err != nil {
+		return err
+	}
+	log.Printf("embedding mode: %s (%s)\n", mode, rationale)
+
 	var (
 		chunks []store.Chunk
-		err    error
 	)
+	err = nil
 	if opts.CollectionID != 0 {
 		chunks, err = db.GetChunksWithoutEmbeddingForCollectionContext(ctx, opts.CollectionID, opts.Force)
 	} else if opts.Type != "" {
@@ -177,6 +259,9 @@ func (p *Pipeline) embedPendingContext(ctx context.Context, opts Options, log Lo
 
 	var updated int
 	if cfg.Config.Embedding.IsMultimodal() {
+		if mode == ModeBatch {
+			return fmt.Errorf("async provider batch is text-only; multimodal models use the realtime request batch (remove --batch or set embedding.mode: realtime)")
+		}
 		vlClient := p.provider.VLQuery
 		if vlClient == nil {
 			return fmt.Errorf("multimodal embedding client unavailable — check embedding.vl_base_url")
@@ -218,10 +303,10 @@ func (p *Pipeline) embedPendingContext(ctx context.Context, opts Options, log Lo
 			for i, ch := range textChunks {
 				texts[i] = ch.Content
 			}
-			if opts.Realtime || !opts.Batch {
-				updated, err = embedRealtimeContext(ctx, db, embedClient, textChunks, texts, log)
-			} else {
+			if mode == ModeBatch {
 				updated, err = embedBatchContext(ctx, db, p.provider.Batch, textChunks, texts, log)
+			} else {
+				updated, err = embedRealtimeContext(ctx, db, embedClient, textChunks, texts, log)
 			}
 			if err != nil {
 				return err

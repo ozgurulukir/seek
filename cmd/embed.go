@@ -15,8 +15,8 @@ import (
 type EmbedCmd struct {
 	Type     string `help:"Embed only chunks from collections of this type"`
 	Force    bool   `short:"f" help:"Force re-embed all chunks"`
-	Batch    bool   `short:"b" default:"true" help:"Use batch API (50% cheaper, async) — text-only models"`
-	Realtime bool   `short:"r" help:"Use realtime API (synchronous, immediate)"`
+	Batch    bool   `short:"b" help:"Force the async provider batch (Files + Batch API); requires a provider that supports it"`
+	Realtime bool   `short:"r" help:"Force the realtime request batch (synchronous, immediate)"`
 	NoLock   bool   `hidden:""`
 }
 
