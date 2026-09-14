@@ -127,7 +127,7 @@ Deep-dive documentation and specialized guides:
 
 | Guide | Description |
 |---|---|
-| 📖 [**100% Local & Offline Setup**](docs/local-setup.md) | Ollama, FlashRank & xberg setup, ASCII flow diagram, tool scripts. |
+| 📖 [**100% Local & Offline Setup**](docs/local-setup.md) | Ollama, FlashRank, semantic tagging & xberg setup, ASCII flow diagram, tool scripts. |
 | 📊 [**Models & Re-ranking Guide**](docs/models.md) | Embedding & Cross-Encoder comparisons, dimension rules, CPU latency benchmarks. |
 | ⚙️ [**Background Service & Concurrency**](docs/service.md) | Scheduled tasks (Windows Task Scheduler / systemd / launchd), hooks, SQLite WAL. |
 | 📑 [**Document Extractors & OCR**](docs/extractors.md) | Builtin vs xberg extraction (100+ formats: docx, xlsx, pdf, html, csv) and OCR vision. |

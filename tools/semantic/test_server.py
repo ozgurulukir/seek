@@ -5,6 +5,9 @@ Run (server must not be running — TestClient is in-process):
 
 Or against a live server (degraded or full):
     SERVER_URL=http://127.0.0.1:8003 uv run --with requests tools/semantic/test_server.py
+
+Strict full-mode verification (run with the .venv interpreter):
+    REQUIRE_FULL_SEMANTIC=1 tools/semantic/.venv/bin/python tools/semantic/test_server.py
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from tagger import TagPipeline
 try:
     from fastapi.testclient import TestClient
 
-    from server import app
+    from server import app, pipeline
 
     client = TestClient(app)
     MODE = "in-process"
@@ -67,11 +70,20 @@ def _tag(payload):
 
 
 def test_health():
+    if MODE == "in-process" and os.environ.get("REQUIRE_FULL_SEMANTIC") == "1":
+        pipeline._get_lid()
+        pipeline._get_spacy("en")
+        pipeline._bertopic_available()
+        pipeline._get_yake()
     body = _health()
     check("health: status ok", body.get("status") == "ok")
     check("health: version present", "version" in body)
     check("health: models has 4 capabilities",
           set(body["models"]) == {"lid", "ner", "keyphrase", "topic"})
+    if os.environ.get("REQUIRE_FULL_SEMANTIC") == "1":
+        inactive = [name for name, active in body["models"].items() if not active]
+        check("health: full pipeline active", not inactive,
+              f"inactive capabilities: {', '.join(inactive)}")
 
 
 def test_tag_contract_shape():

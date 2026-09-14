@@ -1,5 +1,5 @@
 # Heavy NLP stack for the seek semantic tag service (full pipeline).
-# Installed by setup.sh into tools/semantic/.venv.
+# Installed by setup.sh/setup.ps1 into tools/semantic/.venv.
 # The service still boots without these (degraded mode, keyphrases only)
 # via `uv run tools/semantic/server.py` (PEP 723 inline dependencies).
 

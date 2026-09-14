@@ -84,8 +84,15 @@ uv run tools/xberg_server/server.py
 # Degraded mode (keyphrases only, no setup):
 uv run tools/semantic/server.py
 # Full pipeline (LID + NER + keyphrases + topics) — see docs/semantic.md:
-tools/semantic/setup.sh && source tools/semantic/.venv/bin/activate && \
-  SEMANTIC_WARMUP=1 python tools/semantic/server.py
+tools/semantic/setup.sh
+SEMANTIC_WARMUP=1 tools/semantic/.venv/bin/python tools/semantic/server.py
+```
+
+```powershell
+# Windows PowerShell full pipeline:
+tools/semantic/setup.ps1
+$env:SEMANTIC_WARMUP="1"
+& tools/semantic/.venv/Scripts/python.exe tools/semantic/server.py
 ```
 
 The xberg backend is useful for rich document conversion, but `seek` refuses

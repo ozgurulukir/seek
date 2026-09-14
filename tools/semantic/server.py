@@ -21,13 +21,18 @@ Design notes (D1-D9):
     seek works fully without it.
   - We do not host the model runtime by default. Run this file with
     ``uv run`` (PEP 723, light deps) for a degraded pipeline, or run
-    ``setup.sh`` first to install the heavy models (spaCy / BERTopic /
+    ``setup.sh`` or ``setup.ps1`` first to install the heavy models (spaCy / BERTopic /
     fasttext LID) into a local ``.venv`` for the full pipeline.
   - Local-first: binds to 127.0.0.1 only (override with SEMANTIC_HOST).
 
 Run:
     uv run tools/semantic/server.py            # degraded (YAKE only)
-    tools/semantic/setup.sh && uv run tools/semantic/server.py   # full
+    tools/semantic/setup.sh                    # Unix full-mode setup
+    tools/semantic/setup.ps1                   # Windows full-mode setup
+    SEMANTIC_WARMUP=1 tools/semantic/.venv/bin/python tools/semantic/server.py
+
+Do not use ``uv run server.py`` for full mode: PEP 723 intentionally creates
+the lightweight degraded environment and does not use ``.venv``.
 
 Endpoints:
     GET  /health   -> {"status": "ok", "models": {...}}

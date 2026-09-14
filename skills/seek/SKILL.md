@@ -274,6 +274,7 @@ seek search "query" \
 - [Filters](references/filters.md) — repo/collection, lang, doc-type, date range, chunk-type, path, workspace, sort, query-mode
 - [Collection Types](references/collection-types.md) — code, markdown, claude, codex, images, pdf, documents, parser
 - [OCR Reference](references/ocr.md) — local Ollama/GLM-OCR quickstart, privacy boundary, compatibility, and troubleshooting
+- [Semantic Service](references/semantic.md) — degraded vs full local NLP setup, health verification, and backfill
 - [Service](references/service.md) — background periodic sync+embed service
 - [Hooks](references/hooks.md) — Claude Code and Codex auto-indexing hooks
 - [Troubleshooting](references/troubleshooting.md) — no results, API errors, index issues

@@ -159,14 +159,37 @@ uv run tools/semantic/server.py
 
 **Full pipeline (LID + NER + keyphrases + topics):**
 ```bash
-tools/semantic/setup.sh                  # one-time: venv + models
-source tools/semantic/.venv/bin/activate
-SEMANTIC_WARMUP=1 python tools/semantic/server.py   # eager model load (recommended)
+# Linux/macOS
+tools/semantic/setup.sh
+SEMANTIC_WARMUP=1 tools/semantic/.venv/bin/python tools/semantic/server.py
 ```
-Run `setup.sh` once. Model weights are downloaded on first run, not
+
+```powershell
+# Windows PowerShell
+tools/semantic/setup.ps1
+$env:SEMANTIC_WARMUP="1"
+& tools/semantic/.venv/Scripts/python.exe tools/semantic/server.py
+```
+Run the setup script for your platform once. Model weights are downloaded by
+the setup/bootstrap process, not
 vendored into the repo (D9). `SEMANTIC_WARMUP=1` loads heavy models at
 startup so the first indexed document already has topics/NER/LID; without
 it they load lazily on the first request.
+
+Do not start full mode with `uv run tools/semantic/server.py`: the PEP 723
+metadata intentionally creates a separate lightweight environment containing
+only YAKE. Use the `.venv` Python shown above. To fail fast when any full-mode
+capability is unavailable, run `test_server.py` with
+`REQUIRE_FULL_SEMANTIC=1` in that same environment.
+
+```bash
+REQUIRE_FULL_SEMANTIC=1 tools/semantic/.venv/bin/python tools/semantic/test_server.py
+```
+
+```powershell
+$env:REQUIRE_FULL_SEMANTIC="1"
+& tools/semantic/.venv/Scripts/python.exe tools/semantic/test_server.py
+```
 
 The Turkish spaCy model (`tr_core_news_sm`) is optional — only published
 for spaCy 3.4–3.5; on newer spaCy the service falls back to the
