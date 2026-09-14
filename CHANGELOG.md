@@ -3,6 +3,18 @@
 All notable changes to `seek` are documented here. This follows
 [Keep a Changelog](https://keepachangelog.com/) conventions.
 
+## [0.5.5] - 2026-09-14
+
+### Fixed
+
+- Rebuild the vector index with the new embedding dimension before re-embedding
+  during an explicitly allowed vector-space migration.
+- Preserve and restore the searchable index state when migration or reindexing
+  fails, including vector metadata, FTS entries, fast fields, and legacy NULL
+  document metadata.
+- Keep degraded embedding behavior intact for already-matching profiles and
+  intentionally skipped image chunks.
+
 ## [Unreleased]
 
 ### Added
