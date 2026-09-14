@@ -169,6 +169,19 @@ func (s *CollectionService) Reindex(ctx context.Context, name string, opts Reind
 	}
 
 	vectorSpaceChanged := false
+	var backup *store.EmbeddingSpaceBackup
+	if s.cfg != nil && s.cfg.Config.Embedding.Model != "" && opts.AllowVectorSpaceChange {
+		needsReset, err := s.embeddingResetNeeded(ctx)
+		if err != nil {
+			return ReindexResult{}, err
+		}
+		if needsReset {
+			backup, err = s.store.BackupEmbeddingSpace(ctx)
+			if err != nil {
+				return ReindexResult{}, fmt.Errorf("backup embedding space: %w", err)
+			}
+		}
+	}
 	if s.cfg != nil && s.cfg.Config.Embedding.Model != "" {
 		changed, err := s.clearProfileOnMismatch(ctx, col.ID, name, opts.AllowVectorSpaceChange, true)
 		if err != nil {
@@ -182,7 +195,25 @@ func (s *CollectionService) Reindex(ctx context.Context, name string, opts Reind
 		VectorIndex: true,
 	}, log)
 	if err != nil {
+		if vectorSpaceChanged {
+			if restoreErr := s.store.RestoreEmbeddingSpace(ctx, backup); restoreErr != nil {
+				return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, fmt.Errorf("%w; restore embedding space: %v", err, restoreErr)
+			}
+		}
 		return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, err
+	}
+	if vectorSpaceChanged {
+		pending, pendingErr := s.store.GetChunksWithoutEmbeddingForCollectionContext(ctx, col.ID, false)
+		required := s.requiredPendingEmbeddings(pending)
+		if pendingErr != nil || required > 0 {
+			if pendingErr == nil {
+				pendingErr = fmt.Errorf("%d supported chunks remain without embeddings", required)
+			}
+			if restoreErr := s.store.RestoreEmbeddingSpace(ctx, backup); restoreErr != nil {
+				return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, fmt.Errorf("embedding rebuild incomplete: %w; restore embedding space: %v", pendingErr, restoreErr)
+			}
+			return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, fmt.Errorf("embedding rebuild incomplete: %w", pendingErr)
+		}
 	}
 	return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, nil
 }
@@ -206,6 +237,20 @@ func (s *CollectionService) ReindexAll(ctx context.Context, opts ReindexOptions,
 	// One result per collection, each carrying its own sync report, so the CLI
 	// can print a per-collection summary.
 	results := make([]ReindexResult, 0, len(cols))
+	var backup *store.EmbeddingSpaceBackup
+	resetApplied := false
+	if s.cfg != nil && s.cfg.Config.Embedding.Model != "" {
+		needsReset, err := s.embeddingResetNeeded(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if needsReset {
+			backup, err = s.store.BackupEmbeddingSpace(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("backup embedding space: %w", err)
+			}
+		}
+	}
 	for _, col := range cols {
 		// A config without an embedding model skips profile validation — there
 		// is nothing to embed, so a keyword-only reindex is never blocked (the
@@ -214,17 +259,67 @@ func (s *CollectionService) ReindexAll(ctx context.Context, opts ReindexOptions,
 		if s.cfg != nil && s.cfg.Config.Embedding.Model != "" {
 			c, err := s.clearProfileOnMismatch(ctx, col.ID, col.Name, opts.AllowVectorSpaceChange, false)
 			if err != nil {
+				if len(results) > 0 {
+					if restoreErr := s.store.RestoreEmbeddingSpace(ctx, backup); restoreErr != nil {
+						return results, fmt.Errorf("%w; restore embedding space: %v", err, restoreErr)
+					}
+				}
 				return results, err
 			}
 			changed = c
+			resetApplied = resetApplied || changed
 		}
 		syncReport, err := s.pipeline.Sync(ctx, &col, pipeline.Options{Force: true, VectorIndex: true}, log)
 		if err != nil {
+			if restoreErr := s.store.RestoreEmbeddingSpace(ctx, backup); restoreErr != nil {
+				return results, fmt.Errorf("%w; restore embedding space: %v", err, restoreErr)
+			}
 			return results, err
 		}
 		results = append(results, ReindexResult{Report: syncReport, VectorSpaceChanged: changed})
 	}
+	if resetApplied {
+		pending, err := s.store.GetChunksWithoutEmbeddingContext(ctx, false)
+		required := s.requiredPendingEmbeddings(pending)
+		if err != nil || required > 0 {
+			if err == nil {
+				err = fmt.Errorf("%d supported chunks remain without embeddings", required)
+			}
+			if restoreErr := s.store.RestoreEmbeddingSpace(ctx, backup); restoreErr != nil {
+				return results, fmt.Errorf("embedding rebuild incomplete: %w; restore embedding space: %v", err, restoreErr)
+			}
+			return results, fmt.Errorf("embedding rebuild incomplete: %w", err)
+		}
+	}
 	return results, nil
+}
+
+func (s *CollectionService) requiredPendingEmbeddings(pending []store.Chunk) int {
+	if s.cfg != nil && s.cfg.Config.Embedding.IsMultimodal() {
+		return len(pending)
+	}
+	count := 0
+	for _, chunk := range pending {
+		if chunk.ChunkType != store.ChunkTypeImage {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *CollectionService) embeddingResetNeeded(ctx context.Context) (bool, error) {
+	status, err := s.store.ValidateEmbeddingProfile(ctx, store.ProfileFromConfig(s.cfg))
+	if err != nil {
+		return false, fmt.Errorf("validate embedding profile: %w", err)
+	}
+	if status != store.ProfileMismatch {
+		return false, nil
+	}
+	has, err := s.store.HasEmbeddedChunks(ctx)
+	if err != nil {
+		return false, fmt.Errorf("check embedded chunks: %w", err)
+	}
+	return has, nil
 }
 
 // clearProfileOnMismatch validates the stored embedding profile against the
@@ -273,10 +368,13 @@ func (s *CollectionService) clearProfileOnMismatch(ctx context.Context, colID in
 			"%w: stored embeddings were built with a different vector space; re-run with --allow-vector-space-change to clear and re-embed this collection, or reindex with: seek collection reindex --all --allow-vector-space-change",
 			store.ErrProfileMismatch)
 	}
-	// Clear the profile; the force re-embed below establishes the new vector
-	// space. Existing embeddings are rebuilt, never mixed.
-	if err := s.store.ClearEmbeddingProfile(ctx); err != nil {
-		return false, fmt.Errorf("clear embedding profile: %w", err)
+	// Clear every old embedding before the force re-embed below establishes the
+	// new vector space. The profile is store-global, so retaining embeddings in
+	// other collections would allow old and new vector spaces to be mixed if a
+	// later collection failed.
+	desiredProfile := store.ProfileFromConfig(s.cfg)
+	if err := s.store.ResetEmbeddingSpaceForProfile(ctx, desiredProfile); err != nil {
+		return false, fmt.Errorf("reset embedding space: %w", err)
 	}
 	return true, nil
 }

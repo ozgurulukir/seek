@@ -410,7 +410,7 @@ func indexCfg(t *testing.T, model string, dims int) *config.AppConfig {
 	}
 }
 
-func TestReindexProfileMismatchRefusesThenClears(t *testing.T) {
+func TestReindexProfileMismatchRefusesThenPreserves(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "note.md"), []byte("# Hello\n\nSome body."), 0o644); err != nil {
 		t.Fatal(err)
@@ -461,20 +461,21 @@ func TestReindexProfileMismatchRefusesThenClears(t *testing.T) {
 		t.Errorf("refused reindex changed the profile: %+v", stored)
 	}
 
-	// Opting into the vector-space change clears the profile and re-embeds.
+	// Without an embedding provider, opting in must fail without losing the old
+	// vector space.
 	res, err := svc.Reindex(context.Background(), "notes", ReindexOptions{AllowVectorSpaceChange: true}, discard)
-	if err != nil {
-		t.Fatalf("reindex with allow-change: %v", err)
+	if err == nil {
+		t.Fatal("reindex with unavailable embedding provider should fail")
 	}
 	if !res.VectorSpaceChanged {
-		t.Error("VectorSpaceChanged = false after clearing the profile")
+		t.Error("VectorSpaceChanged = false after attempted reset")
 	}
 	stored, err = rt.Store.GetEmbeddingProfile(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored != nil {
-		t.Errorf("profile should be cleared after reindex, got %+v", stored)
+	if stored == nil || stored.Model != "model-a" || stored.Dimensions != 384 {
+		t.Errorf("failed reindex did not preserve the old profile: %+v", stored)
 	}
 }
 
@@ -662,10 +663,11 @@ func TestReindexAllRecoversProfileMismatchSingle(t *testing.T) {
 		t.Fatalf("ReindexAll without allow-change = %v, want rejection", err)
 	}
 
-	// With the flag it clears the store-global profile and re-embeds.
+	// With the flag but no embedding provider, it fails and preserves the old
+	// store-wide vector space.
 	results, err := svc.ReindexAll(context.Background(), ReindexOptions{AllowVectorSpaceChange: true}, discard)
-	if err != nil {
-		t.Fatalf("ReindexAll with allow-change: %v", err)
+	if err == nil {
+		t.Fatal("ReindexAll with unavailable embedding provider should fail")
 	}
 	if len(results) != 1 {
 		t.Fatalf("ReindexAll results = %d, want 1", len(results))
@@ -677,8 +679,8 @@ func TestReindexAllRecoversProfileMismatchSingle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored != nil {
-		t.Errorf("profile should be cleared after ReindexAll, got %+v", stored)
+	if stored == nil || stored.Model != "model-a" || stored.Dimensions != 384 {
+		t.Errorf("failed ReindexAll did not preserve the old profile: %+v", stored)
 	}
 }
 
@@ -745,10 +747,10 @@ func TestReindexAllRecoversAcrossCollections(t *testing.T) {
 		t.Fatalf("collection-scoped reindex with other embedded = %v, want ErrProfileMismatch", err)
 	}
 
-	// --all recovers: clears the store-global profile and re-embeds all.
+	// --all without an embedding provider fails and restores all old vectors.
 	results, err := svc.ReindexAll(context.Background(), ReindexOptions{AllowVectorSpaceChange: true}, discard)
-	if err != nil {
-		t.Fatalf("ReindexAll with allow-change: %v", err)
+	if err == nil {
+		t.Fatal("ReindexAll with unavailable embedding provider should fail")
 	}
 	if len(results) != 2 {
 		t.Fatalf("ReindexAll results = %d, want 2", len(results))
@@ -766,8 +768,8 @@ func TestReindexAllRecoversAcrossCollections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored != nil {
-		t.Errorf("store-wide profile should be cleared after ReindexAll, got %+v", stored)
+	if stored == nil || stored.Model != "model-a" || stored.Dimensions != 384 {
+		t.Errorf("failed ReindexAll did not preserve the old profile: %+v", stored)
 	}
 }
 

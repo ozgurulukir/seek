@@ -589,9 +589,8 @@ func TestCollectionReindexCmd_NeitherNameNorAllRejected(t *testing.T) {
 
 // TestCollectionReindexCmd_AllRecoversProfileMismatch exercises the full CLI
 // recovery path: a store with a single collection whose stored embedding
-// profile mismatches the current config is recovered by
-// `seek collection reindex --all --allow-vector-space-change`, which clears the
-// store-global profile and re-embeds.
+// profile mismatches the current config refuses to discard vectors when the
+// embedding provider is unavailable.
 func TestCollectionReindexCmd_AllRecoversProfileMismatch(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "note.md"), []byte("# Hello\n\nSome body."), 0o644); err != nil {
@@ -632,14 +631,11 @@ func TestCollectionReindexCmd_AllRecoversProfileMismatch(t *testing.T) {
 	out := captureStdout(t, func() {
 		err = (&cmd.CollectionReindexCmd{All: true, AllowVectorSpaceChange: true}).Run(cfg)
 	})
-	if err != nil {
-		t.Fatalf("reindex --all --allow-vector-space-change = %v (output: %s)", err, out)
+	if err == nil {
+		t.Fatalf("reindex --all should fail without an embedding provider (output: %s)", out)
 	}
-	if !strings.Contains(out, "Reindexed \"notes\"") {
-		t.Errorf("reindex --all output should report the collection:\n%s", out)
-	}
-	if !strings.Contains(out, "Vector space changed") {
-		t.Errorf("reindex --all output should report the vector-space change:\n%s", out)
+	if !strings.Contains(err.Error(), "embedding rebuild incomplete") {
+		t.Errorf("reindex --all error should explain incomplete embedding rebuild: %v", err)
 	}
 
 	rt2, err := app.Open(cfg)
@@ -651,8 +647,8 @@ func TestCollectionReindexCmd_AllRecoversProfileMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored != nil {
-		t.Errorf("store-wide profile should be cleared after reindex --all, got %+v", stored)
+	if stored == nil || stored.Model != "model-a" || stored.Dimensions != 384 {
+		t.Errorf("failed reindex --all did not preserve the old profile: %+v", stored)
 	}
 }
 

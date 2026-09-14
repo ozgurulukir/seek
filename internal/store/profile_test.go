@@ -133,6 +133,174 @@ func TestClearEmbeddingProfile(t *testing.T) {
 	}
 }
 
+func TestResetEmbeddingSpaceClearsChunksProfileAndVectorIndex(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.ClaimEmbeddingProfile(ctx, testProfile("model-a", 3)); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	s.SetVectorIndex(newLinearIndex(3))
+	insertVecDoc(t, s, "doc", [][]float32{{0.1, 0.2, 0.3}})
+	if err := s.SyncVectorIndexContext(ctx); err != nil {
+		t.Fatalf("SyncVectorIndexContext: %v", err)
+	}
+	if s.vector() == nil || s.vector().Len() != 1 {
+		t.Fatalf("expected one vector before reset")
+	}
+
+	if err := s.ResetEmbeddingSpace(ctx); err != nil {
+		t.Fatalf("ResetEmbeddingSpace: %v", err)
+	}
+	if has, err := s.HasEmbeddedChunks(ctx); err != nil {
+		t.Fatalf("HasEmbeddedChunks: %v", err)
+	} else if has {
+		t.Error("expected all chunk embeddings to be cleared")
+	}
+	if stored, err := s.GetEmbeddingProfile(ctx); err != nil {
+		t.Fatalf("GetEmbeddingProfile: %v", err)
+	} else if stored != nil {
+		t.Errorf("expected nil profile after reset, got %v", stored)
+	}
+	if got := s.vector().Len(); got != 0 {
+		t.Errorf("vector index length after reset = %d, want 0", got)
+	}
+}
+
+func TestResetEmbeddingSpaceForProfileRebuildsIndexDimension(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	oldProfile := testProfile("model-a", 3)
+	if err := s.ClaimEmbeddingProfile(ctx, oldProfile); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	s.SetVectorIndex(newLinearIndex(3))
+	insertVecDoc(t, s, "doc", [][]float32{{0.1, 0.2, 0.3}})
+	if err := s.SyncVectorIndexContext(ctx); err != nil {
+		t.Fatalf("initial SyncVectorIndexContext: %v", err)
+	}
+
+	newProfile := testProfile("model-b", 5)
+	if err := s.ResetEmbeddingSpaceForProfile(ctx, newProfile); err != nil {
+		t.Fatalf("ResetEmbeddingSpaceForProfile: %v", err)
+	}
+	if err := s.vector().Add(42, []float32{0.1, 0.2, 0.3, 0.4, 0.5}); err != nil {
+		t.Fatalf("replacement index rejected new dimension: %v", err)
+	}
+	if err := s.vector().Add(43, []float32{0.1, 0.2, 0.3}); err == nil {
+		t.Fatal("replacement index accepted old dimension")
+	}
+}
+
+type clearFailVector struct {
+	*linearIndex
+}
+
+func (clearFailVector) Clear() error {
+	return errors.New("injected vector clear failure")
+}
+
+func TestResetEmbeddingSpacePreservesDatabaseWhenVectorClearFails(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	profile := testProfile("model-a", 3)
+	if err := s.ClaimEmbeddingProfile(ctx, profile); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	s.SetVectorIndex(&clearFailVector{linearIndex: newLinearIndex(3)})
+	insertVecDoc(t, s, "doc", [][]float32{{0.1, 0.2, 0.3}})
+
+	if err := s.ResetEmbeddingSpace(ctx); err == nil {
+		t.Fatal("ResetEmbeddingSpace succeeded despite vector clear failure")
+	}
+	if has, err := s.HasEmbeddedChunks(ctx); err != nil {
+		t.Fatalf("HasEmbeddedChunks: %v", err)
+	} else if !has {
+		t.Error("reset removed embeddings after vector clear failure")
+	}
+	stored, err := s.GetEmbeddingProfile(ctx)
+	if err != nil {
+		t.Fatalf("GetEmbeddingProfile: %v", err)
+	}
+	if stored == nil || stored.Fingerprint != profile.ComputeFingerprint() {
+		t.Errorf("profile after failed reset = %#v, want original profile", stored)
+	}
+}
+
+func TestRestoreEmbeddingSpaceRestoresFTSContent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.ClaimEmbeddingProfile(ctx, testProfile("model-a", 3)); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	s.SetVectorIndex(newLinearIndex(3))
+	insertVecDoc(t, s, "doc", [][]float32{{0.1, 0.2, 0.3}})
+	var documentID int64
+	if err := s.db.QueryRow(`SELECT id FROM documents LIMIT 1`).Scan(&documentID); err != nil {
+		t.Fatalf("document id: %v", err)
+	}
+	if err := s.UpsertFTS(documentID, "old title", "old searchable content"); err != nil {
+		t.Fatalf("old FTS: %v", err)
+	}
+	var collectionID int64
+	if err := s.db.QueryRowContext(ctx, `SELECT collection_id FROM documents WHERE id = ?`, documentID).Scan(&collectionID); err != nil {
+		t.Fatalf("collection id: %v", err)
+	}
+	// This represents a legacy image-only document: nullable document fields
+	// must survive a backup, and its fast fields are part of searchable state.
+	var imageDocumentID int64
+	if err := s.db.QueryRowContext(ctx, `INSERT INTO documents
+		(collection_id, path, title, content_hash, mtime, line_count, created_at, updated_at,
+		 metadata, semantic_fingerprint, semantic_status, semantic_basis, semantic_source_hash)
+		VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+		RETURNING id`, collectionID, "image-only.png").Scan(&imageDocumentID); err != nil {
+		t.Fatalf("insert legacy document: %v", err)
+	}
+	if err := s.UpsertFTS(imageDocumentID, "image title", "image searchable content"); err != nil {
+		t.Fatalf("image FTS: %v", err)
+	}
+	if err := s.FastFields().Set(imageDocumentID, "topic", "legacy"); err != nil {
+		t.Fatalf("image fast field: %v", err)
+	}
+	backup, err := s.BackupEmbeddingSpace(ctx)
+	if err != nil {
+		t.Fatalf("BackupEmbeddingSpace: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE chunks SET content = 'new content' WHERE document_id = ?`, documentID); err != nil {
+		t.Fatalf("change chunk: %v", err)
+	}
+	if err := s.UpsertFTS(documentID, "new title", "new searchable content"); err != nil {
+		t.Fatalf("new FTS: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM documents WHERE id = ?`, imageDocumentID); err != nil {
+		t.Fatalf("delete image document: %v", err)
+	}
+	if err := s.RestoreEmbeddingSpace(ctx, backup); err != nil {
+		t.Fatalf("RestoreEmbeddingSpace: %v", err)
+	}
+	var title, content string
+	if err := s.db.QueryRowContext(ctx, `SELECT title, content FROM documents_fts WHERE rowid = ?`, documentID).Scan(&title, &content); err != nil {
+		t.Fatalf("restored FTS: %v", err)
+	}
+	if title != "old title" || content != "old searchable content" {
+		t.Fatalf("restored FTS = %q/%q, want old snapshot", title, content)
+	}
+	var restoredImageTitle, restoredImageContent string
+	if err := s.db.QueryRowContext(ctx, `SELECT title, content FROM documents_fts WHERE rowid = ?`, imageDocumentID).
+		Scan(&restoredImageTitle, &restoredImageContent); err != nil {
+		t.Fatalf("restored image FTS: %v", err)
+	}
+	if restoredImageTitle != "image title" || restoredImageContent != "image searchable content" {
+		t.Fatalf("restored image FTS = %q/%q", restoredImageTitle, restoredImageContent)
+	}
+	value, err := s.FastFields().Get(imageDocumentID, "topic")
+	if err != nil {
+		t.Fatalf("restored image fast field: %v", err)
+	}
+	if value != "legacy" {
+		t.Fatalf("restored image fast field = %v, want legacy", value)
+	}
+}
+
 func TestSearchVectorProfileMismatchFailsFast(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
