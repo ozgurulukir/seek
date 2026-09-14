@@ -76,7 +76,7 @@ seek embed   # local Ollama/FastEmbed: generate embeddings now (auto → realtim
 
 ```bash
 seek status                  # list all collections
-seek parsers list            # list parser schemas and detection status
+seek advanced parsers list   # list parser schemas and detection status
 ```
 
 ## Binary not found

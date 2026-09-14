@@ -16,3 +16,5 @@ jobs:
         run: CGO_ENABLED=1 go vet -tags "fts5 sqlite_fts5" ./...
       - name: Gofmt
         run: test -z "$(gofmt -l cmd internal main.go)"
+      - name: Stale command check
+        run: bash scripts/check-stale-commands.sh

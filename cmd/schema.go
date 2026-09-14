@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/alecthomas/kong"
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/search"
 )
@@ -10,6 +11,15 @@ import (
 type SchemaCmd struct {
 	Show     bool `help:"Show the current schema"`
 	Validate bool `help:"Validate the schema against the database"`
+}
+
+// BeforeApply emits a stderr-only deprecation hint when `schema` is reached
+// through the legacy top-level path; the canonical `seek advanced schema`
+// path is silent. The Run logic below is shared unchanged with the advanced
+// group.
+func (c *SchemaCmd) BeforeApply(ctx *kong.Context) error {
+	deprecate(ctx, "schema", "seek advanced schema")
+	return nil
 }
 
 func (c *SchemaCmd) Run(cfg *config.AppConfig) error {

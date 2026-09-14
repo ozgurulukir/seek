@@ -66,13 +66,13 @@ seek search "hel" --autocomplete
 ## Text Analysis
 
 ```bash
-seek analyze "running" --lang en    # English stemming: [run]
-seek analyze "kitaplar" --lang tr   # Turkish stemming: [kitap]
+seek advanced analyze "running" --lang en # English stemming: [run]
+seek advanced analyze "kitaplar" --lang tr # Turkish stemming: [kitap]
 ```
 
 ## Schema
 
 ```bash
-seek schema --show      # Show field types and options
-seek schema --validate  # Validate schema against DB
+seek advanced schema --show   # Show field types and options
+seek advanced schema --validate # Validate schema against DB
 ```

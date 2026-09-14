@@ -1,5 +1,11 @@
 # Go source — always LF (gofmt/go build expect LF on all platforms)
 *.go text eol=lf
 
+# Golden help snapshots are compared byte-for-byte against LF-rendered output,
+# so they must stay LF (never CRLF) on every platform. Without this,
+# core.autocrlf=true turns them into CRLF on checkout and every TestHelpGolden_*
+# fails. top-level.txt is also the source of truth for the stale-commands check.
+testdata/help/*.txt text eol=lf
+
 # Auto-detect text vs binary for everything else
 * text=auto

@@ -1,0 +1,20 @@
+Usage: seek collection <command> [flags]
+
+Manage collections (list, show, rename, reindex)
+
+Flags:
+  -h, --help       Show context-sensitive help.
+      --version    Show version and exit.
+
+Commands:
+  collection list [flags]
+    List all collections with semantic coverage
+
+  collection show <name> [flags]
+    Show detailed information for one collection
+
+  collection rename <old> <new>
+    Rename a collection (index label only; source path unchanged)
+
+  collection reindex <name> [flags]
+    Rebuild a collection from its source files

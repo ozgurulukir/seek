@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/alecthomas/kong"
 	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/source/parserdef"
@@ -20,6 +21,15 @@ type ParsersCmd struct {
 
 // ParsersListCmd implements `seek parsers list`.
 type ParsersListCmd struct{}
+
+// BeforeApply emits a stderr-only deprecation hint when `parsers list` is
+// reached through the legacy top-level path; the canonical
+// `seek advanced parsers list` path is silent. The Run logic below is shared
+// unchanged with the advanced group.
+func (c *ParsersListCmd) BeforeApply(ctx *kong.Context) error {
+	deprecate(ctx, "parsers", "seek advanced parsers list")
+	return nil
+}
 
 func (c *ParsersListCmd) Run(cfg *config.AppConfig) error {
 	defs, err := parserdef.List()

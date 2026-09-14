@@ -212,8 +212,8 @@ seek service start | stop | status # manage periodic OS background sync service
 seek hooks install | uninstall     # install automatic conversation sync hooks
 seek doctor [--fix-permissions]    # audit & repair private data permissions (0700/0600)
 seek uninstall --dry-run           # remove service/hooks/cache/config (preview first!)
-seek analyze "<text>" --lang en|tr # tokenize and stem text
-seek parsers list                  # view parser schemas and detection status
+seek advanced analyze "<text>" --lang en|tr # tokenize and stem text
+seek advanced parsers list        # view parser schemas and detection status
 ```
 
 > **🔒 Source files are never modified.** No `seek` management command — `add`,
@@ -285,6 +285,22 @@ privacy:
                             # keyword search stays fully local either way
                             # (see: seek doctor → privacy / data egress)
 ```
+
+`seek config` prints the same file grouped into three profiles (the schema and
+file layout are unchanged — nothing is renamed or dropped):
+
+- **core** — `search`, `filters`, `aggregations`, `privacy`, `chunk`, plus the
+  runtime `db_path` / `cache_dir`.
+- **local-semantic** — `embedding` (incl. `vl_base_url` / `multimodal`),
+  `rerank`, `semantic`.
+- **document-extras** — `ocr`, `extractor` (`backend` / `xberg_base_url`).
+
+Advanced-only knobs — `vector_index` (backend + HNSW tuning) and `compression`
+—are **not** written into a freshly-created default config. Show them with
+`seek config --advanced`; the plain view prints a hint when any are present.
+`seek doctor --verbose` additionally prints the fully resolved config (advanced
+knobs + every applied default) as part of the health check. The plain `seek
+config` / `seek doctor` output never rewrites or drops your config file.
 
 ---
 

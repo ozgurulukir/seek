@@ -1,0 +1,100 @@
+Usage: seek <command> [flags]
+
+Personal document search engine — BM25 + vector hybrid search
+
+Flags:
+  -h, --help       Show context-sensitive help.
+      --version    Show version and exit.
+
+Commands:
+  add [<path>] [flags]
+    Add a collection to index
+
+  rm <name> [flags]
+    Remove a collection
+
+  collection list [flags]
+    List all collections with semantic coverage
+
+  collection show <name> [flags]
+    Show detailed information for one collection
+
+  collection rename <old> <new>
+    Rename a collection (index label only; source path unchanged)
+
+  collection reindex <name> [flags]
+    Rebuild a collection from its source files
+
+  sync [<collection>] [flags]
+    Sync all collections (incremental)
+
+  embed [flags]
+    Generate embeddings (batch or realtime)
+
+  search <query> [flags]
+    Search across collections
+
+  analyze <text> [flags]
+    Analyze text (tokenize, stem)
+
+  status [flags]
+    Show index status
+
+  service start [flags]
+    Start periodic sync (with in-process embedding)
+
+  service stop
+    Stop periodic sync service
+
+  service status
+    Show service status
+
+  hooks install [flags]
+    Install seek hooks into AI tools
+
+  hooks uninstall [flags]
+    Remove seek hooks from AI tools
+
+  hooks status
+    Show installed hook health and recent activity
+
+  hooks doctor
+    Diagnose hook installation and binary resolution
+
+  auth login
+    Configure API key
+
+  auth status
+    Show auth status
+
+  config [flags]
+    Show or edit config
+
+  advanced schema [flags]
+    Show or validate schema
+
+  advanced parsers list
+    List all available parser schemas
+
+  advanced analyze <text> [flags]
+    Analyze text (tokenize, stem)
+
+  schema [flags]
+    Show or validate schema
+
+  doctor [flags]
+    Check and repair local installation (permissions)
+
+  uninstall [flags]
+    Remove seek service, hooks, cache, and config (--dry-run first)
+
+  parsers list
+    List all available parser schemas
+
+  fields [<name>] [flags]
+    Discover fast-field values and taxonomy (tags, topics, entities, etc.)
+
+  mcp [flags]
+    Run MCP (Model Context Protocol) server on stdio for AI agents
+
+Run "seek <command> --help" for more information on a command.

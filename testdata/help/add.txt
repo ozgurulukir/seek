@@ -1,0 +1,35 @@
+Usage: seek add [<path>] [flags]
+
+Add a collection to index
+
+Arguments:
+  [<path>]    Directory to index
+
+Flags:
+  -h, --help              Show context-sensitive help.
+      --version           Show version and exit.
+
+  -n, --name=STRING       Name of the collection (defaults to folder name)
+  -p, --pattern=STRING    Glob pattern for markdown files (default: **/*.md)
+      --type=STRING       Collection type: markdown|code|documents|pdf|images
+      --agent=STRING      Agent: claude|codex|opencode|copilot|zed|hermes
+                          (claude/codex are native)
+      --claude            Add Claude Code conversations (~/.claude/projects/)
+      --codex             Add Codex conversations (~/.codex/)
+      --images            Add an image directory (png/jpg/webp)
+      --pdf               Add a PDF directory (rasterized for VL embedding)
+      --code              Add a source code repository directory (Go, Rust,
+                          Python, TS/JS, etc)
+      --documents         Add a documents directory via the extraction backend
+                          (docx/xlsx/pptx/epub/html/...)
+      --docs              Shortcut alias for --documents
+      --parser=STRING     Add a schema-driven parser collection (e.g. opencode,
+                          copilot-cli, zed)
+      --opencode          Shortcut for --parser opencode
+      --copilot           Shortcut for --parser copilot-cli
+      --zed               Shortcut for --parser zed
+      --hermes            Shortcut for --parser hermes (Hermes Agent state.db)
+      --claude-schema     Shortcut for --parser claude (schema-driven,
+                          text-only)
+      --codex-schema      Shortcut for --parser codex (schema-driven, text-only)
+      --backend=STRING    Override the extraction backend (builtin|xberg)

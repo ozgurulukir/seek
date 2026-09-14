@@ -30,6 +30,7 @@ var cli struct {
 	Hooks      cmd.HooksCmd      `cmd:"" help:"Install/remove hooks for AI tools"`
 	Auth       cmd.AuthCmd       `cmd:"" help:"Manage API authentication"`
 	Config     cmd.ConfigCmd     `cmd:"" help:"Show or edit config"`
+	Advanced   cmd.AdvancedCmd   `cmd:"" help:"Advanced commands (schema, parsers, analyze)"`
 	Schema     cmd.SchemaCmd     `cmd:"" help:"Show or validate schema"`
 	Doctor     cmd.DoctorCmd     `cmd:"" help:"Check and repair local installation (permissions)"`
 	Uninstall  cmd.UninstallCmd  `cmd:"" help:"Remove seek service, hooks, cache, and config (--dry-run first)"`

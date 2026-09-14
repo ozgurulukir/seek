@@ -90,7 +90,7 @@ seek add --parser <name>       # any parser schema by name
 ### Listing available schemas
 
 ```bash
-seek parsers list          # shows all schemas, detection status, linked collections
+seek advanced parsers list # shows all schemas, detection status, linked collections
 ```
 
 ### User overrides

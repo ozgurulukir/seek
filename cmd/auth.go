@@ -186,11 +186,14 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 	savedCfg.Embedding.Multimodal = multimodal
 	savedCfg.Embedding.VLBaseURL = vlBaseURL
 
-	if err := config.Save(savedCfg); err != nil {
+	// Auth writes credentials through the shared config service so there is one
+	// write path for both auth and config.
+	svc := config.NewService()
+	if err := svc.Write(savedCfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 
-	fmt.Printf("\nSaved to %s\n", cfg.ConfigPath())
+	fmt.Printf("\nSaved to %s\n", svc.Path())
 	fmt.Printf("  Provider:   %s\n", providers[choice].Name)
 	fmt.Printf("  Base URL:   %s\n", baseURL)
 	fmt.Printf("  Model:      %s\n", model)

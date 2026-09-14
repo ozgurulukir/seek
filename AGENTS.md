@@ -161,13 +161,13 @@ seek sync                    # incremental sync
 seek sync <collection> --path <p>   # security guard: validate <p> inside the collection, then sync the WHOLE collection (not a scope filter)
 seek embed                   # generate embeddings (realtime or batch)
 seek search "<query>" [--lex] [--vec] [-l N] [--collection ...] [--aggs ...]
-seek analyze "<text>"        # tokenize + stem
+seek advanced analyze "<text>"  # tokenize + stem
 seek collection list         # list collections with semantic coverage
 seek collection show <name>  # detail view (type, path, pattern, counts, semantic coverage)
 seek collection rename <old> <new>   # index label only; source path unchanged
 seek collection reindex <name> [--semantic-only]   # full rebuild, or semantic fast-field backfill
-seek schema --show|--validate
-seek parsers list            # list parser schemas + detection status
+seek advanced schema --show|--validate
+seek advanced parsers list   # list parser schemas + detection status
 seek config                  # show/edit config
 seek auth login|status       # configure/show embedding provider
 seek service|hooks           # periodic sync+embed service management

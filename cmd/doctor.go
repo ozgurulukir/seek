@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
@@ -21,6 +22,7 @@ import (
 // from older versions leak it to other local users.
 type DoctorCmd struct {
 	FixPermissions bool `help:"Tighten private data permissions (dirs 0700, files 0600)." xor:"action"`
+	Verbose        bool `help:"Also print the effective resolved config (advanced knobs + applied defaults)"`
 }
 
 // privatePath is one seek-owned path with the permissions it should have.
@@ -92,6 +94,12 @@ func fixPermissions(paths []privatePath) ([]string, []error) {
 func (c *DoctorCmd) Run(cfg *config.AppConfig) error {
 	c.reportPrivacy(cfg)
 	c.reportEmbedding(cfg)
+	c.reportServices(cfg)
+	// The effective-defaults block is opt-in via --verbose; when unset the
+	// output below is byte-for-byte unchanged.
+	if c.Verbose {
+		c.reportEffectiveDefaults(cfg)
+	}
 
 	loose, err := checkPermissions(cfg)
 	if err != nil {
@@ -213,6 +221,40 @@ func (c *DoctorCmd) reportEmbedding(cfg *config.AppConfig) {
 	}
 	fmt.Printf("  profile: %s/%d, STALE — config wants %s/%d\n", stored.Model, stored.Dimensions, desired.Model, desired.Dimensions)
 	fmt.Printf("  fix: reindex with: seek rm <collection> && seek add && seek embed -f\n")
+}
+
+// reportServices prints the optional-services matrix: each of reranker,
+// semantic, OCR/VL, and xberg is classified as disabled|ready|unavailable|
+// blocked from the resolved config (config.ServiceStatuses). It is additive to
+// the privacy and embedding reports and runs on the default (non-verbose) path,
+// so "seek doctor" reports every optional service's status.
+//
+// Readiness is config-derived — no endpoint is probed — so the matrix is fast
+// and deterministic. The core keyword flow (BM25/FTS search; markdown/code/
+// pdf/images add+sync) needs none of these; xberg is the one exception, and
+// only when it is explicitly selected (extractor.backend=xberg / --backend
+// xberg), which is an explicit user request rather than a core-flow dependency.
+func (c *DoctorCmd) reportServices(cfg *config.AppConfig) {
+	fmt.Println("optional services:")
+	for _, s := range config.ServiceStatuses(cfg) {
+		fmt.Printf("  %-8s %-11s %s\n", s.Name, string(s.Status), s.Detail)
+	}
+}
+
+// reportEffectiveDefaults prints the resolved config grouped by profile,
+// including the advanced-only knobs (vector index / compression) and every
+// default that applyFallbacks filled in. It is the --verbose half of doctor and
+// never runs on the default (non-verbose) path.
+func (c *DoctorCmd) reportEffectiveDefaults(cfg *config.AppConfig) {
+	fmt.Println("\neffective config (resolved values incl. advanced knobs + applied defaults):")
+	for _, p := range config.Group(cfg, true) {
+		fmt.Printf("  %s — %s\n", p.Title, p.Summary)
+		for _, block := range p.Sections {
+			for _, line := range strings.Split(strings.TrimRight(block, "\n"), "\n") {
+				fmt.Printf("    %s\n", line)
+			}
+		}
+	}
 }
 
 // modeLabel maps a config embedding.mode value to its resolved behavior.

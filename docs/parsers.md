@@ -6,7 +6,7 @@
 
 ## 🤖 Built-in Parser Schemas
 
-Run `seek parsers list` to check automatic discovery status:
+Run `seek advanced parsers list` to check automatic discovery status:
 
 | Schema | Driver | Default Source Path | Description |
 |---|---|---|---|

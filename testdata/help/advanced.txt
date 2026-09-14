@@ -1,0 +1,17 @@
+Usage: seek advanced <command> [flags]
+
+Advanced commands (schema, parsers, analyze)
+
+Flags:
+  -h, --help       Show context-sensitive help.
+      --version    Show version and exit.
+
+Commands:
+  advanced schema [flags]
+    Show or validate schema
+
+  advanced parsers list
+    List all available parser schemas
+
+  advanced analyze <text> [flags]
+    Analyze text (tokenize, stem)

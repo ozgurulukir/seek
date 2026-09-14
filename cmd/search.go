@@ -20,35 +20,34 @@ type SearchCmd struct {
 	Vec   bool   `help:"Vector semantic search only"`
 	Limit int    `short:"l" default:"10" help:"Max results"`
 
-	// New filter flags
-	Collection string   `help:"Filter by collection name"`
-	Repo       string   `help:"Filter by repository or collection name (alias for --collection)"`
-	DocType    string   `help:"Filter by document type (markdown, claude, codex, images, pdf, documents, parser, code)"`
-	Lang       string   `help:"Filter code documents by programming language (e.g. go, python, typescript)"`
-	After      string   `help:"Filter documents after this date (RFC3339)"`
-	Before     string   `help:"Filter documents before this date (RFC3339)"`
-	ChunkType  string   `help:"Filter by chunk type (text, image)"`
-	Path       string   `help:"Filter by path pattern (GLOB)"`
-	Workspace  string   `help:"Filter parser collections by workspace directory (fast field)"`
-	Field      []string `help:"Filter by fast field name:value (e.g. topics:concurrency, entities:ORG:OpenAI, language:en, repo:myproject)"`
-	Context    int      `short:"C" default:"0" help:"Number of surrounding chunks before and after to expand context"`
+	// Default surface: the primary query -> filter -> run flow shown directly
+	// in `search --help`. Everything below stays ungrouped so kong renders it
+	// under the "Flags:" section.
+	Collection string `help:"Filter by collection name"`
+	Lang       string `help:"Filter code documents by programming language (e.g. go, python, typescript)"`
+	Path       string `help:"Filter by path pattern (GLOB)"`
+	Context    int    `short:"C" default:"0" help:"Number of surrounding chunks before and after to expand context"`
+	JSON       bool   `help:"Emit machine-readable JSON instead of human-formatted output"`
 
-	// Aggregation flags
-	Aggs []string `help:"Aggregations to run (e.g., type:terms, created_at:histogram:month)"`
-
-	// Query mode
-	QueryMode string `help:"Query mode: raw or parsed" default:""`
-
-	// Sorting
-	SortBy    string `help:"Sort results by field (e.g., created_at, line_count)"`
-	SortOrder string `help:"Sort order: asc or desc" default:"desc"`
-
-	// Analysis
-	Analyze         bool   `help:"Analyze query text (tokenize, stem) and exit"`
-	AnalyzeLang     string `help:"Language for analysis (en, tr); defaults to search.analyze_lang in config, then en"`
-	Autocomplete    bool   `help:"Show autocomplete suggestions for the query prefix"`
-	AutocompleteMax int    `help:"Max autocomplete suggestions" default:"10"`
-	JSON            bool   `help:"Emit machine-readable JSON instead of human-formatted output"`
+	// Advanced surface: grouped under an "Advanced" help section via kong's
+	// `group` tag (progressive disclosure, plan C3). kong only reorganizes help
+	// visibility here — no flag is hidden, removed, or renamed, and the flags
+	// keep working exactly as before.
+	Repo            string   `group:"Advanced" help:"Filter by repository or collection name (alias for --collection)"`
+	DocType         string   `group:"Advanced" help:"Filter by document type (markdown, claude, codex, images, pdf, documents, parser, code)"`
+	After           string   `group:"Advanced" help:"Filter documents after this date (RFC3339)"`
+	Before          string   `group:"Advanced" help:"Filter documents before this date (RFC3339)"`
+	ChunkType       string   `group:"Advanced" help:"Filter by chunk type (text, image)"`
+	Workspace       string   `group:"Advanced" help:"Filter parser collections by workspace directory (fast field)"`
+	Field           []string `group:"Advanced" help:"Filter by fast field name:value (e.g. topics:concurrency, entities:ORG:OpenAI, language:en, repo:myproject)"`
+	Aggs            []string `group:"Advanced" help:"Aggregations to run (e.g., type:terms, created_at:histogram:month)"`
+	QueryMode       string   `group:"Advanced" help:"Query mode: raw or parsed" default:""`
+	SortBy          string   `group:"Advanced" help:"Sort results by field (e.g., created_at, line_count)"`
+	SortOrder       string   `group:"Advanced" help:"Sort order: asc or desc" default:"desc"`
+	Analyze         bool     `group:"Advanced" help:"Analyze query text (tokenize, stem) and exit"`
+	AnalyzeLang     string   `group:"Advanced" help:"Language for analysis (en, tr); defaults to search.analyze_lang in config, then en"`
+	Autocomplete    bool     `group:"Advanced" help:"Show autocomplete suggestions for the query prefix"`
+	AutocompleteMax int      `group:"Advanced" help:"Max autocomplete suggestions" default:"10"`
 }
 
 func (c *SearchCmd) Run(cfg *config.AppConfig) (err error) {

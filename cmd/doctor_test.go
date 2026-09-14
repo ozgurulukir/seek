@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -192,5 +193,174 @@ func TestDoctor_PrivacyReportOffline(t *testing.T) {
 	cmd := &DoctorCmd{FixPermissions: true}
 	if err := cmd.Run(cfg); err != nil {
 		t.Fatalf("DoctorCmd.Run offline: %v", err)
+	}
+}
+
+// statusFor returns the status of one service row by its stable key.
+func statusFor(t *testing.T, cfg *config.AppConfig, key string) config.ServiceStatus {
+	t.Helper()
+	for _, r := range config.ServiceStatuses(cfg) {
+		if r.Key == key {
+			return r.Status
+		}
+	}
+	t.Fatalf("service %q not found in %v", key, cfg)
+	return ""
+}
+
+// TestDoctor_ServiceStatusesDefaultAllDisabled verifies a fresh config (no
+// optional service enabled) reports every helper as disabled, in the fixed
+// order reranker, semantic, ocr/vl, xberg.
+func TestDoctor_ServiceStatusesDefaultAllDisabled(t *testing.T) {
+	cfg, _ := doctorFixture(t)
+	got := config.ServiceStatuses(cfg)
+	if len(got) != 4 {
+		t.Fatalf("got %d services, want 4", len(got))
+	}
+	wantKeys := []string{"reranker", "semantic", "ocr-vl", "xberg"}
+	for i, r := range got {
+		if r.Key != wantKeys[i] {
+			t.Errorf("service[%d] key = %q, want %q", i, r.Key, wantKeys[i])
+		}
+		if r.Status != config.ServiceDisabled {
+			t.Errorf("service %q default status = %q, want disabled", r.Key, r.Status)
+		}
+	}
+}
+
+func TestDoctor_ServiceStatusesReranker(t *testing.T) {
+	cfg, _ := doctorFixture(t)
+	cfg.Config.Rerank.Enabled = true
+	cfg.Config.Rerank.BaseURL = "https://rerank.example.com/v1"
+
+	if s := statusFor(t, cfg, "reranker"); s != config.ServiceReady {
+		t.Errorf("rerank remote, offline off = %q, want ready", s)
+	}
+	cfg.Config.Privacy.OfflineOnly = true
+	if s := statusFor(t, cfg, "reranker"); s != config.ServiceBlocked {
+		t.Errorf("rerank remote, offline on = %q, want blocked", s)
+	}
+
+	// Loopback reranker is allowed under offline_only.
+	cfg.Config.Privacy.OfflineOnly = false
+	cfg.Config.Rerank.BaseURL = "http://127.0.0.1:8010"
+	if s := statusFor(t, cfg, "reranker"); s != config.ServiceReady {
+		t.Errorf("rerank loopback, offline off = %q, want ready", s)
+	}
+	cfg.Config.Privacy.OfflineOnly = true
+	if s := statusFor(t, cfg, "reranker"); s != config.ServiceReady {
+		t.Errorf("rerank loopback, offline on = %q, want ready", s)
+	}
+}
+
+func TestDoctor_ServiceStatusesSemantic(t *testing.T) {
+	cfg, _ := doctorFixture(t)
+	cfg.Config.Semantic.Enabled = true
+	cfg.Config.Semantic.BaseURL = "http://127.0.0.1:8003" // loopback
+
+	if s := statusFor(t, cfg, "semantic"); s != config.ServiceReady {
+		t.Errorf("semantic loopback, offline off = %q, want ready", s)
+	}
+	cfg.Config.Privacy.OfflineOnly = true
+	if s := statusFor(t, cfg, "semantic"); s != config.ServiceReady {
+		t.Errorf("semantic loopback, offline on = %q, want ready", s)
+	}
+
+	// Remote semantic endpoint.
+	cfg.Config.Privacy.OfflineOnly = false
+	cfg.Config.Semantic.BaseURL = "https://semantic.example.com"
+	if s := statusFor(t, cfg, "semantic"); s != config.ServiceReady {
+		t.Errorf("semantic remote, offline off = %q, want ready", s)
+	}
+	cfg.Config.Privacy.OfflineOnly = true
+	if s := statusFor(t, cfg, "semantic"); s != config.ServiceBlocked {
+		t.Errorf("semantic remote, offline on = %q, want blocked", s)
+	}
+}
+
+func TestDoctor_ServiceStatusesOCRVL(t *testing.T) {
+	cfg, _ := doctorFixture(t)
+
+	// OCR enabled, remote endpoint, offline off → ready.
+	cfg.Config.OCR.Enabled = true
+	cfg.Config.OCR.APIKey = "key"
+	cfg.Config.OCR.BaseURL = "https://ocr.example.com"
+	if s := statusFor(t, cfg, "ocr-vl"); s != config.ServiceReady {
+		t.Errorf("ocr remote, offline off = %q, want ready", s)
+	}
+	cfg.Config.Privacy.OfflineOnly = true
+	if s := statusFor(t, cfg, "ocr-vl"); s != config.ServiceBlocked {
+		t.Errorf("ocr remote, offline on = %q, want blocked", s)
+	}
+
+	// OCR loopback under offline_only → ready.
+	cfg.Config.Privacy.OfflineOnly = false
+	cfg.Config.OCR.BaseURL = "http://127.0.0.1:9000"
+	cfg.Config.Privacy.OfflineOnly = true
+	if s := statusFor(t, cfg, "ocr-vl"); s != config.ServiceReady {
+		t.Errorf("ocr loopback, offline on = %q, want ready", s)
+	}
+
+	// VL (multimodal) enabled, remote default endpoint.
+	cfg.Config.Privacy.OfflineOnly = false
+	cfg.Config.OCR.Enabled = false
+	cfg.Config.OCR.APIKey = ""
+	cfg.Config.Embedding.Multimodal = true
+	cfg.Config.Embedding.APIKey = "key"
+	if s := statusFor(t, cfg, "ocr-vl"); s != config.ServiceReady {
+		t.Errorf("vl remote, offline off = %q, want ready", s)
+	}
+	cfg.Config.Privacy.OfflineOnly = true
+	if s := statusFor(t, cfg, "ocr-vl"); s != config.ServiceBlocked {
+		t.Errorf("vl remote, offline on = %q, want blocked", s)
+	}
+}
+
+func TestDoctor_ServiceStatusesXberg(t *testing.T) {
+	cfg, _ := doctorFixture(t)
+	cfg.Config.Extractor.Backend = "xberg"
+	cfg.Config.Extractor.XbergBaseURL = "http://127.0.0.1:8000"
+
+	if s := statusFor(t, cfg, "xberg"); s != config.ServiceReady {
+		t.Errorf("xberg, offline off = %q, want ready", s)
+	}
+	cfg.Config.Privacy.OfflineOnly = true
+	if s := statusFor(t, cfg, "xberg"); s != config.ServiceBlocked {
+		t.Errorf("xberg, offline on = %q, want blocked", s)
+	}
+}
+
+// TestDoctor_ServiceStatusesXbergDependencyNote documents the explicit-xberg
+// nuance: when xberg is selected and reachable, its detail states the
+// documents add/sync dependency; when it is not selected, it stays disabled.
+func TestDoctor_ServiceStatusesXbergDependencyNote(t *testing.T) {
+	cfg, _ := doctorFixture(t)
+
+	// Not selected → disabled, and the detail names the active backend.
+	cfg.Config.Extractor.Backend = "builtin"
+	for _, r := range config.ServiceStatuses(cfg) {
+		if r.Key == "xberg" && !strings.Contains(r.Detail, "builtin") {
+			t.Errorf("xberg disabled detail = %q, want it to mention builtin", r.Detail)
+		}
+	}
+
+	// Selected and reachable → ready, and the detail flags the dependency.
+	cfg.Config.Extractor.Backend = "xberg"
+	for _, r := range config.ServiceStatuses(cfg) {
+		if r.Key == "xberg" && !strings.Contains(r.Detail, "dependency") {
+			t.Errorf("xberg ready detail = %q, want it to flag the explicit dependency", r.Detail)
+		}
+	}
+}
+
+// TestDoctor_ServiceStatusesNeverProbes ensures the classification runs without
+// constructing clients or touching the network: a plain Run must succeed even
+// with xberg selected (which would otherwise try to health-check a server).
+func TestDoctor_RunReportsServices(t *testing.T) {
+	cfg, _ := doctorFixture(t)
+	cfg.Config.Extractor.Backend = "xberg"
+	cmd := &DoctorCmd{}
+	if err := cmd.Run(cfg); err != nil {
+		t.Fatalf("DoctorCmd.Run with xberg selected: %v", err)
 	}
 }

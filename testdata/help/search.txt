@@ -1,0 +1,46 @@
+Usage: seek search <query> [flags]
+
+Search across collections
+
+Arguments:
+  <query>    Search query
+
+Flags:
+  -h, --help                 Show context-sensitive help.
+      --version              Show version and exit.
+
+      --lex                  BM25 full-text search only
+      --vec                  Vector semantic search only
+  -l, --limit=10             Max results
+      --collection=STRING    Filter by collection name
+      --lang=STRING          Filter code documents by programming language (e.g.
+                             go, python, typescript)
+      --path=STRING          Filter by path pattern (GLOB)
+  -C, --context=0            Number of surrounding chunks before and after to
+                             expand context
+      --json                 Emit machine-readable JSON instead of
+                             human-formatted output
+
+Advanced
+  --repo=STRING            Filter by repository or collection name (alias for
+                           --collection)
+  --doc-type=STRING        Filter by document type (markdown, claude, codex,
+                           images, pdf, documents, parser, code)
+  --after=STRING           Filter documents after this date (RFC3339)
+  --before=STRING          Filter documents before this date (RFC3339)
+  --chunk-type=STRING      Filter by chunk type (text, image)
+  --workspace=STRING       Filter parser collections by workspace directory
+                           (fast field)
+  --field=FIELD,...        Filter by fast field name:value (e.g.
+                           topics:concurrency, entities:ORG:OpenAI, language:en,
+                           repo:myproject)
+  --aggs=AGGS,...          Aggregations to run (e.g., type:terms,
+                           created_at:histogram:month)
+  --query-mode=""          Query mode: raw or parsed
+  --sort-by=STRING         Sort results by field (e.g., created_at, line_count)
+  --sort-order="desc"      Sort order: asc or desc
+  --analyze                Analyze query text (tokenize, stem) and exit
+  --analyze-lang=STRING    Language for analysis (en, tr); defaults to
+                           search.analyze_lang in config, then en
+  --autocomplete           Show autocomplete suggestions for the query prefix
+  --autocomplete-max=10    Max autocomplete suggestions

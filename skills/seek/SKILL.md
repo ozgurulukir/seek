@@ -118,7 +118,7 @@ seek add --codex-schema  # Codex (text-only, schema-driven, no image extraction)
 seek add --parser <name> # any parser schema by name
 
 # List available parser schemas + detection status
-seek parsers list
+seek advanced parsers list
 ```
 
 ### Maintenance Commands
@@ -162,9 +162,9 @@ seek status
 # Remove a collection from the index (deletes all indexed documents and chunks)
 seek rm mycollection
 
-# Show or validate schema
-seek schema --show
-seek schema --validate
+# Show or validate schema (canonical: `seek advanced schema`)
+seek advanced schema --show
+seek advanced schema --validate
 ```
 
 No `seek` management command — `add`, `sync` (incl. `--path`), `embed`,
@@ -219,8 +219,11 @@ seek auth status
 # Show current config
 seek config
 
-# Open config in default editor ($EDITOR, defaults to vim)
+# Open config in your editor ($EDITOR, then $VISUAL, then a platform default)
 seek config --edit
+
+# Preview the editor command without launching anything
+seek config --edit --dry-run
 ```
 
 ### Discover Fast-Field Values & Taxonomy (`seek fields`)
