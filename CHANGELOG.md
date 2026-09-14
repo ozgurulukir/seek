@@ -3,6 +3,17 @@
 All notable changes to `seek` are documented here. This follows
 [Keep a Changelog](https://keepachangelog.com/) conventions.
 
+## [0.5.6] - 2026-09-14
+
+### Fixed
+
+- Prevent HNSW duplicate-node panics during forced re-embedding by deferring
+  live vector updates until the replacement graph is complete.
+- Build full vector-index replacements off to the side and publish them
+  atomically, preserving the previous usable graph when rebuilding fails.
+- Restore the previous SQLite embedding when an existing-vector update cannot
+  be reflected in HNSW, keeping persisted embeddings and vector search aligned.
+
 ## [0.5.5] - 2026-09-14
 
 ### Fixed
