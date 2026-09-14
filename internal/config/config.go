@@ -74,7 +74,7 @@ func (e EmbeddingConfig) EffectiveMode() string {
 // prefixes (Cohere input_type, Voyage, Jina task, Gemini task_type) are not
 // auto-detected; set task_prefix manually only when the provider documents
 // a text-prefix mode. Switching prefixes changes the vector space: re-embed
-// collections after enabling them (seek rm <collection> && seek add && seek embed -f).
+// collections after enabling them (seek collection reindex --all --allow-vector-space-change).
 func (e EmbeddingConfig) TaskPrefixes() (query, document string) {
 	query, document = e.TaskPrefix.Query, e.TaskPrefix.Document
 	if e.TaskPrefix.DisableAutoDetect {

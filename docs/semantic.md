@@ -45,19 +45,17 @@ model formats never leak into the contract):
 
 ## How seek consumes it
 
-Semantic enrichment works the same way across every text-bearing collection
-type — markdown, code, conversations (claude/codex), PDF, documents, and
-parser. There is no per-format support matrix. When
-`semantic.enabled: true` in `~/.config/seek/config.yaml` and the service is
-healthy, seek sends each document's chunks to `POST /tag` and stores four
-fast fields on the document:
+Semantic enrichment is two-tiered. Conversations (claude/codex), PDF, and
+documents are enriched during the regular `seek sync` pass. Markdown, code,
+and parser collections are not enriched during sync; they are brought to
+parity by the semantic backfill (`seek collection reindex <name>
+--semantic-only`), which re-enriches every document whose fingerprint is
+stale or absent. When `semantic.enabled: true` in
+`~/.config/seek/config.yaml` and the service is healthy, seek sends each
+document's chunks to `POST /tag` and stores four fast fields on the
+document:
 
 - `tags`, `topics`, `entities`, `language`
-
-Conversations, PDF, and documents are enriched during the regular
-`seek sync` pass. Markdown and code collections are brought to parity by the
-semantic backfill (`seek collection reindex <name> --semantic-only`), which
-re-enriches every document whose fingerprint is stale or absent.
 
 All four are filterable with the generic fast-field flag `--field
 <name>:<value>`, and facetable with `--aggs`:

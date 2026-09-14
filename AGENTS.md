@@ -103,7 +103,7 @@ embedding:
 
 - Text embeddings go to `base_url + /v1/embeddings` (OpenAI-compatible).
 - Multimodal (image+text) uses `VLClient`. It is enabled when `IsMultimodal()` is true — i.e. `multimodal: true`, or the model name contains `vl-embedding`/`multimodal`.
-- `dimensions` is **fixed at index time** (stored per-chunk). Changing model or dimensions requires re-indexing (`seek rm <collection>` then `seek add`).
+- `dimensions` is **fixed at index time** (stored per-chunk). Changing model or dimensions requires re-indexing (`seek collection reindex <collection> --allow-vector-space-change`).
 - **Never hardcode a provider endpoint** — everything must route through `base_url`/`vl_base_url` from config. The only exception is `DefaultVLEndpoint` as the DashScope fallback.
 
 ### OCR config (`ocr`)

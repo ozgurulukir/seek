@@ -347,4 +347,4 @@ vector_index:
 - Vector search uses HNSW by default and rebuilds a missing or corrupt persisted graph from SQLite embeddings. Linear scan is used only with `vector_index.backend: linear`; unknown backend names are configuration errors.
 - Chunk content is compressed with Zstd by default to reduce storage; uncompressed content remains readable
 - Query parsing is enabled by default; invalid syntax falls back to raw FTS5 MATCH automatically
-- Changing `model` or `dimensions` requires re-indexing: `seek rm <collection>` then `seek add`
+- Changing `model` or `dimensions` requires re-indexing: `seek collection reindex <collection> --allow-vector-space-change`

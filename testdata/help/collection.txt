@@ -16,5 +16,5 @@ Commands:
   collection rename <old> <new>
     Rename a collection (index label only; source path unchanged)
 
-  collection reindex <name> [flags]
+  collection reindex [<name>] [flags]
     Rebuild a collection from its source files

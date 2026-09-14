@@ -65,11 +65,9 @@ seek embed   # local Ollama/FastEmbed: generate embeddings now (auto → realtim
   seek embed --force  # local Ollama/FastEmbed
   ```
 - **After changing chunk size (`chunk.max_size`) or dimensions:**
-  Re-index collection so files are sliced into new chunk boundaries:
+  Re-index the collection so files are re-sliced and re-embedded:
   ```bash
-  seek rm <collection>
-  seek add <path> [--code|--documents|...]
-  seek embed --force          # local Ollama/FastEmbed
+  seek collection reindex <collection> --allow-vector-space-change
   ```
 
 ## Collection not found

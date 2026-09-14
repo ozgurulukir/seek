@@ -72,7 +72,7 @@ func printVectorSummary(db *store.Store, cfg *config.AppConfig) error {
 	}
 	state := "ready"
 	if stored.Fingerprint != desired.ComputeFingerprint() {
-		state = "stale (reindex with: seek rm <collection> && seek add && seek embed -f)"
+		state = "stale (reindex with: seek collection reindex --all --allow-vector-space-change)"
 	}
 	fmt.Printf("vectors: %s/%d, %s\n", stored.Model, stored.Dimensions, state)
 	return nil

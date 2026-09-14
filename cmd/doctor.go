@@ -220,7 +220,7 @@ func (c *DoctorCmd) reportEmbedding(cfg *config.AppConfig) {
 		return
 	}
 	fmt.Printf("  profile: %s/%d, STALE — config wants %s/%d\n", stored.Model, stored.Dimensions, desired.Model, desired.Dimensions)
-	fmt.Printf("  fix: reindex with: seek rm <collection> && seek add && seek embed -f\n")
+	fmt.Printf("  fix: reindex with: seek collection reindex --all --allow-vector-space-change\n")
 }
 
 // reportServices prints the optional-services matrix: each of reranker,

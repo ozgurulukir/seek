@@ -168,7 +168,7 @@ func (s *Store) crossValidateManifestProfile(ctx context.Context, metadata Vecto
 	if !has {
 		return nil
 	}
-	metadata.SetWarning(fmt.Sprintf("vector index fingerprint does not match embedding profile %s; reindex with: seek rm <collection> && seek add && seek embed -f", profileLabel(stored)))
+	metadata.SetWarning(fmt.Sprintf("vector index fingerprint does not match embedding profile %s; reindex with: seek collection reindex --all --allow-vector-space-change", profileLabel(stored)))
 	return nil
 }
 
@@ -320,6 +320,13 @@ func (s *Store) applyAlterStatements() error {
 		// means no enrichment has been recorded for the document.
 		`ALTER TABLE documents ADD COLUMN semantic_fingerprint TEXT`,
 		`ALTER TABLE documents ADD COLUMN semantic_status TEXT`,
+		// Fingerprint split into two SQL-comparable columns (card R3 / P2a):
+		// semantic_basis is the identity-only part (service/capability/schema)
+		// used as the coarse stale-selection key; semantic_source_hash mirrors
+		// documents.content_hash so a content change is detected SQL-side
+		// without reading chunks. NULL means never enriched (re-selected once).
+		`ALTER TABLE documents ADD COLUMN semantic_basis TEXT`,
+		`ALTER TABLE documents ADD COLUMN semantic_source_hash TEXT`,
 	}
 	for _, stmt := range alterStmts {
 		if err := s.execIgnoreDuplicate(stmt); err != nil {

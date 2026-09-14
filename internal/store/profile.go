@@ -189,7 +189,7 @@ func (s *Store) ClaimEmbeddingProfile(ctx context.Context, desired EmbeddingProf
 	if !has {
 		return s.overwriteEmbeddingProfile(ctx, desired)
 	}
-	return fmt.Errorf("%w: stored %s != desired %s; reindex with: seek rm <collection> && seek add && seek embed -f",
+	return fmt.Errorf("%w: stored %s != desired %s; reindex with: seek collection reindex --all --allow-vector-space-change",
 		ErrProfileMismatch, profileLabel(stored), profileLabel(&desired))
 }
 
@@ -229,7 +229,7 @@ func (s *Store) validateVectorProfile(ctx context.Context) error {
 	if !has {
 		return nil
 	}
-	return fmt.Errorf("%w: index was built with %s but config now wants %s; reindex with: seek rm <collection> && seek add && seek embed -f",
+	return fmt.Errorf("%w: index was built with %s but config now wants %s; reindex with: seek collection reindex --all --allow-vector-space-change",
 		ErrProfileMismatch, profileLabel(stored), profileLabel(s.desiredProfile))
 }
 

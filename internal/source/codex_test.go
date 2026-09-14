@@ -239,8 +239,12 @@ func TestParseDataURIInvalid(t *testing.T) {
 }
 
 func TestParseCodexFileWithImages(t *testing.T) {
-	// Redirect HOME so image writes go to a temp dir, not the user's real cache.
-	t.Setenv("HOME", t.TempDir())
+	// Redirect HOME (and, on Windows, USERPROFILE — os.UserHomeDir reads
+	// %USERPROFILE% there) so image writes go to a temp dir, not the user's
+	// real cache.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	// A user message with an input_image using a data URI.
 	lines := []string{
@@ -265,8 +269,12 @@ func TestParseCodexFileWithImages(t *testing.T) {
 }
 
 func TestScanCodexFilesNoDirectory(t *testing.T) {
-	// Set HOME to a temp dir with no .codex — should return empty, no error.
-	t.Setenv("HOME", t.TempDir())
+	// Set HOME (and, on Windows, USERPROFILE — os.UserHomeDir reads
+	// %USERPROFILE% there) to a temp dir with no .codex — should return empty,
+	// no error.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	files, err := ScanCodexFiles()
 	if err != nil {
 		t.Fatalf("ScanCodexFiles: %v", err)
@@ -277,8 +285,12 @@ func TestScanCodexFilesNoDirectory(t *testing.T) {
 }
 
 func TestParseCodexFileWithImages_EmptyTextWithImages(t *testing.T) {
-	// Redirect HOME so image writes go to a temp dir, not the user's real cache.
-	t.Setenv("HOME", t.TempDir())
+	// Redirect HOME (and, on Windows, USERPROFILE — os.UserHomeDir reads
+	// %USERPROFILE% there) so image writes go to a temp dir, not the user's
+	// real cache.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	// A 1x1 PNG data URI (70-byte PNG).
 	const pngDataURI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="

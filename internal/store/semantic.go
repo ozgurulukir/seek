@@ -87,17 +87,29 @@ type SemanticDocumentState struct {
 	Status      SemanticStatus
 }
 
-// GetStaleSemanticDocuments returns the documents in a collection whose stored
-// enrichment fingerprint differs from the desired one, or is absent (never
-// enriched). It is a single batched query — no N+1 — so a backfill pass can
-// select every stale document without per-document lookups.
-func (s *Store) GetStaleSemanticDocuments(ctx context.Context, collectionID int64, desiredFingerprint string) ([]SemanticDocumentState, error) {
+// GetStaleSemanticDocuments returns the documents in a collection that need
+// semantic re-enrichment, selected by a single batched query (no N+1). A
+// document is stale when any of these hold:
+//
+//   - identity/schema/capability changed: semantic_basis IS NULL OR semantic_basis != <desiredBasis>;
+//   - the last attempt errored: semantic_status = 'error' (guaranteed retry);
+//   - no source signal was recorded: semantic_source_hash IS NULL;
+//   - the source content changed: semantic_source_hash != documents.content_hash.
+//
+// <desiredBasis> is the identity-only basis (service/capability/schema, no
+// content). The content comparison reads documents.content_hash directly, so a
+// content change is detected without reading any chunks — the coarse selection
+// is one query, and the precise per-doc chunk comparison happens in the caller.
+func (s *Store) GetStaleSemanticDocuments(ctx context.Context, collectionID int64, desiredBasis string) ([]SemanticDocumentState, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, semantic_fingerprint, semantic_status
 		FROM documents
 		WHERE collection_id = ?
-		  AND (semantic_fingerprint IS NULL OR semantic_fingerprint != ?)`,
-		collectionID, desiredFingerprint)
+		  AND (semantic_basis IS NULL OR semantic_basis != ?
+		       OR semantic_status = 'error'
+		       OR semantic_source_hash IS NULL
+		       OR semantic_source_hash != documents.content_hash)`,
+		collectionID, desiredBasis)
 	if err != nil {
 		return nil, fmt.Errorf("select stale semantic documents: %w", err)
 	}
@@ -185,7 +197,16 @@ func (s *Store) GetSemanticStates(ctx context.Context, docIDs []int64) (map[int6
 // (e.g. SemanticStatusError on failure). A non-nil map (even empty) replaces
 // the stored fast fields, so callers can explicitly drop stale metadata when it
 // was actually recomputed to nothing.
-func (s *Store) UpdateSemanticState(ctx context.Context, docID int64, fingerprint string, status SemanticStatus, fastFields map[string]string) error {
+//
+// The three semantic columns are written together:
+//
+//   - semantic_fingerprint is the full fingerprint (identity + chunk-based
+//     content hash) used by the precise per-doc skip check;
+//   - semantic_basis is the identity-only fingerprint (no content) used as the
+//     coarse stale-selection key;
+//   - semantic_source_hash mirrors documents.content_hash so the stale query
+//     detects a content change SQL-side without reading chunks.
+func (s *Store) UpdateSemanticState(ctx context.Context, docID int64, fingerprint, basis, sourceHash string, status SemanticStatus, fastFields map[string]string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -195,8 +216,8 @@ func (s *Store) UpdateSemanticState(ctx context.Context, docID int64, fingerprin
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, `UPDATE documents SET semantic_fingerprint = ?, semantic_status = ? WHERE id = ?`,
-		fingerprint, string(status), docID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE documents SET semantic_fingerprint = ?, semantic_basis = ?, semantic_source_hash = ?, semantic_status = ? WHERE id = ?`,
+		fingerprint, basis, sourceHash, string(status), docID); err != nil {
 		return fmt.Errorf("update semantic state: %w", err)
 	}
 

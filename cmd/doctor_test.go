@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -95,6 +96,19 @@ func TestDoctor_FixPermissionsTightens(t *testing.T) {
 		t.Fatalf("fixed %d paths, want 6", len(fixed))
 	}
 
+	// On POSIX, fixPermissions tightens the mode bits; on Windows chmod is a
+	// no-op and os.Stat reports the default perm bits, so the mode assertions
+	// below are meaningless there. Assert the meaningful behavior on Windows:
+	// the fix left every path intact (no deletion or corruption).
+	if runtime.GOOS == "windows" {
+		for _, p := range loose {
+			if _, err := os.Stat(p.path); err != nil {
+				t.Errorf("fixPermissions broke %s: %v", p.path, err)
+			}
+		}
+		return
+	}
+
 	for _, path := range []string{
 		config.ConfigDir(),
 		cfg.CacheDir,
@@ -139,6 +153,21 @@ func TestDoctor_NeverWidensPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// On Windows chmod is a no-op and the perm bits are not meaningful, so the
+	// "stricter mode is not reported as loose / never widened" invariant cannot
+	// be exercised. Assert the meaningful behavior: the fix leaves the file
+	// intact and reports no errors.
+	if runtime.GOOS == "windows" {
+		if _, errs := fixPermissions(loose); len(errs) != 0 {
+			t.Fatalf("fixPermissions errors: %v", errs)
+		}
+		if _, err := os.Stat(tight); err != nil {
+			t.Errorf("fixPermissions broke %s: %v", tight, err)
+		}
+		return
+	}
+
 	for _, p := range loose {
 		if p.path == tight {
 			t.Error("0400 config reported as loose; repair must never widen permissions")

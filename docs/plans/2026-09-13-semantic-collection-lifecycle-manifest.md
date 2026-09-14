@@ -21,11 +21,10 @@ doğrulama kanıtlarını tek yerde toplar. Plan dosyasının kendisi
 
 ## Davranış özeti (belgelendiği haliyle)
 
-- Semantic enrichment her metin taşıyan koleksiyon türünde aynı çalışır
-  (markdown, code, conversations, PDF, documents, parser); per-format destek
-  matrisi yoktur.
-- Conversations/PDF/documents `seek sync` sırasında zenginleşir; markdown ve
-  code `seek collection reindex <name> --semantic-only` backfill'i ile kapsanır.
+- Semantic enrichment iki katmanlı çalışır; per-format destek matrisi yoktur:
+  - Conversations/PDF/documents `seek sync` sırasında zenginleşir.
+  - Markdown/code/parser sync sırasında zenginleşmez; `seek collection
+    reindex <name> --semantic-only` backfill'i ile kapsanır.
 - Servis kapalıysa sync başarılı olur (WARN), mevcut semantic fast field'lar
   silinmez, durum `stale`/`error` olur; sonraki backfill yeniden dener.
 - Backfill yalnız indekslenmiş chunk'lardan yeniden zenginleştirir; kaynak

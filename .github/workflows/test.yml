@@ -18,3 +18,55 @@ jobs:
         run: test -z "$(gofmt -l cmd internal main.go)"
       - name: Stale command check
         run: bash scripts/check-stale-commands.sh
+
+  # Windows runs the same suite as the Ubuntu job. It needs a CGO toolchain
+  # that can link go-fitz's bundled MuPDF archives; the Scoop/MSYS2 GCC ABI
+  # mismatches, so the Zig C toolchain is used (see AGENTS.md). The test suite
+  # is platform-aware (see R5): HOME/USERPROFILE, POSIX chmod bits, and hook
+  # quoting are all handled via runtime.GOOS.
+  build-test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install Zig toolchain
+        shell: pwsh
+        run: |
+          $version = "0.16.0"
+          $root = "C:\zig"
+          $url = "https://ziglang.org/download/$version/zig-windows-x86_64-$version.zip"
+          Write-Output "downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile "$root.zip"
+          Expand-Archive -Path "$root.zip" -DestinationPath $root -Force
+          "$root\zig-windows-x86_64-$version" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "$root\zig-windows-x86_64-$version\zig.exe" version
+      - name: Build
+        shell: pwsh
+        env:
+          CC: "zig cc"
+          CXX: "zig c++"
+          CGO_ENABLED: "1"
+        run: go build -tags "fts5 sqlite_fts5" -o seek.exe .
+      - name: Test
+        shell: pwsh
+        env:
+          CC: "zig cc"
+          CXX: "zig c++"
+          CGO_ENABLED: "1"
+        run: go test -tags "fts5 sqlite_fts5" ./...
+      - name: Vet
+        shell: pwsh
+        env:
+          CC: "zig cc"
+          CXX: "zig c++"
+          CGO_ENABLED: "1"
+        run: go vet -tags "fts5 sqlite_fts5" ./...
+      - name: Gofmt
+        shell: pwsh
+        run: |
+          $unformatted = gofmt -l cmd internal main.go third_party
+          if ($unformatted) {
+            throw "gofmt found unformatted files:`n$($unformatted -join '`n')"
+          }

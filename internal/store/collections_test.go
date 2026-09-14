@@ -128,10 +128,10 @@ func TestCollectionDetails(t *testing.T) {
 	if err := s.InsertChunk(doc2, 0, "b1", []float32{3, 4}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateSemanticState(ctx, doc1, "fp", SemanticStatusCurrent, nil); err != nil {
+	if err := s.UpdateSemanticState(ctx, doc1, "fp", "basis", "h1", SemanticStatusCurrent, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateSemanticState(ctx, doc2, "fp", SemanticStatusStale, nil); err != nil {
+	if err := s.UpdateSemanticState(ctx, doc2, "fp", "basis", "h2", SemanticStatusStale, nil); err != nil {
 		t.Fatal(err)
 	}
 

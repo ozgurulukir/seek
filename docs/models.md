@@ -21,7 +21,7 @@ Some embedding models are **asymmetric**: they expect search queries and indexed
 ¹ `text-embedding-v4` is Qwen3-Embedding based and works robustly without instructions; a retrieval instruction can improve short queries. Set it manually via `embedding.task_prefix.query` if you want it.
 
 > [!WARNING]
-> **Nomic Embeddings**: `nomic-embed-text` expects `search_query: ` / `search_document: ` input prefixes for retrieval. The Nomic Python SDK adds them automatically via its `task_type` parameter, but **OpenAI-compatible endpoints (including Ollama, vLLM, and Nomic's hosted `/v1/embeddings`) do not**. `seek` detects `nomic-embed*` model names and prepends the prefixes automatically (queries via `seek search`, documents via `seek embed`). If you indexed before this behavior existed, re-embed once: `seek rm <collection> && seek add && seek embed -f`.
+> **Nomic Embeddings**: `nomic-embed-text` expects `search_query: ` / `search_document: ` input prefixes for retrieval. The Nomic Python SDK adds them automatically via its `task_type` parameter, but **OpenAI-compatible endpoints (including Ollama, vLLM, and Nomic's hosted `/v1/embeddings`) do not**. `seek` detects `nomic-embed*` model names and prepends the prefixes automatically (queries via `seek search`, documents via `seek embed`). If you indexed before this behavior existed, re-embed once with `seek collection reindex <collection> --allow-vector-space-change` (this rebuilds the collection and re-embeds so the new prefixes take effect).
 
 ### Other models usable via custom OpenAI-compatible endpoints
 
@@ -57,7 +57,7 @@ Rules:
 
 - **Auto-detection**: empty fields are inferred from well-known model families — `nomic-embed*` → `search_query:`/`search_document:`, `*e5*` → `query:`/`passage:`, `bge-*-en` (v1) → retrieval instruction on queries only. `bge-m3`, OpenAI, DashScope text models, GTE, and Snowflake need no prefixes. Set `disable_auto_detect: true` to opt out entirely.
 - **Manual override wins field-by-field**: you can set only `query` and leave `document` to auto-detection.
-- **Re-embed after changing prefixes**: prefixes change the meaning of vectors. Run `seek rm <collection>`, `seek add`, and `seek embed -f` after enabling or changing them — mixing old document vectors with new query vectors degrades recall.
+- **Re-embed after changing prefixes**: prefixes change the meaning of vectors. After enabling or changing them, run `seek collection reindex <collection> --allow-vector-space-change` — this rebuilds the collection and re-embeds so the new prefixes take effect; mixing old document vectors with new query vectors degrades recall.
 - Rerankers are unaffected: cross-encoders receive the raw query and document together.
 
 ---
@@ -82,6 +82,6 @@ Cross-Encoder re-ranking evaluates query + document pairs together with full att
 > [!IMPORTANT]
 > The `dimensions` setting in `config.yaml` **must exactly match** the output dimension of your chosen embedding model (e.g. `1536` for OpenAI small, `768` for Nomic, `1024` for BGE-M3 / DashScope, `384` for MiniLM).
 >
-> Dimensions are fixed per chunk at index time and define the HNSW vector index layout. If you switch to a model with a different dimension, run `seek rm <collection>`, `seek add`, and `seek embed -f` to rebuild the vector index.
+> Dimensions are fixed per chunk at index time and define the HNSW vector index layout. If you switch to a model with a different dimension, run `seek collection reindex <collection> --allow-vector-space-change` to rebuild the vector index.
 >
 > `seek` records the active vector space (provider kind, model, dimensions, task prefixes) in a persisted embedding profile. Changing any of these makes the stored vectors incompatible: `seek embed` and vector search fail fast with a clear reindex message instead of silently mixing old and new vectors. `seek doctor` and `seek status` show the active profile and whether it is `ready` or `stale`. Data is never deleted automatically.

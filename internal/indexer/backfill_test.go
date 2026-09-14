@@ -94,7 +94,8 @@ func openBackfillStore(t *testing.T) *store.Store {
 // collection indexed with semantic enrichment off (no semantic fast fields)
 // is backfilled once the service is available. After the pass the tags
 // fast-field coverage is present and the fingerprint/status is current, and a
-// second pass skips the now-current documents.
+// second pass selects nothing (the unchanged document is not stale — the R3
+// batched query returns no candidates, so no per-doc chunk reads happen).
 func TestBackfillSemanticE2E(t *testing.T) {
 	tmp := t.TempDir()
 	md := filepath.Join(tmp, "note.md")
@@ -170,13 +171,15 @@ func TestBackfillSemanticE2E(t *testing.T) {
 		t.Fatalf("stored fingerprint %q != desired %q", st.Fingerprint, wantFP)
 	}
 
-	// A second pass skips the current documents.
+	// A second pass selects nothing: the unchanged document is not stale, so
+	// the batched query returns no candidates and no per-doc work (chunk reads)
+	// happens — this is the R3 no-N+1 guarantee.
 	report2, err := idx.BackfillSemantic(context.Background(), col, nopLogger{})
 	if err != nil {
 		t.Fatalf("second BackfillSemantic: %v", err)
 	}
-	if report2.Processed != 0 || report2.Skipped != 1 || report2.Failed != 0 {
-		t.Fatalf("second backfill report = %+v, want 1 skipped", report2)
+	if report2.Processed != 0 || report2.Skipped != 0 || report2.Failed != 0 {
+		t.Fatalf("second backfill report = %+v, want 0 (nothing selected)", report2)
 	}
 }
 
@@ -230,7 +233,7 @@ func TestBackfillSemanticDegrade(t *testing.T) {
 				docs[path] = id
 			}
 			prior := docs[filepath.Join(tmp, "a.md")]
-			if err := db.UpdateSemanticState(context.Background(), prior, "old-fp", store.SemanticStatusError, map[string]string{"tags": "prior-tag"}); err != nil {
+			if err := db.UpdateSemanticState(context.Background(), prior, "old-fp", "basis", "h-a", store.SemanticStatusError, map[string]string{"tags": "prior-tag"}); err != nil {
 				t.Fatal(err)
 			}
 
@@ -370,7 +373,7 @@ func TestBackfillSemanticSuccessButEmptyConverges(t *testing.T) {
 	// semantic-owned fields are seeded — tags is dual-owned and treated as
 	// native in the backfill merge, so it is not the clearing contract under
 	// test here.
-	if err := db.UpdateSemanticState(context.Background(), doc.ID, "old-fp", store.SemanticStatusStale, map[string]string{
+	if err := db.UpdateSemanticState(context.Background(), doc.ID, "old-fp", "basis", "h", store.SemanticStatusStale, map[string]string{
 		"topics":   "stale-topic",
 		"entities": "ORG:StaleOrg",
 		"language": "en",
@@ -424,9 +427,10 @@ func TestBackfillSemanticSuccessButEmptyConverges(t *testing.T) {
 		}
 	}
 
-	// Second pass: the doc is re-selected by the coarse SQL query but the
-	// per-document fingerprint comparison skips it (Skipped) — the service is
-	// never re-called and the pass reports no processed/failed work.
+	// Second pass: the doc is no longer stale (basis, source hash, and status
+	// all match), so the batched query selects no candidates — the service is
+	// never re-called and the pass reports no processed/failed work (the R3
+	// no-N+1 guarantee).
 	report2, err := idx.BackfillSemantic(context.Background(), col, nopLogger{})
 	if err != nil {
 		t.Fatalf("second BackfillSemantic: %v", err)
@@ -752,6 +756,119 @@ func TestBackfillSemanticCancellation(t *testing.T) {
 	}
 	if touched != 1 {
 		t.Fatalf("documents with recorded state = %d, want 1 (only the first)", touched)
+	}
+}
+
+// TestBackfillSemanticContentChangeReSelected verifies the R3 content-change
+// path end to end: after the source content changes and the collection is
+// re-synced (documents.content_hash updates while the stored semantic_source_hash
+// still holds the old value), the batched stale query re-selects the document
+// via the source-hash condition and the per-doc check re-enriches it — the chunk
+// hash changed, so it is not skipped.
+func TestBackfillSemanticContentChangeReSelected(t *testing.T) {
+	tmp := t.TempDir()
+	md := filepath.Join(tmp, "note.md")
+	os.WriteFile(md, []byte("# Title\n\nOriginal body text.\n"), 0o644)
+
+	db := openBackfillStore(t)
+	cfg := cfgFromTest(t, tmp, filepath.Join(tmp, "test.db"))
+	col, err := db.CreateCollection("notes", store.CollectionTypeMarkdown, tmp, "*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := New(cfg, db).WithLogger(nopLogger{})
+	if err := idx.SyncCollection(col); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := db.GetDocumentContext(context.Background(), col.ID, md)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeSemanticProvider{healthOk: true, health: semanticHealthAll(), response: fakeTagResult("golang")}
+	idx.WithSemanticProvider(fake)
+
+	// First backfill: enrich to current.
+	if report, err := idx.BackfillSemantic(context.Background(), col, nopLogger{}); err != nil {
+		t.Fatalf("first backfill: %v", err)
+	} else if report.Processed != 1 {
+		t.Fatalf("first backfill report = %+v, want 1 processed", report)
+	}
+
+	// Edit the source content and re-sync: documents.content_hash changes while
+	// the readable chunk contents change too.
+	os.WriteFile(md, []byte("# Title\n\nCompletely different body text here.\n"), 0o644)
+	if err := idx.SyncCollection(col); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second backfill: the batched query re-selects via the source-hash condition
+	// and the per-doc check re-enriches (chunk hash changed, so not skipped).
+	report2, err := idx.BackfillSemantic(context.Background(), col, nopLogger{})
+	if err != nil {
+		t.Fatalf("second backfill: %v", err)
+	}
+	if report2.Processed != 1 || report2.Skipped != 0 || report2.Failed != 0 {
+		t.Fatalf("second backfill report = %+v, want 1 processed (re-enriched)", report2)
+	}
+	// The re-enrichment replaced the tags fast field.
+	if v, _ := db.FastFields().Get(doc.ID, "tags"); v != "golang" {
+		t.Fatalf("tags after content-change re-enrich = %v, want golang", v)
+	}
+}
+
+// TestBackfillSemanticOverSelectionSafe verifies the over-selection safety of
+// the R3 design: when documents.content_hash changes but the readable chunk
+// contents (and thus the chunk-based content hash) do not — the SQL-side signal
+// of a whitespace-only source edit — the batched query still re-selects the
+// document via the source-hash condition, but the per-doc check precisely skips
+// it (Skipped) because the chunk fingerprint is unchanged and the status is
+// current. Over-selection is safe: no needless re-enrichment.
+func TestBackfillSemanticOverSelectionSafe(t *testing.T) {
+	tmp := t.TempDir()
+	md := filepath.Join(tmp, "note.md")
+	os.WriteFile(md, []byte("# Title\n\nBody text.\n"), 0o644)
+
+	db := openBackfillStore(t)
+	cfg := cfgFromTest(t, tmp, filepath.Join(tmp, "test.db"))
+	col, err := db.CreateCollection("notes", store.CollectionTypeMarkdown, tmp, "*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := New(cfg, db).WithLogger(nopLogger{})
+	if err := idx.SyncCollection(col); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := db.GetDocumentContext(context.Background(), col.ID, md)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeSemanticProvider{healthOk: true, health: semanticHealthAll(), response: fakeTagResult("golang")}
+	idx.WithSemanticProvider(fake)
+	if report, err := idx.BackfillSemantic(context.Background(), col, nopLogger{}); err != nil {
+		t.Fatalf("backfill: %v", err)
+	} else if report.Processed != 1 {
+		t.Fatalf("backfill report = %+v, want 1 processed", report)
+	}
+
+	// Simulate a source change that updates documents.content_hash but leaves the
+	// readable chunk contents (and thus the chunk-based content hash) unchanged —
+	// a whitespace-only edit. The document content hash is bumped directly; the
+	// chunks are untouched.
+	if err := db.UpdateDocumentContentHashContext(context.Background(), doc.ID, "changed-content-hash"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The batched query re-selects the document (source-hash mismatch), but the
+	// per-doc check precisely skips it: the chunk fingerprint is unchanged and
+	// the status is current.
+	report2, err := idx.BackfillSemantic(context.Background(), col, nopLogger{})
+	if err != nil {
+		t.Fatalf("second backfill: %v", err)
+	}
+	if report2.Processed != 0 || report2.Skipped != 1 || report2.Failed != 0 {
+		t.Fatalf("second backfill report = %+v, want 1 skipped (over-selection safe)", report2)
 	}
 }
 

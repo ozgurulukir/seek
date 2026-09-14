@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -324,6 +325,62 @@ func TestValidateCollectionPathSymlinkEscape(t *testing.T) {
 	}
 }
 
+// TestValidateCollectionPathDanglingSymlinkRejected pins the fail-closed fix:
+// a dangling symlink (link entry exists, target does not) must be rejected,
+// never accepted via lexical containment. EvalSymlinks fails on it, so the
+// unresolved path must NOT be used as a fallback.
+func TestValidateCollectionPathDanglingSymlinkRejected(t *testing.T) {
+	root := t.TempDir()
+	link := filepath.Join(root, "escape")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "nowhere"), link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation requires privileges on Windows")
+		}
+		t.Fatalf("create symlink: %v", err)
+	}
+	col := &store.Collection{Name: "notes", Path: root, Type: store.CollectionTypeMarkdown}
+	if err := ValidateCollectionPath(col, link); err == nil {
+		t.Error("dangling symlink path accepted (must be rejected — fail closed)")
+	}
+}
+
+// TestValidateCollectionPathNonExistingTargetAccepted verifies that a path
+// which does not exist yet (which sync will create) is accepted and resolves
+// to the correct canonical path: the resolved collection root joined with the
+// remaining segments.
+func TestValidateCollectionPathNonExistingTargetAccepted(t *testing.T) {
+	root := t.TempDir()
+	// A real file inside the collection so the ancestor chain resolves.
+	if err := os.WriteFile(filepath.Join(root, "existing.md"), []byte("# hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := filepath.Join(root, "sub", "new-note.md")
+
+	col := &store.Collection{Name: "notes", Path: root, Type: store.CollectionTypeMarkdown}
+	if err := ValidateCollectionPath(col, future); err != nil {
+		t.Fatalf("non-existent target under collection root rejected: %v", err)
+	}
+
+	// It must canonicalize to the resolved root joined with the remaining
+	// segments (sub/new-note.md), not the unresolved abs.
+	rootResolved, err := canonicalPath(root)
+	if err != nil {
+		t.Fatalf("canonicalPath(root): %v", err)
+	}
+	got, err := canonicalPath(future)
+	if err != nil {
+		t.Fatalf("canonicalPath(future): %v", err)
+	}
+	rel, err := filepath.Rel(root, future)
+	if err != nil {
+		t.Fatalf("filepath.Rel: %v", err)
+	}
+	want := filepath.Join(rootResolved, rel)
+	if got != want {
+		t.Errorf("canonicalPath(%q) = %q, want %q", future, got, want)
+	}
+}
+
 func TestValidateCollectionPathWindowsCase(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("case-insensitive containment is Windows-specific")
@@ -552,6 +609,165 @@ func TestReindexNoProfileSkipsValidation(t *testing.T) {
 	}
 	if res.VectorSpaceChanged {
 		t.Error("no-profile keyword-only reindex must not report a vector-space change")
+	}
+}
+
+// TestReindexAllRecoversProfileMismatchSingle pins the --all recovery path for a
+// single collection whose stored embedding profile mismatches the current
+// config: ReindexAll with AllowVectorSpaceChange clears the store-global profile
+// and re-embeds. Without the flag it refuses, because the vector-space change is
+// a deliberate action.
+func TestReindexAllRecoversProfileMismatchSingle(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "note.md"), []byte("# Hello\n\nSome body."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := indexCfg(t, "model-b", 768)
+	rt, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer rt.Close()
+
+	col, err := rt.Store.CreateCollection("notes", store.CollectionTypeMarkdown, dir, "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A prior index claimed a different vector space and actually embedded
+	// chunks, so the mismatch is meaningful.
+	old := store.EmbeddingProfile{
+		ProviderKind:  "local",
+		Model:         "model-a",
+		Dimensions:    384,
+		Normalization: store.EmbeddingNormalizationVersion,
+	}
+	if err := rt.Store.ClaimEmbeddingProfile(context.Background(), old); err != nil {
+		t.Fatalf("claim old profile: %v", err)
+	}
+	docID, err := rt.Store.UpsertDocument(col.ID, filepath.Join(dir, "note.md"), "Hello", "h1", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Store.InsertChunk(docID, 0, "# Hello", []float32{0.1, 0.2, 0.3}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewCollectionService(rt)
+	discard := pipeline.NewStdoutLogger(io.Discard)
+
+	// Without --allow-vector-space-change the store-wide recovery refuses:
+	// changing the vector space is a deliberate action.
+	_, err = svc.ReindexAll(context.Background(), ReindexOptions{}, discard)
+	if err == nil || !strings.Contains(err.Error(), "--allow-vector-space-change") {
+		t.Fatalf("ReindexAll without allow-change = %v, want rejection", err)
+	}
+
+	// With the flag it clears the store-global profile and re-embeds.
+	results, err := svc.ReindexAll(context.Background(), ReindexOptions{AllowVectorSpaceChange: true}, discard)
+	if err != nil {
+		t.Fatalf("ReindexAll with allow-change: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("ReindexAll results = %d, want 1", len(results))
+	}
+	if !results[0].VectorSpaceChanged {
+		t.Error("VectorSpaceChanged = false after clearing the profile")
+	}
+	stored, err := rt.Store.GetEmbeddingProfile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != nil {
+		t.Errorf("profile should be cleared after ReindexAll, got %+v", stored)
+	}
+}
+
+// TestReindexAllRecoversAcrossCollections pins the --all recovery path across
+// multiple collections: when every collection holds chunks in a stored vector
+// space that mismatches the current config, the collection-scoped Reindex still
+// refuses (the store-global guard) but ReindexAll clears the profile and
+// re-embeds them all.
+func TestReindexAllRecoversAcrossCollections(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "note.md"), []byte("# Hello\n\nSome body."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := indexCfg(t, "model-b", 768)
+	rt, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer rt.Close()
+
+	col, err := rt.Store.CreateCollection("notes", store.CollectionTypeMarkdown, dir, "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDir := t.TempDir()
+	other, err := rt.Store.CreateCollection("other", store.CollectionTypeMarkdown, otherDir, "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A prior index claimed a different vector space and embedded chunks in
+	// both collections, so clearing the store-global profile would orphan the
+	// other collection's embeddings.
+	old := store.EmbeddingProfile{
+		ProviderKind:  "local",
+		Model:         "model-a",
+		Dimensions:    384,
+		Normalization: store.EmbeddingNormalizationVersion,
+	}
+	if err := rt.Store.ClaimEmbeddingProfile(context.Background(), old); err != nil {
+		t.Fatalf("claim old profile: %v", err)
+	}
+	docID, err := rt.Store.UpsertDocument(col.ID, filepath.Join(dir, "note.md"), "Hello", "h1", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Store.InsertChunk(docID, 0, "# Hello", []float32{0.1, 0.2, 0.3}); err != nil {
+		t.Fatal(err)
+	}
+	otherDoc, err := rt.Store.UpsertDocument(other.ID, filepath.Join(otherDir, "note.md"), "Other", "h2", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Store.InsertChunk(otherDoc, 0, "other body", []float32{0.4, 0.5, 0.6}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewCollectionService(rt)
+	discard := pipeline.NewStdoutLogger(io.Discard)
+
+	// Collection-scoped reindex still refuses even with allow-change: the
+	// store-global profile would orphan the other collection.
+	_, err = svc.Reindex(context.Background(), "notes", ReindexOptions{AllowVectorSpaceChange: true}, discard)
+	if !errors.Is(err, store.ErrProfileMismatch) {
+		t.Fatalf("collection-scoped reindex with other embedded = %v, want ErrProfileMismatch", err)
+	}
+
+	// --all recovers: clears the store-global profile and re-embeds all.
+	results, err := svc.ReindexAll(context.Background(), ReindexOptions{AllowVectorSpaceChange: true}, discard)
+	if err != nil {
+		t.Fatalf("ReindexAll with allow-change: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("ReindexAll results = %d, want 2", len(results))
+	}
+	var changed int
+	for _, r := range results {
+		if r.VectorSpaceChanged {
+			changed++
+		}
+	}
+	if changed == 0 {
+		t.Error("no collection reported a vector-space change")
+	}
+	stored, err := rt.Store.GetEmbeddingProfile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != nil {
+		t.Errorf("store-wide profile should be cleared after ReindexAll, got %+v", stored)
 	}
 }
 

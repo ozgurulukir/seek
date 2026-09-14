@@ -110,7 +110,10 @@ func TestSemanticMigrationAddsColumns(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("PRAGMA rows: %v", err)
 	}
-	for _, want := range []string{"semantic_fingerprint", "semantic_status"} {
+	for _, want := range []string{
+		"semantic_fingerprint", "semantic_status",
+		"semantic_basis", "semantic_source_hash",
+	} {
 		if !cols[want] {
 			t.Errorf("documents missing column %q", want)
 		}
@@ -128,7 +131,10 @@ func TestSemanticMigrationIdempotent(t *testing.T) {
 }
 
 // TestGetStaleSemanticDocuments verifies the batched stale-selection query
-// returns documents whose fingerprint differs or is absent, in one query.
+// re-selects a document when its identity basis differs, its status is error,
+// its source hash is missing or no longer matches documents.content_hash, or
+// it was never enriched — and skips a document whose basis, source hash, and
+// status all match. It is a single query (no N+1).
 func TestGetStaleSemanticDocuments(t *testing.T) {
 	s := newTestStore(t)
 	col, err := s.CreateCollection("c", "markdown", "/p", "**/*.md")
@@ -136,29 +142,51 @@ func TestGetStaleSemanticDocuments(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
+	desiredBasis := "basis-desired"
 
-	// current: fingerprint matches desired.
-	current, err := s.UpsertDocument(col.ID, "/p/current.md", "current", "h1", 1, 1)
+	// current: basis matches, source hash matches content hash, status current.
+	current, err := s.UpsertDocument(col.ID, "/p/current.md", "current", "h-current", 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateSemanticState(ctx, current, "fp-desired", SemanticStatusCurrent, map[string]string{"tags": "go"}); err != nil {
-		t.Fatal(err)
-	}
-	// stale: fingerprint differs.
-	stale, err := s.UpsertDocument(col.ID, "/p/stale.md", "stale", "h2", 1, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.UpdateSemanticState(ctx, stale, "fp-old", SemanticStatusStale, map[string]string{"tags": "rust"}); err != nil {
-		t.Fatal(err)
-	}
-	// absent: never enriched.
-	if _, err := s.UpsertDocument(col.ID, "/p/absent.md", "absent", "h3", 1, 1); err != nil {
+	if err := s.UpdateSemanticState(ctx, current, "fp-current", desiredBasis, "h-current", SemanticStatusCurrent, map[string]string{"tags": "go"}); err != nil {
 		t.Fatal(err)
 	}
 
-	states, err := s.GetStaleSemanticDocuments(ctx, col.ID, "fp-desired")
+	// identity change: basis differs from the desired one.
+	identity, err := s.UpsertDocument(col.ID, "/p/identity.md", "identity", "h-identity", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateSemanticState(ctx, identity, "fp-identity", "basis-other", "h-identity", SemanticStatusCurrent, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// content change: source hash no longer matches the document content hash.
+	content, err := s.UpsertDocument(col.ID, "/p/content.md", "content", "h-new", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateSemanticState(ctx, content, "fp-content", desiredBasis, "h-old", SemanticStatusCurrent, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// error retry: status is error.
+	errDoc, err := s.UpsertDocument(col.ID, "/p/err.md", "err", "h-err", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateSemanticState(ctx, errDoc, "fp-err", desiredBasis, "h-err", SemanticStatusError, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// absent: never enriched (basis NULL, source hash NULL).
+	absent, err := s.UpsertDocument(col.ID, "/p/absent.md", "absent", "h-absent", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	states, err := s.GetStaleSemanticDocuments(ctx, col.ID, desiredBasis)
 	if err != nil {
 		t.Fatalf("GetStaleSemanticDocuments: %v", err)
 	}
@@ -169,11 +197,63 @@ func TestGetStaleSemanticDocuments(t *testing.T) {
 	if got[current] {
 		t.Errorf("current document %d should not be stale", current)
 	}
-	if !got[stale] {
-		t.Errorf("stale document %d should be selected", stale)
+	if !got[identity] {
+		t.Errorf("identity-change document %d should be selected", identity)
 	}
-	if len(states) != 2 {
-		t.Errorf("stale count = %d, want 2 (stale + absent)", len(states))
+	if !got[content] {
+		t.Errorf("content-change document %d should be selected", content)
+	}
+	if !got[errDoc] {
+		t.Errorf("error document %d should be selected", errDoc)
+	}
+	if !got[absent] {
+		t.Errorf("absent document %d should be selected", absent)
+	}
+	if len(states) != 4 {
+		t.Errorf("stale count = %d, want 4 (identity + content + error + absent)", len(states))
+	}
+}
+
+// TestGetStaleSemanticDocumentsNULLReSelected verifies that documents with a
+// NULL semantic_basis or semantic_source_hash — as produced by the R3 migration
+// of pre-existing documents — are re-selected by the stale query. The NULL
+// conditions in the WHERE clause guarantee a one-time natural re-enrichment so
+// the migration columns actually fill.
+func TestGetStaleSemanticDocumentsNULLReSelected(t *testing.T) {
+	s := newTestStore(t)
+	col, err := s.CreateCollection("c", "markdown", "/p", "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	desiredBasis := "basis-desired"
+
+	doc, err := s.UpsertDocument(col.ID, "/p/old.md", "old", "h-old", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a pre-migration document: a recorded fingerprint/status but NULL
+	// identity columns. The NULL conditions must re-select it once.
+	if _, err := s.db.ExecContext(ctx, `UPDATE documents
+		SET semantic_fingerprint = 'fp', semantic_status = 'current',
+		    semantic_basis = NULL, semantic_source_hash = NULL
+		WHERE id = ?`, doc); err != nil {
+		t.Fatal(err)
+	}
+
+	states, err := s.GetStaleSemanticDocuments(ctx, col.ID, desiredBasis)
+	if err != nil {
+		t.Fatalf("GetStaleSemanticDocuments: %v", err)
+	}
+	got := map[int64]bool{}
+	for _, st := range states {
+		got[st.DocumentID] = true
+	}
+	if !got[doc] {
+		t.Errorf("NULL-basis/source_hash document %d should be re-selected", doc)
+	}
+	if len(states) != 1 {
+		t.Errorf("stale count = %d, want 1", len(states))
 	}
 }
 
@@ -185,7 +265,7 @@ func TestGetSemanticStatesBulk(t *testing.T) {
 	ctx := context.Background()
 
 	enriched, _ := s.UpsertDocument(col.ID, "/p/a.md", "a", "h1", 1, 1)
-	if err := s.UpdateSemanticState(ctx, enriched, "fp-a", SemanticStatusCurrent, nil); err != nil {
+	if err := s.UpdateSemanticState(ctx, enriched, "fp-a", "basis-a", "h1", SemanticStatusCurrent, nil); err != nil {
 		t.Fatal(err)
 	}
 	plain, _ := s.UpsertDocument(col.ID, "/p/b.md", "b", "h2", 1, 1)
@@ -210,7 +290,7 @@ func TestUpdateSemanticStateAtomic(t *testing.T) {
 	ctx := context.Background()
 	docID, _ := s.UpsertDocument(col.ID, "/p/doc.md", "doc", "h1", 1, 1)
 
-	if err := s.UpdateSemanticState(ctx, docID, "fp-1", SemanticStatusCurrent, map[string]string{"tags": "go,rust", "language": "en"}); err != nil {
+	if err := s.UpdateSemanticState(ctx, docID, "fp-1", "basis-1", "h1", SemanticStatusCurrent, map[string]string{"tags": "go,rust", "language": "en"}); err != nil {
 		t.Fatalf("UpdateSemanticState: %v", err)
 	}
 	if v, err := s.FastFields().Get(docID, "tags"); err != nil || v != "go,rust" {
@@ -235,13 +315,13 @@ func TestUpdateSemanticStatePreservesFieldsOnError(t *testing.T) {
 	docID, _ := s.UpsertDocument(col.ID, "/p/doc.md", "doc", "h1", 1, 1)
 
 	// First pass: enrichment succeeds, writes fields + current state.
-	if err := s.UpdateSemanticState(ctx, docID, "fp-1", SemanticStatusCurrent, map[string]string{"tags": "go,rust", "language": "en"}); err != nil {
+	if err := s.UpdateSemanticState(ctx, docID, "fp-1", "basis-1", "h1", SemanticStatusCurrent, map[string]string{"tags": "go,rust", "language": "en"}); err != nil {
 		t.Fatal(err)
 	}
 
 	// Second pass: enrichment fails (nil fast fields). Existing fields must
 	// survive and the status must reflect the failure.
-	if err := s.UpdateSemanticState(ctx, docID, "fp-1", SemanticStatusError, nil); err != nil {
+	if err := s.UpdateSemanticState(ctx, docID, "fp-1", "basis-1", "h1", SemanticStatusError, nil); err != nil {
 		t.Fatal(err)
 	}
 	if v, err := s.FastFields().Get(docID, "tags"); err != nil || v != "go,rust" {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alecthomas/kong"
 	"github.com/ozgurulukir/seek/cmd"
 	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
@@ -210,10 +211,10 @@ func TestCollectionListCmd_ShowsSemanticCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := db.UpdateSemanticState(ctx, docID, "fp-cur", store.SemanticStatusCurrent, nil); err != nil {
+	if err := db.UpdateSemanticState(ctx, docID, "fp-cur", "basis", "h1", store.SemanticStatusCurrent, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpdateSemanticState(ctx, d2, "fp-err", store.SemanticStatusError, nil); err != nil {
+	if err := db.UpdateSemanticState(ctx, d2, "fp-err", "basis", "h2", store.SemanticStatusError, nil); err != nil {
 		t.Fatal(err)
 	}
 	// The third document has no recorded state → semantic none.
@@ -270,7 +271,7 @@ func TestCollectionListCmd_JSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpdateSemanticState(context.Background(), docID, "fp-cur", store.SemanticStatusCurrent, nil); err != nil {
+	if err := db.UpdateSemanticState(context.Background(), docID, "fp-cur", "basis", "h", store.SemanticStatusCurrent, nil); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
@@ -537,9 +538,180 @@ func TestCollectionReindexCmd_ProfileMismatchHint(t *testing.T) {
 	if err == nil {
 		t.Fatal("reindex with a mismatched vector space should refuse")
 	}
-	for _, want := range []string{"embedding profile mismatch", "AllowVectorSpaceChange", "seek rm"} {
+	for _, want := range []string{"embedding profile mismatch", "--allow-vector-space-change", "seek collection reindex --all"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("profile-mismatch error missing hint %q: %v", want, err)
 		}
+	}
+}
+
+// TestCollectionReindexCmd_AllAndSemanticOnlyRejected pins the rejection of the
+// incompatible --all + --semantic-only combination: --semantic-only is
+// collection-scoped (Backfill takes one collection) while --all reindexes every
+// collection.
+func TestCollectionReindexCmd_AllAndSemanticOnlyRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "seek.db")
+	cfg := collectionTestConfig(t, dbPath)
+
+	err := (&cmd.CollectionReindexCmd{All: true, SemanticOnly: true}).Run(cfg)
+	if err == nil || !strings.Contains(err.Error(), "--semantic-only cannot be combined with --all") {
+		t.Fatalf("reindex --all --semantic-only = %v, want rejection", err)
+	}
+}
+
+// TestCollectionReindexCmd_NameAndBothSetRejected pins the Name XOR --all
+// validation: supplying both a collection name and --all is a usage error.
+func TestCollectionReindexCmd_NameAndBothSetRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "seek.db")
+	cfg := collectionTestConfig(t, dbPath)
+
+	err := (&cmd.CollectionReindexCmd{Name: "notes", All: true}).Run(cfg)
+	if err == nil || !strings.Contains(err.Error(), "specify a collection name OR --all, not both") {
+		t.Fatalf("reindex with both name and --all = %v, want usage error", err)
+	}
+}
+
+// TestCollectionReindexCmd_NeitherNameNorAllRejected pins the Name XOR --all
+// validation: with neither a collection name nor --all the command is a usage
+// error.
+func TestCollectionReindexCmd_NeitherNameNorAllRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "seek.db")
+	cfg := collectionTestConfig(t, dbPath)
+
+	err := (&cmd.CollectionReindexCmd{}).Run(cfg)
+	if err == nil || !strings.Contains(err.Error(), "a collection name is required") {
+		t.Fatalf("reindex with neither name nor --all = %v, want usage error", err)
+	}
+}
+
+// TestCollectionReindexCmd_AllRecoversProfileMismatch exercises the full CLI
+// recovery path: a store with a single collection whose stored embedding
+// profile mismatches the current config is recovered by
+// `seek collection reindex --all --allow-vector-space-change`, which clears the
+// store-global profile and re-embeds.
+func TestCollectionReindexCmd_AllRecoversProfileMismatch(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "note.md"), []byte("# Hello\n\nSome body."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "seek.db")
+	cfg := collectionTestConfig(t, dbPath)
+	cfg.Config.Embedding = config.EmbeddingConfig{Model: "model-b", Dimensions: 768}
+
+	rt, err := app.Open(cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	col, err := rt.Store.CreateCollection("notes", store.CollectionTypeMarkdown, dir, "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := store.EmbeddingProfile{
+		ProviderKind:  "local",
+		Model:         "model-a",
+		Dimensions:    384,
+		Normalization: store.EmbeddingNormalizationVersion,
+	}
+	if err := rt.Store.ClaimEmbeddingProfile(context.Background(), old); err != nil {
+		t.Fatalf("claim old profile: %v", err)
+	}
+	docID, err := rt.Store.UpsertDocument(col.ID, filepath.Join(dir, "note.md"), "Hello", "h1", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Store.InsertChunk(docID, 0, "# Hello", []float32{0.1, 0.2, 0.3}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		err = (&cmd.CollectionReindexCmd{All: true, AllowVectorSpaceChange: true}).Run(cfg)
+	})
+	if err != nil {
+		t.Fatalf("reindex --all --allow-vector-space-change = %v (output: %s)", err, out)
+	}
+	if !strings.Contains(out, "Reindexed \"notes\"") {
+		t.Errorf("reindex --all output should report the collection:\n%s", out)
+	}
+	if !strings.Contains(out, "Vector space changed") {
+		t.Errorf("reindex --all output should report the vector-space change:\n%s", out)
+	}
+
+	rt2, err := app.Open(cfg)
+	if err != nil {
+		t.Fatalf("Open after reindex: %v", err)
+	}
+	defer rt2.Close()
+	stored, err := rt2.Store.GetEmbeddingProfile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != nil {
+		t.Errorf("store-wide profile should be cleared after reindex --all, got %+v", stored)
+	}
+}
+
+// reindexKongGrammar mirrors the real `seek collection` wiring (see main.go)
+// so the kong parse-level test exercises the actual CollectionReindexCmd tags
+// — the optional positional Name plus the All/SemanticOnly/AllowVectorSpaceChange
+// flags — rather than constructing the struct directly (which bypasses parsing).
+type reindexKongGrammar struct {
+	Collection cmd.CollectionCmd `cmd:"" help:"Manage collections (list, show, rename, reindex)"`
+}
+
+// noopKongExit is a kong Exit hook that does nothing, so help/exit paths
+// (which call Exit(0) before BeforeApply) do not terminate the test process.
+var noopKongExit = func(int) {}
+
+// TestCollectionReindexCmd_KongParsesAll pins that kong parses
+// `seek collection reindex --all` into the expected struct: All set, Name
+// empty. This exercises the optional-positional + flags tags directly.
+func TestCollectionReindexCmd_KongParsesAll(t *testing.T) {
+	var g reindexKongGrammar
+	k := kong.Must(&g, kong.Name("seek"), kong.Exit(noopKongExit))
+
+	_, err := k.Parse([]string{"collection", "reindex", "--all", "--allow-vector-space-change"})
+	if err != nil {
+		t.Fatalf("kong.Parse(reindex --all --allow-vector-space-change) = %v", err)
+	}
+	if !g.Collection.Reindex.All {
+		t.Error("reindex --all did not set All=true")
+	}
+	if g.Collection.Reindex.Name != "" {
+		t.Errorf("reindex --all left Name=%q, want empty", g.Collection.Reindex.Name)
+	}
+	if !g.Collection.Reindex.AllowVectorSpaceChange {
+		t.Error("reindex --all --allow-vector-space-change did not set AllowVectorSpaceChange")
+	}
+}
+
+// TestCollectionReindexCmd_KongRejectsNameAndAll pins the Name XOR --all
+// invariant through kong.Parse + Run: kong parses `reindex <name> --all`
+// (it cannot express a conditionally-optional positional), so the rejection
+// happens at runtime in Run.
+func TestCollectionReindexCmd_KongRejectsNameAndAll(t *testing.T) {
+	var g reindexKongGrammar
+	k := kong.Must(&g, kong.Name("seek"), kong.Exit(noopKongExit))
+
+	_, err := k.Parse([]string{"collection", "reindex", "notes", "--all"})
+	if err != nil {
+		t.Fatalf("kong.Parse(reindex notes --all) = %v (expected to parse)", err)
+	}
+	if !g.Collection.Reindex.All {
+		t.Error("reindex notes --all did not set All=true")
+	}
+	if g.Collection.Reindex.Name != "notes" {
+		t.Errorf("reindex notes --all left Name=%q, want notes", g.Collection.Reindex.Name)
+	}
+
+	// The Name XOR --all invariant is enforced at runtime in Run.
+	if err := g.Collection.Reindex.Run(&config.AppConfig{}); err == nil ||
+		!strings.Contains(err.Error(), "specify a collection name OR --all, not both") {
+		t.Fatalf("reindex notes --all Run = %v, want usage error", err)
 	}
 }

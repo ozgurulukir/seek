@@ -28,7 +28,8 @@ func bumpMtime(t *testing.T, path string) {
 	}
 }
 
-// useFakeHome points HOME at a temp dir so the claude scanner
+// useFakeHome points HOME (and, on Windows, USERPROFILE — os.UserHomeDir reads
+// %USERPROFILE% there, not $HOME) at a temp dir so the claude scanner
 // (source.ScanClaudeFiles, which walks ~/.claude/projects) sees the test
 // directory instead of the developer's real projects. It returns the
 // projects dir, where conversation fixtures must be written.
@@ -36,6 +37,7 @@ func useFakeHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	projects := filepath.Join(home, ".claude", "projects")
 	if err := os.MkdirAll(projects, 0755); err != nil {
 		t.Fatal(err)

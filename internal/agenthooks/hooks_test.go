@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -740,10 +741,16 @@ func TestWriteHookSettings_BackupAndPerms(t *testing.T) {
 	if len(entries) != 0 {
 		t.Errorf("backup created on first write: %v", entries)
 	}
-	if fi, err := os.Stat(path); err != nil {
+	fi, err := os.Stat(path)
+	if err != nil {
 		t.Fatal(err)
-	} else if got := fi.Mode().Perm(); got != 0600 {
-		t.Errorf("new settings perm = %04o, want 0600", uint32(got))
+	}
+	// On Windows chmod is a no-op and os.Stat reports the default perm bits, so
+	// the 0600 mode assertion is a POSIX-only check.
+	if runtime.GOOS != "windows" {
+		if got := fi.Mode().Perm(); got != 0600 {
+			t.Errorf("new settings perm = %04o, want 0600", uint32(got))
+		}
 	}
 
 	// Existing 0644 file: must be backed up once, and its 0644 mode preserved
@@ -765,9 +772,15 @@ func TestWriteHookSettings_BackupAndPerms(t *testing.T) {
 	if !strings.Contains(string(data), `"hooks"`) {
 		t.Errorf("backup does not contain the pre-rewrite content: %q", data)
 	}
-	if fi, err := os.Stat(path); err != nil {
+	fi, err = os.Stat(path)
+	if err != nil {
 		t.Fatal(err)
-	} else if got := fi.Mode().Perm(); got != 0644 {
-		t.Errorf("existing settings perm = %04o, want preserved 0644", uint32(got))
+	}
+	// On Windows chmod is a no-op and os.Stat reports the default perm bits, so
+	// the preserved-mode assertion is a POSIX-only check.
+	if runtime.GOOS != "windows" {
+		if got := fi.Mode().Perm(); got != 0644 {
+			t.Errorf("existing settings perm = %04o, want preserved 0644", uint32(got))
+		}
 	}
 }

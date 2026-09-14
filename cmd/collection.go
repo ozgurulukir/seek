@@ -43,17 +43,23 @@ type CollectionRenameCmd struct {
 	New string `arg:"" help:"New collection name"`
 }
 
-// CollectionReindexCmd implements `seek collection reindex <name>`.
+// CollectionReindexCmd implements `seek collection reindex <name>` and
+// `seek collection reindex --all`.
 //
 // The full pass re-reads the collection's source files and rebuilds the
 // FTS/chunk/fast-field lifecycle, then re-embeds its chunks. The
 // --semantic-only pass is the S3 backfill: it re-enriches already-indexed
 // chunks and only writes fast fields plus the semantic fingerprint/status —
 // source files, embeddings, FTS, and the vector index are untouched.
+//
+// Name is an optional positional so it can be omitted with --all; kong does
+// not support conditionally-optional positionals, so the Name XOR --all
+// invariant is enforced at runtime in Run.
 type CollectionReindexCmd struct {
-	Name                   string `arg:"" help:"Collection name"`
+	Name                   string `arg:"" optional:"" help:"Collection name (omit with --all)"`
 	SemanticOnly           bool   `help:"Backfill semantic fast fields only; source files, embeddings, FTS, and the vector index are untouched"`
 	AllowVectorSpaceChange bool   `help:"Permit clearing the embedding profile and re-embedding when the stored vector space mismatches the current config"`
+	All                    bool   `help:"Reindex every collection (store-wide recovery); requires --allow-vector-space-change"`
 }
 
 func (c *CollectionListCmd) Run(cfg *config.AppConfig) (err error) {
@@ -158,6 +164,20 @@ func (c *CollectionRenameCmd) Run(cfg *config.AppConfig) (err error) {
 }
 
 func (c *CollectionReindexCmd) Run(cfg *config.AppConfig) (err error) {
+	// Name XOR --all: exactly one must be provided. kong cannot express a
+	// conditionally-optional positional, so this is enforced at runtime.
+	if c.All && c.Name != "" {
+		return fmt.Errorf("reindex: specify a collection name OR --all, not both")
+	}
+	if !c.All && c.Name == "" {
+		return fmt.Errorf("reindex: a collection name is required, or use --all to reindex every collection")
+	}
+	// --semantic-only is collection-scoped (Backfill takes a single collection);
+	// --all reindexes every collection. They conflict, so reject the pair.
+	if c.All && c.SemanticOnly {
+		return fmt.Errorf("--semantic-only cannot be combined with --all: --semantic-only is collection-scoped")
+	}
+
 	// The semantic-only backfill writes fast fields, so both passes take the
 	// writer lock (same model as sync/embed).
 	lockCtx, cancel := context.WithTimeout(context.Background(), agenthooks.WriterLockTimeout)
@@ -184,6 +204,29 @@ func (c *CollectionReindexCmd) Run(cfg *config.AppConfig) (err error) {
 		}
 		fmt.Printf("Semantic backfill for %q: %d processed, %d skipped, %d failed\n",
 			c.Name, report.Processed, report.Skipped, report.Failed)
+		return nil
+	}
+
+	if c.All {
+		results, err := svc.ReindexAll(context.Background(), app.ReindexOptions{
+			AllowVectorSpaceChange: c.AllowVectorSpaceChange,
+		}, log)
+		if err != nil {
+			// A profile mismatch (store.ErrProfileMismatch) already carries the
+			// reindex hint in its text; wrapping preserves and surfaces it.
+			return fmt.Errorf("reindex --all: %w", err)
+		}
+		changed := 0
+		for _, res := range results {
+			fmt.Printf("Reindexed %q: %d indexed, %d skipped, %d unsupported, %d failed\n",
+				res.Report.Collection, res.Report.Indexed, res.Report.Skipped, res.Report.Unsupported, res.Report.Failed)
+			if res.VectorSpaceChanged {
+				changed++
+			}
+		}
+		if changed > 0 {
+			fmt.Printf("Vector space changed for %d collection(s): cleared the old embedding profile and re-embedded.\n", changed)
+		}
 		return nil
 	}
 

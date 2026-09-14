@@ -155,6 +155,10 @@ type ReindexResult struct {
 // collection-scoped reindex can never safely clear it while they do. A config
 // without an embedding model skips profile validation — there is nothing to
 // embed, so a keyword-only reindex is never blocked.
+//
+// For a store-wide recovery (e.g. after an embedding model/dimension change
+// across every collection) use ReindexAll, which re-syncs and re-embeds all
+// collections so the store-global profile can be cleared safely.
 func (s *CollectionService) Reindex(ctx context.Context, name string, opts ReindexOptions, log pipeline.Logger) (ReindexResult, error) {
 	if s == nil || s.store == nil || s.pipeline == nil {
 		return ReindexResult{}, fmt.Errorf("collection service: not configured")
@@ -166,50 +170,11 @@ func (s *CollectionService) Reindex(ctx context.Context, name string, opts Reind
 
 	vectorSpaceChanged := false
 	if s.cfg != nil && s.cfg.Config.Embedding.Model != "" {
-		status, err := s.store.ValidateEmbeddingProfile(ctx, store.ProfileFromConfig(s.cfg))
+		changed, err := s.clearProfileOnMismatch(ctx, col.ID, name, opts.AllowVectorSpaceChange, true)
 		if err != nil {
-			return ReindexResult{}, fmt.Errorf("validate embedding profile: %w", err)
+			return ReindexResult{VectorSpaceChanged: vectorSpaceChanged}, err
 		}
-		if status == store.ProfileMismatch {
-			has, err := s.store.HasEmbeddedChunks(ctx)
-			if err != nil {
-				return ReindexResult{}, fmt.Errorf("check embedded chunks: %w", err)
-			}
-			if has {
-				// The embedding profile is store-global: clearing it invalidates
-				// every collection's embeddings, but the re-embed below only
-				// refreshes the target collection. A collection-scoped reindex
-				// must therefore refuse when OTHER collections still hold
-				// chunks in the stored vector space — clearing the profile
-				// would orphan their embeddings and the forced vector-index
-				// rebuild would then hit a dimension mismatch (or silently mix
-				// spaces). The full reindex path resets the whole store.
-				otherHas, err := s.store.HasEmbeddedChunksExcept(ctx, col.ID)
-				if err != nil {
-					return ReindexResult{}, fmt.Errorf("check embedded chunks outside collection: %w", err)
-				}
-				if otherHas {
-					return ReindexResult{}, fmt.Errorf(
-						"%w: collection %q reindex would clear the store-wide embedding profile, but other collections still hold chunks embedded in a different vector space; use a store-wide reset: seek rm <collection> && seek add && seek embed -f",
-						store.ErrProfileMismatch, name)
-				}
-				if !opts.AllowVectorSpaceChange {
-					return ReindexResult{}, fmt.Errorf(
-						"%w: stored embeddings were built with a different vector space; re-run with AllowVectorSpaceChange to clear and re-embed this collection, or reindex with: seek rm %q && seek add && seek embed -f",
-						store.ErrProfileMismatch, name)
-				}
-				// Clear the profile; the force re-embed below establishes the
-				// new vector space. Existing embeddings are rebuilt, never
-				// mixed.
-				if err := s.store.ClearEmbeddingProfile(ctx); err != nil {
-					return ReindexResult{}, fmt.Errorf("clear embedding profile: %w", err)
-				}
-				vectorSpaceChanged = true
-			}
-			// An empty index carries nothing to invalidate: the pipeline's
-			// ClaimEmbeddingProfile establishes the new vector space on the
-			// first embedding write, matching the prior plan's contract.
-		}
+		vectorSpaceChanged = changed
 	}
 
 	report, err := s.pipeline.Sync(ctx, col, pipeline.Options{
@@ -220,6 +185,100 @@ func (s *CollectionService) Reindex(ctx context.Context, name string, opts Reind
 		return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, err
 	}
 	return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, nil
+}
+
+// ReindexAll is the store-wide recovery pass: it re-syncs every collection
+// sequentially and re-embeds them all. Because every collection is re-embedded
+// in the new vector space, the store-global embedding profile can be cleared
+// safely — no collection is left orphaned on the old space. This is the safe,
+// store-wide form of the old "seek rm && seek add && seek embed -f" recovery,
+// and it never touches source files. Changing the vector space for the whole
+// store is a deliberate action, so it requires AllowVectorSpaceChange.
+func (s *CollectionService) ReindexAll(ctx context.Context, opts ReindexOptions, log pipeline.Logger) ([]ReindexResult, error) {
+	if !opts.AllowVectorSpaceChange {
+		return nil, fmt.Errorf(
+			"reindex --all requires --allow-vector-space-change: the embedding profile is store-global, so reindexing every collection changes the vector space for all collections")
+	}
+	cols, err := s.store.ListCollections()
+	if err != nil {
+		return nil, fmt.Errorf("list collections: %w", err)
+	}
+	// One result per collection, each carrying its own sync report, so the CLI
+	// can print a per-collection summary.
+	results := make([]ReindexResult, 0, len(cols))
+	for _, col := range cols {
+		// A config without an embedding model skips profile validation — there
+		// is nothing to embed, so a keyword-only reindex is never blocked (the
+		// same guard the collection-scoped Reindex applies).
+		changed := false
+		if s.cfg != nil && s.cfg.Config.Embedding.Model != "" {
+			c, err := s.clearProfileOnMismatch(ctx, col.ID, col.Name, opts.AllowVectorSpaceChange, false)
+			if err != nil {
+				return results, err
+			}
+			changed = c
+		}
+		syncReport, err := s.pipeline.Sync(ctx, &col, pipeline.Options{Force: true, VectorIndex: true}, log)
+		if err != nil {
+			return results, err
+		}
+		results = append(results, ReindexResult{Report: syncReport, VectorSpaceChanged: changed})
+	}
+	return results, nil
+}
+
+// clearProfileOnMismatch validates the stored embedding profile against the
+// current config and, on a mismatch over a non-empty index, clears the profile
+// (opting into the new vector space) so the force re-embed below establishes
+// it. It returns whether the profile was cleared.
+//
+// The embedding profile is store-global, so clearing it invalidates every
+// collection's embeddings. When checkOthers is true (the collection-scoped
+// path) it refuses if any OTHER collection still holds chunks in the stored
+// space — clearing would orphan them and the forced vector-index rebuild would
+// then hit a dimension mismatch. When checkOthers is false (the --all path)
+// every collection is re-embedded, so nothing is orphaned and the check is
+// unnecessary.
+func (s *CollectionService) clearProfileOnMismatch(ctx context.Context, colID int64, name string, allowChange, checkOthers bool) (bool, error) {
+	status, err := s.store.ValidateEmbeddingProfile(ctx, store.ProfileFromConfig(s.cfg))
+	if err != nil {
+		return false, fmt.Errorf("validate embedding profile: %w", err)
+	}
+	if status != store.ProfileMismatch {
+		return false, nil
+	}
+	has, err := s.store.HasEmbeddedChunks(ctx)
+	if err != nil {
+		return false, fmt.Errorf("check embedded chunks: %w", err)
+	}
+	if !has {
+		// An empty index carries nothing to invalidate: the pipeline's
+		// ClaimEmbeddingProfile establishes the new vector space on the first
+		// embedding write, matching the prior plan's contract.
+		return false, nil
+	}
+	if checkOthers {
+		otherHas, err := s.store.HasEmbeddedChunksExcept(ctx, colID)
+		if err != nil {
+			return false, fmt.Errorf("check embedded chunks outside collection: %w", err)
+		}
+		if otherHas {
+			return false, fmt.Errorf(
+				"%w: collection %q reindex would clear the store-wide embedding profile, but other collections still hold chunks embedded in a different vector space; use a store-wide reset: seek collection reindex --all --allow-vector-space-change",
+				store.ErrProfileMismatch, name)
+		}
+	}
+	if !allowChange {
+		return false, fmt.Errorf(
+			"%w: stored embeddings were built with a different vector space; re-run with --allow-vector-space-change to clear and re-embed this collection, or reindex with: seek collection reindex --all --allow-vector-space-change",
+			store.ErrProfileMismatch)
+	}
+	// Clear the profile; the force re-embed below establishes the new vector
+	// space. Existing embeddings are rebuilt, never mixed.
+	if err := s.store.ClearEmbeddingProfile(ctx); err != nil {
+		return false, fmt.Errorf("clear embedding profile: %w", err)
+	}
+	return true, nil
 }
 
 // SyncPath validates that path is canonically inside the collection's

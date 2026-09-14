@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -359,8 +360,12 @@ func TestLoad_CreatesPrivateDirs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stat %s: %v", dir, err)
 		}
-		if got := fi.Mode().Perm(); got != DefaultPrivateDirPerms {
-			t.Errorf("%s perm = %04o, want %04o (owner-only private data)", dir, uint32(got), uint32(DefaultPrivateDirPerms))
+		// On Windows chmod is a no-op and os.Stat reports the default perm
+		// bits, so the owner-only mode assertion is a POSIX-only check.
+		if runtime.GOOS != "windows" {
+			if got := fi.Mode().Perm(); got != DefaultPrivateDirPerms {
+				t.Errorf("%s perm = %04o, want %04o (owner-only private data)", dir, uint32(got), uint32(DefaultPrivateDirPerms))
+			}
 		}
 	}
 }
@@ -379,7 +384,11 @@ func TestSave_ConfigFilePrivatePerms(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat %s: %v", path, err)
 	}
-	if got := fi.Mode().Perm(); got != DefaultPrivateFilePerms {
-		t.Errorf("config.yaml perm = %04o, want %04o", uint32(got), uint32(DefaultPrivateFilePerms))
+	// On Windows chmod is a no-op and os.Stat reports the default perm bits, so
+	// the owner-only mode assertion is a POSIX-only check.
+	if runtime.GOOS != "windows" {
+		if got := fi.Mode().Perm(); got != DefaultPrivateFilePerms {
+			t.Errorf("config.yaml perm = %04o, want %04o", uint32(got), uint32(DefaultPrivateFilePerms))
+		}
 	}
 }
