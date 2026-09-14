@@ -331,6 +331,26 @@ func TestHNSWIndex_Add(t *testing.T) {
 	}
 }
 
+func TestHNSWIndexAddRejectsExistingIDWithoutPanic(t *testing.T) {
+	idx, err := newHNSWIndex(3, 16, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Add(1, []float32{1, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Add(1, []float32{0, 1, 0}); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("duplicate Add error = %v, want already exists", err)
+	}
+	if idx.Len() != 1 {
+		t.Fatalf("length after rejected duplicate = %d, want 1", idx.Len())
+	}
+	got, ok := idx.graph.Lookup(1)
+	if !ok || len(got) != 3 || got[0] != 1 || got[1] != 0 || got[2] != 0 {
+		t.Fatalf("original vector = %v, found=%v", got, ok)
+	}
+}
+
 func TestHNSWIndexSaveLoadRoundTripWithManifest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vectors.hnsw")
 	idx, err := newHNSWIndex(3, 16, 50)

@@ -369,6 +369,130 @@ func TestUpdateChunkEmbeddingUpdatesVectorIndex(t *testing.T) {
 	}
 }
 
+func TestUpdateChunkEmbeddingRebuildsHNSWForExistingID(t *testing.T) {
+	store := newTestStore(t)
+	idx, err := newHNSWIndex(2, 16, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.SetVectorIndex(idx)
+
+	col, err := store.CreateCollection("hnsw-update", CollectionTypeMarkdown, t.TempDir(), "*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := store.UpsertDocument(col.ID, "note.md", "Note", "hash", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.InsertChunk(docID, 0, "content", []float32{1, 0}); err != nil {
+		t.Fatal(err)
+	}
+	var chunkID int64
+	if err := store.db.QueryRow(`SELECT id FROM chunks WHERE document_id = ?`, docID).Scan(&chunkID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SyncVectorIndex(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.UpdateChunkEmbedding(chunkID, []float32{0, 1}); err != nil {
+		t.Fatalf("replace HNSW embedding: %v", err)
+	}
+	results, err := idx.Search([]float32{0, 1}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].ChunkID != chunkID || results[0].Score < 0.99 {
+		t.Fatalf("updated HNSW results = %v", results)
+	}
+}
+
+func TestUpdateChunkEmbeddingRestoresSQLiteWhenHNSWRebuildFails(t *testing.T) {
+	store := newTestStore(t)
+	idx, err := newHNSWIndex(2, 16, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.SetVectorIndex(idx)
+
+	col, err := store.CreateCollection("hnsw-rollback", CollectionTypeMarkdown, t.TempDir(), "*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := store.UpsertDocument(col.ID, "note.md", "Note", "hash", 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.InsertChunk(docID, 0, "valid", []float32{1, 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.InsertChunk(docID, 1, "invalid", []float32{1, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	var chunkID int64
+	if err := store.db.QueryRow(`SELECT id FROM chunks WHERE document_id = ? AND seq = 0`, docID).Scan(&chunkID); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Add(chunkID, []float32{1, 0}); err != nil {
+		t.Fatal(err)
+	}
+
+	err = store.UpdateChunkEmbedding(chunkID, []float32{0, 1})
+	if err == nil || !strings.Contains(err.Error(), "dimension mismatch") {
+		t.Fatalf("UpdateChunkEmbedding error = %v, want dimension mismatch", err)
+	}
+	var blob []byte
+	if err := store.db.QueryRow(`SELECT embedding FROM chunks WHERE id = ?`, chunkID).Scan(&blob); err != nil {
+		t.Fatal(err)
+	}
+	got := decodeEmbedding(blob)
+	if len(got) != 2 || got[0] != 1 || got[1] != 0 {
+		t.Fatalf("restored SQLite embedding = %v, want [1 0]", got)
+	}
+	results, err := idx.Search([]float32{1, 0}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].ChunkID != chunkID || results[0].Score < 0.99 {
+		t.Fatalf("preserved HNSW results = %v", results)
+	}
+}
+
+func TestSyncVectorIndexFullPreservesHNSWOnFailure(t *testing.T) {
+	store := newTestStore(t)
+	idx, err := newHNSWIndex(2, 16, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Add(99, []float32{1, 0}); err != nil {
+		t.Fatal(err)
+	}
+	store.SetVectorIndex(idx)
+
+	col, err := store.CreateCollection("mixed", CollectionTypeMarkdown, t.TempDir(), "*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := store.UpsertDocument(col.ID, "mixed.md", "Mixed", "hash", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.InsertChunk(docID, 0, "wrong dimension", []float32{1, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.SyncVectorIndex(); err == nil || !strings.Contains(err.Error(), "dimension mismatch") {
+		t.Fatalf("SyncVectorIndex error = %v, want dimension mismatch", err)
+	}
+	if store.vector() != idx {
+		t.Fatal("failed rebuild replaced the active HNSW index")
+	}
+	if idx.Len() != 1 || !idx.Contains(99) {
+		t.Fatalf("original HNSW after failed rebuild: len=%d contains(99)=%v", idx.Len(), idx.Contains(99))
+	}
+}
+
 func TestFTSRebuildOnTokenizerChange(t *testing.T) {
 	store := newTestStore(t)
 

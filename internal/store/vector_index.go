@@ -109,9 +109,72 @@ func (h *hnswIndex) Add(id int64, vector []float32) error {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// coder/hnsw v0.6.1 panics while replacing an existing key. Reject the
+	// duplicate here; Store.UpdateChunkEmbeddingContext handles replacements
+	// through an atomic full rebuild instead of mutating graph connectivity.
+	if _, exists := h.graph.Lookup(id); exists {
+		return fmt.Errorf("vector id %d already exists", id)
+	}
 	h.graph.Add(hnsw.MakeNode(id, vector))
 	h.dirty = true
 	return nil
+}
+
+// emptyVectorIndexLike creates an empty index with the same backend and
+// runtime settings. Full rebuilds populate this candidate off to the side and
+// publish it only after every persisted embedding has been accepted, so a
+// failed rebuild cannot replace a usable graph with a partial one.
+func emptyVectorIndexLike(current VectorIndex) (VectorIndex, bool, error) {
+	switch index := current.(type) {
+	case *hnswIndex:
+		replacement, err := newHNSWIndex(index.dim, index.m, index.efSearch)
+		if err != nil {
+			return nil, true, err
+		}
+		replacement.persistPath = index.persistPath
+		replacement.configFingerprint = index.configFingerprint
+		return replacement, true, nil
+	case *linearIndex:
+		return newLinearIndex(index.dim), true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
+// publishVectorIndexRebuild atomically swaps a completed candidate into the
+// existing index object. Keeping the object identity preserves recovery
+// metadata, warnings, persistence configuration, and references held by the
+// runtime while ensuring readers never observe a partially rebuilt graph.
+func publishVectorIndexRebuild(current, candidate VectorIndex) error {
+	switch currentIndex := current.(type) {
+	case *hnswIndex:
+		candidateIndex, ok := candidate.(*hnswIndex)
+		if !ok {
+			return fmt.Errorf("vector rebuild type mismatch: current %T, candidate %T", current, candidate)
+		}
+		candidateIndex.mu.RLock()
+		graph := candidateIndex.graph
+		candidateIndex.mu.RUnlock()
+		currentIndex.mu.Lock()
+		currentIndex.graph = graph
+		currentIndex.dirty = true
+		currentIndex.mu.Unlock()
+		return nil
+	case *linearIndex:
+		candidateIndex, ok := candidate.(*linearIndex)
+		if !ok {
+			return fmt.Errorf("vector rebuild type mismatch: current %T, candidate %T", current, candidate)
+		}
+		candidateIndex.mu.RLock()
+		vectors := candidateIndex.vectors
+		candidateIndex.mu.RUnlock()
+		currentIndex.mu.Lock()
+		currentIndex.vectors = vectors
+		currentIndex.mu.Unlock()
+		return nil
+	default:
+		return fmt.Errorf("unsupported vector rebuild type %T", current)
+	}
 }
 
 func (h *hnswIndex) Search(query []float32, k int) ([]VectorResult, error) {

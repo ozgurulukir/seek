@@ -31,13 +31,25 @@ func (s *Store) syncVectorIndexFull() (int, error) {
 }
 
 func (s *Store) syncVectorIndexFullContext(ctx context.Context) (int, error) {
-	if s.vector() == nil {
+	current := s.vector()
+	if current == nil {
 		return 0, nil
 	}
 
-	// Clear existing entries so we rebuild from the current DB state.
-	if err := s.vector().Clear(); err != nil {
-		return 0, fmt.Errorf("clear vector index: %w", err)
+	// Build known backends off to the side. Publishing only after a complete
+	// rebuild preserves the previous graph when SQLite contains a malformed or
+	// dimension-mismatched vector, or when the context is cancelled. Custom
+	// backends retain the legacy clear-and-rebuild behavior because the public
+	// interface does not expose enough configuration to clone them safely.
+	target, replace, err := emptyVectorIndexLike(current)
+	if err != nil {
+		return 0, fmt.Errorf("prepare vector index rebuild: %w", err)
+	}
+	if !replace {
+		target = current
+		if err := target.Clear(); err != nil {
+			return 0, fmt.Errorf("clear vector index: %w", err)
+		}
 	}
 
 	rows, err := s.db.QueryContext(ctx, `SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL`)
@@ -57,13 +69,18 @@ func (s *Store) syncVectorIndexFullContext(ctx context.Context) (int, error) {
 			return added, err
 		}
 		emb := decodeEmbedding(embBlob)
-		if err := s.vector().Add(chunkID, emb); err != nil {
+		if err := target.Add(chunkID, emb); err != nil {
 			return added, err
 		}
 		added++
 	}
 	if err := rows.Err(); err != nil {
 		return added, fmt.Errorf("sync vector index rows: %w", err)
+	}
+	if replace {
+		if err := publishVectorIndexRebuild(current, target); err != nil {
+			return added, fmt.Errorf("publish vector index rebuild: %w", err)
+		}
 	}
 	return added, nil
 }

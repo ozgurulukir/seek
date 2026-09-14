@@ -203,16 +203,44 @@ func (s *Store) UpdateChunkEmbedding(chunkID int64, embedding []float32) error {
 }
 
 func (s *Store) UpdateChunkEmbeddingContext(ctx context.Context, chunkID int64, embedding []float32) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`, encodeEmbedding(embedding), chunkID)
-	if err != nil {
-		return err
-	}
-	if s.vector() != nil {
-		if err := s.vector().Add(chunkID, embedding); err != nil {
-			return fmt.Errorf("update vector index: %w", err)
+	vector := s.vector()
+	replacing := vector != nil && vector.Contains(chunkID)
+	var previous []byte
+	if replacing {
+		if err := s.db.QueryRowContext(ctx, `SELECT embedding FROM chunks WHERE id = ?`, chunkID).Scan(&previous); err != nil {
+			return fmt.Errorf("read previous chunk embedding: %w", err)
 		}
 	}
+	if err := s.PersistChunkEmbeddingContext(ctx, chunkID, embedding); err != nil {
+		return err
+	}
+	if vector == nil {
+		return nil
+	}
+	// coder/hnsw cannot safely replace an existing key. Rebuild atomically
+	// from SQLite for replacements so readers keep the old complete graph until
+	// the updated graph is ready. New IDs retain the cheap incremental path.
+	if replacing {
+		if err := s.SyncVectorIndexContext(ctx); err != nil {
+			if _, restoreErr := s.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`, previous, chunkID); restoreErr != nil {
+				return fmt.Errorf("rebuild vector index after embedding update: %w (restore previous embedding: %v)", err, restoreErr)
+			}
+			return fmt.Errorf("rebuild vector index after embedding update: %w", err)
+		}
+		return nil
+	}
+	if err := vector.Add(chunkID, embedding); err != nil {
+		return fmt.Errorf("update vector index: %w", err)
+	}
 	return nil
+}
+
+// PersistChunkEmbeddingContext updates SQLite without touching the live
+// vector index. Forced embedding passes use it and publish one complete graph
+// after all vectors have been persisted.
+func (s *Store) PersistChunkEmbeddingContext(ctx context.Context, chunkID int64, embedding []float32) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`, encodeEmbedding(embedding), chunkID)
+	return err
 }
 
 // GetChunksWithoutEmbedding returns chunks that don't have embeddings yet.

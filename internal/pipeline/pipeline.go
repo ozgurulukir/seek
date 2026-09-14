@@ -267,6 +267,7 @@ func (p *Pipeline) embedPendingContext(ctx context.Context, opts Options, log Lo
 	log.Printf("Found %d chunks needing embeddings (%d text, %d image)", len(chunks), len(textChunks), len(imageChunks))
 
 	var updated int
+	deferVectorUpdate := opts.Force && opts.VectorIndex
 	if cfg.Config.Embedding.IsMultimodal() {
 		if mode == ModeBatch {
 			return fmt.Errorf("async provider batch is text-only; multimodal models use the realtime request batch (remove --batch or set embedding.mode: realtime)")
@@ -279,7 +280,7 @@ func (p *Pipeline) embedPendingContext(ctx context.Context, opts Options, log Lo
 			if p.provider.VLText == nil {
 				return fmt.Errorf("multimodal text embedding capability unavailable")
 			}
-			count, err := embedVLTextContext(ctx, db, p.provider.VLText, textChunks, log)
+			count, err := embedVLTextContext(ctx, db, p.provider.VLText, textChunks, log, deferVectorUpdate)
 			updated += count
 			if err != nil {
 				return err
@@ -289,7 +290,7 @@ func (p *Pipeline) embedPendingContext(ctx context.Context, opts Options, log Lo
 			if p.provider.VLImage == nil {
 				return fmt.Errorf("multimodal image embedding capability unavailable")
 			}
-			count, err := embedVLImagesContext(ctx, db, p.provider.VLImage, imageChunks, log)
+			count, err := embedVLImagesContext(ctx, db, p.provider.VLImage, imageChunks, log, deferVectorUpdate)
 			updated += count
 			if err != nil {
 				return err
@@ -313,9 +314,9 @@ func (p *Pipeline) embedPendingContext(ctx context.Context, opts Options, log Lo
 				texts[i] = ch.Content
 			}
 			if mode == ModeBatch {
-				updated, err = embedBatchContext(ctx, db, p.provider.Batch, textChunks, texts, log)
+				updated, err = embedBatchContext(ctx, db, p.provider.Batch, textChunks, texts, log, deferVectorUpdate)
 			} else {
-				updated, err = embedRealtimeContext(ctx, db, embedClient, textChunks, texts, log)
+				updated, err = embedRealtimeContext(ctx, db, embedClient, textChunks, texts, log, deferVectorUpdate)
 			}
 			if err != nil {
 				return err
@@ -342,10 +343,10 @@ func (p *Pipeline) embedPendingContext(ctx context.Context, opts Options, log Lo
 }
 
 func embedVLText(db *store.Store, vlClient embed.VLTextBatcher, textChunks []store.Chunk, log Logger) (int, error) {
-	return embedVLTextContext(context.Background(), db, vlClient, textChunks, log)
+	return embedVLTextContext(context.Background(), db, vlClient, textChunks, log, false)
 }
 
-func embedVLTextContext(ctx context.Context, db *store.Store, vlClient embed.VLTextBatcher, textChunks []store.Chunk, log Logger) (int, error) {
+func embedVLTextContext(ctx context.Context, db *store.Store, vlClient embed.VLTextBatcher, textChunks []store.Chunk, log Logger, deferVectorUpdate bool) (int, error) {
 	log.Printf("Embedding %d text chunks via VL realtime API...", len(textChunks))
 	texts := make([]string, len(textChunks))
 	for i, ch := range textChunks {
@@ -355,11 +356,11 @@ func embedVLTextContext(ctx context.Context, db *store.Store, vlClient embed.VLT
 	var err error
 	if batcher, ok := vlClient.(embed.ContextVLTextBatcher); ok {
 		_, err = batcher.EmbedTextsInBatchesContext(ctx, texts, 20, 200*time.Millisecond, func(batchStart int, embeddings [][]float32) error {
-			return updateTextEmbeddings(ctx, db, textChunks, batchStart, embeddings, &updated, log)
+			return updateTextEmbeddings(ctx, db, textChunks, batchStart, embeddings, &updated, log, deferVectorUpdate)
 		})
 	} else {
 		_, err = vlClient.EmbedTextsInBatches(texts, 20, 200*time.Millisecond, func(batchStart int, embeddings [][]float32) error {
-			return updateTextEmbeddings(ctx, db, textChunks, batchStart, embeddings, &updated, log)
+			return updateTextEmbeddings(ctx, db, textChunks, batchStart, embeddings, &updated, log, deferVectorUpdate)
 		})
 	}
 	if err != nil {
@@ -369,7 +370,7 @@ func embedVLTextContext(ctx context.Context, db *store.Store, vlClient embed.VLT
 	return updated, nil
 }
 
-func updateTextEmbeddings(ctx context.Context, db *store.Store, chunks []store.Chunk, batchStart int, embeddings [][]float32, updated *int, log Logger) error {
+func updateTextEmbeddings(ctx context.Context, db *store.Store, chunks []store.Chunk, batchStart int, embeddings [][]float32, updated *int, log Logger, deferVectorUpdate bool) error {
 	for j, emb := range embeddings {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -378,7 +379,7 @@ func updateTextEmbeddings(ctx context.Context, db *store.Store, chunks []store.C
 		if emb == nil || idx >= len(chunks) {
 			continue
 		}
-		if err := db.UpdateChunkEmbeddingContext(ctx, chunks[idx].ID, emb); err != nil {
+		if err := updateEmbedding(ctx, db, chunks[idx].ID, emb, deferVectorUpdate); err != nil {
 			return fmt.Errorf("update chunk %d: %w", chunks[idx].ID, err)
 		}
 		*updated++
@@ -388,10 +389,10 @@ func updateTextEmbeddings(ctx context.Context, db *store.Store, chunks []store.C
 }
 
 func embedVLImages(db *store.Store, vlClient embed.VLImageBatcher, imageChunks []store.Chunk, log Logger) (int, error) {
-	return embedVLImagesContext(context.Background(), db, vlClient, imageChunks, log)
+	return embedVLImagesContext(context.Background(), db, vlClient, imageChunks, log, false)
 }
 
-func embedVLImagesContext(ctx context.Context, db *store.Store, vlClient embed.VLImageBatcher, imageChunks []store.Chunk, log Logger) (int, error) {
+func embedVLImagesContext(ctx context.Context, db *store.Store, vlClient embed.VLImageBatcher, imageChunks []store.Chunk, log Logger, deferVectorUpdate bool) (int, error) {
 	log.Printf("Embedding %d image chunks via VL realtime API...", len(imageChunks))
 	items := make([]embed.ImageBatchItem, len(imageChunks))
 	for i, ch := range imageChunks {
@@ -408,7 +409,7 @@ func embedVLImagesContext(ctx context.Context, db *store.Store, vlClient embed.V
 				continue
 			}
 			idx := validIndices[j]
-			if err := db.UpdateChunkEmbeddingContext(ctx, imageChunks[idx].ID, emb); err != nil {
+			if err := updateEmbedding(ctx, db, imageChunks[idx].ID, emb, deferVectorUpdate); err != nil {
 				return fmt.Errorf("update image chunk %d: %w", imageChunks[idx].ID, err)
 			}
 			imageUpdated++
@@ -429,10 +430,10 @@ func embedVLImagesContext(ctx context.Context, db *store.Store, vlClient embed.V
 }
 
 func embedBatch(db *store.Store, client embed.BatchEmbedder, chunks []store.Chunk, texts []string, log Logger) (int, error) {
-	return embedBatchContext(context.Background(), db, client, chunks, texts, log)
+	return embedBatchContext(context.Background(), db, client, chunks, texts, log, false)
 }
 
-func embedBatchContext(ctx context.Context, db *store.Store, client embed.BatchEmbedder, chunks []store.Chunk, texts []string, log Logger) (int, error) {
+func embedBatchContext(ctx context.Context, db *store.Store, client embed.BatchEmbedder, chunks []store.Chunk, texts []string, log Logger, deferVectorUpdate bool) (int, error) {
 	if client == nil {
 		return 0, fmt.Errorf("batch embedding client is unavailable")
 	}
@@ -454,7 +455,7 @@ func embedBatchContext(ctx context.Context, db *store.Store, client embed.BatchE
 	updated := 0
 	for i, emb := range embeddings {
 		if i < len(chunks) && emb != nil {
-			if err := db.UpdateChunkEmbeddingContext(ctx, chunks[i].ID, emb); err != nil {
+			if err := updateEmbedding(ctx, db, chunks[i].ID, emb, deferVectorUpdate); err != nil {
 				return updated, fmt.Errorf("update chunk %d: %w", chunks[i].ID, err)
 			}
 			updated++
@@ -464,10 +465,10 @@ func embedBatchContext(ctx context.Context, db *store.Store, client embed.BatchE
 }
 
 func embedRealtime(db *store.Store, client embed.DocumentEmbedder, chunks []store.Chunk, texts []string, log Logger) (int, error) {
-	return embedRealtimeContext(context.Background(), db, client, chunks, texts, log)
+	return embedRealtimeContext(context.Background(), db, client, chunks, texts, log, false)
 }
 
-func embedRealtimeContext(ctx context.Context, db *store.Store, client embed.DocumentEmbedder, chunks []store.Chunk, texts []string, log Logger) (int, error) {
+func embedRealtimeContext(ctx context.Context, db *store.Store, client embed.DocumentEmbedder, chunks []store.Chunk, texts []string, log Logger, deferVectorUpdate bool) (int, error) {
 	if client == nil {
 		return 0, fmt.Errorf("document embedding client is unavailable")
 	}
@@ -497,7 +498,7 @@ func embedRealtimeContext(ctx context.Context, db *store.Store, client embed.Doc
 			if idx >= len(chunks) {
 				break
 			}
-			if err := db.UpdateChunkEmbeddingContext(ctx, chunks[idx].ID, emb); err != nil {
+			if err := updateEmbedding(ctx, db, chunks[idx].ID, emb, deferVectorUpdate); err != nil {
 				return updated, fmt.Errorf("update chunk %d: %w", chunks[idx].ID, err)
 			}
 			updated++
@@ -505,6 +506,13 @@ func embedRealtimeContext(ctx context.Context, db *store.Store, client embed.Doc
 		log.Printf("\r  %d/%d", updated, len(chunks))
 	}
 	return updated, nil
+}
+
+func updateEmbedding(ctx context.Context, db *store.Store, chunkID int64, embedding []float32, deferVectorUpdate bool) error {
+	if deferVectorUpdate {
+		return db.PersistChunkEmbeddingContext(ctx, chunkID, embedding)
+	}
+	return db.UpdateChunkEmbeddingContext(ctx, chunkID, embedding)
 }
 
 // stdoutLogger is the production Logger backed by a writer (io.Discard in
