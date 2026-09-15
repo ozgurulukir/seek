@@ -140,11 +140,11 @@ seek sync --realtime
 # Generate embeddings for any remaining unembedded chunks (auto → realtime;
 # -b forces the async provider batch on hosted providers that support it)
 seek embed
-seek embed -r          # force realtime
-seek embed -b          # force async provider batch (hosted providers only)
+seek embed --realtime  # (-r) force realtime
+seek embed --batch     # (-b) force async provider batch (hosted providers only)
 
 # Force re-embed all chunks (e.g. after model or dimensions change)
-seek embed -f
+seek embed --force     # (-f) force re-embed all chunks
 
 # Collection lifecycle (index-only commands — source files are never touched)
 seek collection list                             # list collections with semantic coverage

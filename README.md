@@ -111,6 +111,27 @@ seek embed --force                         # auto mode → realtime for local pr
 seek search "how does vector search work" -C 1
 ```
 
+Optional full local metadata enrichment (language, entities, keyphrases, and
+topics) is provided by the semantic tag service. Install it once using the
+platform-specific instructions in [the semantic service guide](docs/semantic.md),
+then enable it in `config.yaml`:
+
+```yaml
+semantic:
+  enabled: true
+  base_url: http://127.0.0.1:8003
+```
+
+After starting the service, enrich existing collections with:
+
+```bash
+seek collection reindex <collection> --semantic-only
+```
+
+`uv run tools/semantic/server.py` is intentionally degraded mode (YAKE
+keyphrases only). Full mode must be started with the Python interpreter under
+`tools/semantic/.venv`; the guide includes Linux/macOS and Windows commands.
+
 Ollama implements the OpenAI-compatible realtime `/v1/embeddings` endpoint,
 but not the Files and Batch endpoints that `seek`'s async mode uses. `seek`
 detects this automatically: with `embedding.mode: auto` (the default) a local
@@ -174,13 +195,20 @@ Reads only the local SQLite index; the `privacy.offline_only` setting applies un
 seek add <path> --name <name>      # add markdown collection
 seek add <path> --code             # add source code collection (35+ languages)
 seek add <path> --docs             # add rich documents (docx/xlsx/pdf/html/csv via xberg)
-seek add --claude | --codex        # add agent conversation sessions (+images)
-seek add --opencode | --copilot | --hermes # add schema-driven agent sessions
+# Choose one conversation source:
+seek add --claude                  # Claude Code sessions (+images)
+seek add --codex                   # Codex sessions (+images)
+# Choose one schema-driven agent source:
+seek add --opencode                # opencode sessions
+seek add --copilot                 # GitHub Copilot CLI sessions
+seek add --hermes                  # Hermes Agent sessions
 seek sync                          # incremental index update then embed new chunks
 seek sync --no-embed               # index only (keyword-first: skip embedding entirely)
 seek sync --realtime               # force the realtime request batch (used by stop-hooks)
 seek sync <col> --path <p>         # validate <p> is inside <col>, then sync the whole collection
-seek embed [-f] [-r] [-b]          # generate embeddings (auto → realtime; -b forces async batch)
+seek embed [--force|-f] [--realtime|-r] [--batch|-b]
+                                    # generate embeddings; auto → realtime locally
+                                    # --batch forces async Files + Batch API
 
 # Collection lifecycle (index-only — source files are never modified)
 seek collection list               # list collections with semantic coverage
@@ -207,12 +235,20 @@ seek search "<query>" --aggs "type:terms"  # faceted aggregations (also lang:ter
 seek fields [name] [--json]        # discover fast-field values & taxonomy (tags, topics, entities, etc.)
 
 # System & Management
-seek auth login | status           # configure / inspect embedding & rerank providers
-seek service start | stop | status # manage periodic OS background sync service
-seek hooks install | uninstall     # install automatic conversation sync hooks
+# Authentication and provider status:
+seek auth login                    # configure embedding/rerank providers
+seek auth status                   # inspect provider status
+# Background service: choose start, stop, or status:
+seek service start                 # start periodic sync+embed service
+seek service stop                  # stop the service
+seek service status                # inspect the service
+# Hooks: choose install or uninstall:
+seek hooks install                 # install automatic conversation sync hooks
+seek hooks uninstall               # remove automatic conversation sync hooks
 seek doctor [--fix-permissions]    # audit & repair private data permissions (0700/0600)
 seek uninstall --dry-run           # remove service/hooks/cache/config (preview first!)
-seek advanced analyze "<text>" --lang en|tr # tokenize and stem text
+seek advanced analyze "<text>" --lang en # tokenize and stem (English)
+seek advanced analyze "<text>" --lang tr # tokenize and stem (Turkish)
 seek advanced parsers list        # view parser schemas and detection status
 ```
 
