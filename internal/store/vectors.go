@@ -211,7 +211,14 @@ func (s *Store) SearchVectorContext(ctx context.Context, queryEmb []float32, lim
 			searchLimit = limit * 10
 		}
 		results, err := s.vector().Search(queryEmb, searchLimit)
-		if err == nil && len(results) > 0 {
+		if err != nil {
+			// A failing HNSW lookup signals a broken index (stale graph,
+			// dimension drift, corrupt state). Propagate instead of silently
+			// degrading to a full linear scan — the fallback would mask the
+			// fault as either a performance cliff or quietly wrong results.
+			return nil, fmt.Errorf("hnsw search: %w", err)
+		}
+		if len(results) > 0 {
 			fullResults, err := s.fetchSearchResultsContext(ctx, results, filters)
 			if err != nil {
 				return nil, err
@@ -221,7 +228,8 @@ func (s *Store) SearchVectorContext(ctx context.Context, queryEmb []float32, lim
 			}
 			return fullResults, nil
 		}
-		// Fall through to linear scan on error or empty results
+		// Empty HNSW result set (e.g. embeddings exist but no graph yet):
+		// the linear scan still yields correct results, only slower.
 	}
 
 	return s.linearSearchVectorContext(ctx, queryEmb, limit, filters)
