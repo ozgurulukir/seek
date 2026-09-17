@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -144,10 +145,15 @@ func (c *CollectionRenameCmd) Run(cfg *config.AppConfig) (err error) {
 	defer closeCollectionRuntime(&err, runtime)
 
 	// Resolve the source path up front so the success message can confirm it
-	// stayed unchanged (rename never rewrites source files).
+	// stayed unchanged (rename never rewrites source files). Only a genuine
+	// miss is "not found" — a store failure must keep its cause instead of
+	// being misreported (review 2026-09-17 L16).
 	col, err := runtime.Store.GetCollectionByName(c.Old)
 	if err != nil {
-		return fmt.Errorf("collection %q not found", c.Old)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("collection %q not found", c.Old)
+		}
+		return fmt.Errorf("load collection %q: %w", c.Old, err)
 	}
 
 	svc := app.NewCollectionService(runtime)
