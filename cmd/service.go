@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -200,7 +201,12 @@ func startLinuxService(bin string, interval int) error {
 		return fmt.Errorf("write systemd timer: %w", err)
 	}
 
-	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	// daemon-reload output is noise, but its failure must not vanish: the
+	// enable below operates on a possibly stale unit cache
+	// (review 2026-09-17 L21).
+	if err := exec.Command("systemctl", "--user", "daemon-reload").Run(); err != nil {
+		return fmt.Errorf("systemctl daemon-reload: %w", err)
+	}
 	out, err := exec.Command("systemctl", "--user", "enable", "--now", "seek.timer").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("systemctl enable seek.timer: %s (%w)", string(out), err)
@@ -270,10 +276,25 @@ func (c *ServiceStopCmd) Run(cfg *config.AppConfig) error {
 		timerPath := filepath.Join(dir, "seek.timer")
 		servicePath := filepath.Join(dir, "seek.service")
 
-		_ = exec.Command("systemctl", "--user", "disable", "--now", "seek.timer").Run()
-		_ = os.Remove(timerPath)
-		_ = os.Remove(servicePath)
-		_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+		// Join every failure instead of printing success regardless: a
+		// service that could not be disabled or whose units could not be
+		// removed KEEPS RUNNING (review 2026-09-17 L21).
+		var errs []error
+		if out, err := exec.Command("systemctl", "--user", "disable", "--now", "seek.timer").CombinedOutput(); err != nil {
+			errs = append(errs, fmt.Errorf("systemctl disable seek.timer: %s (%w)", string(out), err))
+		}
+		if err := os.Remove(timerPath); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove %s: %w", timerPath, err))
+		}
+		if err := os.Remove(servicePath); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove %s: %w", servicePath, err))
+		}
+		if err := exec.Command("systemctl", "--user", "daemon-reload").Run(); err != nil {
+			errs = append(errs, fmt.Errorf("systemctl daemon-reload: %w", err))
+		}
+		if err := errors.Join(errs...); err != nil {
+			return err
+		}
 
 		fmt.Println("Service stopped and systemd units removed.")
 		return nil
