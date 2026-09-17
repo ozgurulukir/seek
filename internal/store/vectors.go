@@ -148,7 +148,14 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 		}
 		var embBlob []byte
 		err := s.db.QueryRowContext(ctx, `SELECT embedding FROM chunks WHERE id = ?`, chunkID).Scan(&embBlob)
-		if err != nil || len(embBlob) == 0 {
+		if err != nil {
+			// A DB failure must not be collapsed with "no embedding yet" —
+			// that skipped the chunk silently until the next full embed
+			// (review 2026-09-17 L7). sql.ErrNoRows cannot occur here: the
+			// id came from the chunks table moments ago.
+			return added, fmt.Errorf("load embedding for chunk %d: %w", chunkID, err)
+		}
+		if len(embBlob) == 0 {
 			continue
 		}
 		emb := decodeEmbedding(embBlob)
