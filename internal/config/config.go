@@ -456,8 +456,14 @@ func Load() (*AppConfig, error) {
 	// Private data lives here (config, index) — owner-only directories. Note
 	// MkdirAll applies perm only to newly created components; existing dirs
 	// keep their mode (seek doctor --fix-permissions tightens old installs).
-	os.MkdirAll(cfgDir, DefaultPrivateDirPerms)
-	os.MkdirAll(cacheD, DefaultPrivateDirPerms)
+	// Fail loudly: an unwritable home silently reappears later as a
+	// confusing "open store" or "save config" error (review 2026-09-17 L18).
+	if err := os.MkdirAll(cfgDir, DefaultPrivateDirPerms); err != nil {
+		return nil, fmt.Errorf("create config dir %s: %w", cfgDir, err)
+	}
+	if err := os.MkdirAll(cacheD, DefaultPrivateDirPerms); err != nil {
+		return nil, fmt.Errorf("create cache dir %s: %w", cacheD, err)
+	}
 
 	ac := defaultAppConfig(cacheD)
 
@@ -532,7 +538,12 @@ func (ac *AppConfig) ConfigPath() string {
 func Save(cfg Config) error {
 	dir := configDir()
 	// Private data: owner-only directory (see Load for existing-dir caveat).
-	os.MkdirAll(dir, DefaultPrivateDirPerms)
+	// A failed mkdir must abort the save — especially for credential writes,
+	// where silently not persisting the key is the worst outcome
+	// (review 2026-09-17 L18).
+	if err := os.MkdirAll(dir, DefaultPrivateDirPerms); err != nil {
+		return fmt.Errorf("create config dir %s: %w", dir, err)
+	}
 
 	data, err := yaml.Marshal(&cfg)
 	if err != nil {

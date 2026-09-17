@@ -128,7 +128,13 @@ func (c *ServiceStartCmd) Run(cfg *config.AppConfig) error {
 		interval = 60
 	}
 
-	_ = os.MkdirAll(filepath.Dir(logPath()), config.DefaultDirPerms)
+	// The service log lives in the cache dir; the failure is surfaced rather
+	// than discarded so install problems are not discovered only when the
+	// service fails to write its log (review 2026-09-17 L18).
+	logDir := filepath.Dir(logPath())
+	if err := os.MkdirAll(logDir, config.DefaultDirPerms); err != nil {
+		return fmt.Errorf("create cache dir %s: %w", logDir, err)
+	}
 	bin := seekBinary()
 
 	switch runtime.GOOS {
