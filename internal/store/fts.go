@@ -22,20 +22,27 @@ func (s *Store) initFTS() error {
 	if err != nil {
 		return fmt.Errorf("check fts tokenize: %w", err)
 	}
-	// Wrap the whole rebuild (DROP + CREATE + repopulate) in a transaction so
-	// a crash mid-migration cannot leave documents_fts half-populated — that
-	// would silently break BM25 search, and the new tokenize string would
-	// already be in sqlite_master so the migration would never re-trigger.
+	// Wrap the whole rebuild (DROP + CREATE + repopulate) in a real *sql.Tx:
+	// raw BEGIN/COMMIT through the shared pool do not guarantee a single
+	// connection, so the statements would run in autocommit and a crash
+	// mid-rebuild could leave documents_fts dropped or empty while
+	// sqlite_master already records the new tokenizer — the migration would
+	// never re-trigger and BM25 search would silently return nothing.
+	var tx *sql.Tx
 	if needRebuild {
-		if _, err := s.db.Exec(`BEGIN`); err != nil {
+		if tx, err = s.db.Begin(); err != nil {
 			return fmt.Errorf("begin fts rebuild tx: %w", err)
 		}
-		if _, err := s.db.Exec(`DROP TABLE IF EXISTS documents_fts_vocab`); err != nil {
-			return fmt.Errorf("drop documents_fts_vocab: %w", s.rollbackFTS(err))
+		if _, err := tx.Exec(`DROP TABLE IF EXISTS documents_fts_vocab`); err != nil {
+			return fmt.Errorf("drop documents_fts_vocab: %w", rollbackFTS(tx, err))
 		}
-		if _, err := s.db.Exec(`DROP TABLE IF EXISTS documents_fts`); err != nil {
-			return fmt.Errorf("drop documents_fts: %w", s.rollbackFTS(err))
+		if _, err := tx.Exec(`DROP TABLE IF EXISTS documents_fts`); err != nil {
+			return fmt.Errorf("drop documents_fts: %w", rollbackFTS(tx, err))
 		}
+	}
+	runner := statementRunner(s.db)
+	if tx != nil {
+		runner = tx
 	}
 	// NOTE: FTS5 requires the tokenize argument as a literal in the DDL —
 	// it rejects bound parameters ("tokenize=?") with a parse error. FTSTokenize
@@ -47,32 +54,41 @@ func (s *Store) initFTS() error {
 			tokenize='%s')`,
 		FTSTokenize,
 	)
-	if _, err := s.db.Exec(ftsDDL); err != nil {
-		if needRebuild {
-			err = s.rollbackFTS(err)
+	if _, err := runner.Exec(ftsDDL); err != nil {
+		if tx != nil {
+			err = rollbackFTS(tx, err)
 		}
 		return fmt.Errorf("create documents_fts: %w", err)
 	}
 	// Create vocab table for zero-memory, instant prefix autocompletion
 	vocabDDL := `CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts_vocab USING fts5vocab(documents_fts, 'row')`
-	if _, err := s.db.Exec(vocabDDL); err != nil {
+	if _, err := runner.Exec(vocabDDL); err != nil {
 		// Non-fatal if sqlite environment lacks fts5vocab
 		_ = err
 	}
-	if needRebuild {
-		if err := s.rebuildFTSFromDocuments(); err != nil {
-			return fmt.Errorf("rebuild fts: %w", s.rollbackFTS(err))
+	if tx != nil {
+		if err := rebuildFTSFromDocuments(runner); err != nil {
+			return fmt.Errorf("rebuild fts: %w", rollbackFTS(tx, err))
 		}
-		if _, err := s.db.Exec(`COMMIT`); err != nil {
+		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit fts rebuild: %w", err)
 		}
 	}
 	return nil
 }
 
-func (s *Store) rollbackFTS(cause error) error {
-	_, rollbackErr := s.db.Exec(`ROLLBACK`)
-	return errors.Join(cause, rollbackErr)
+// rollbackFTS rolls the rebuild transaction back, joining the rollback error
+// onto the cause so the original failure is not masked.
+func rollbackFTS(tx *sql.Tx, cause error) error {
+	return errors.Join(cause, tx.Rollback())
+}
+
+// statementRunner is satisfied by both *sql.DB and *sql.Tx, letting the FTS
+// rebuild stream its SELECT and run its INSERTs over the transaction's single
+// connection.
+type statementRunner interface {
+	Exec(query string, args ...interface{}) (sql.Result, error)
+	Query(query string, args ...interface{}) (*sql.Rows, error)
 }
 
 // ftsNeedsRebuild reports whether documents_fts is missing or was created
@@ -83,8 +99,12 @@ func (s *Store) ftsNeedsRebuild() (bool, error) {
 		`SELECT sql FROM sqlite_master WHERE type='table' AND name='documents_fts'`,
 	).Scan(&ddlSQL)
 	if err == sql.ErrNoRows {
-		// Table doesn't exist yet — CREATE will handle it, no rebuild needed.
-		return false, nil
+		// Table missing (fresh database, or damaged state): rebuild
+		// unconditionally. On a fresh database there are no chunks yet, so
+		// the repopulate pass is a no-op; on a damaged database it restores
+		// BM25 content instead of leaving an empty table that would silently
+		// return no keyword results forever.
+		return true, nil
 	}
 	if err != nil {
 		return false, err
@@ -102,10 +122,10 @@ func (s *Store) ftsNeedsRebuild() (bool, error) {
 // essentially preserved. Snippet rendering may differ slightly from a fresh
 // index. Ordering is done in Go (not via SQL GROUP_CONCAT, whose row order
 // under an inner subquery ORDER BY is not guaranteed by SQLite).
-func (s *Store) rebuildFTSFromDocuments() error {
+func rebuildFTSFromDocuments(runner statementRunner) error {
 	// One pass: stream (doc_id, title, chunk_seq, chunk_content) ordered so
 	// all chunks of a document arrive together and in seq order.
-	rows, err := s.db.Query(
+	rows, err := runner.Query(
 		`SELECT d.id, d.title, ch.seq, ch.content, ch.content_zstd
 		   FROM documents d
 		   LEFT JOIN chunks ch ON ch.document_id = d.id
@@ -127,7 +147,7 @@ func (s *Store) rebuildFTSFromDocuments() error {
 		if !started {
 			return nil
 		}
-		_, err := s.db.Exec(
+		_, err := runner.Exec(
 			`INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`,
 			curID, curTitle, b.String(),
 		)
