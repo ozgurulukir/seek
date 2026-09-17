@@ -33,6 +33,9 @@ func ScanMarkdownContext(ctx context.Context, dir, pattern string) ([]FileInfo, 
 	if pattern == "" {
 		pattern = "**/*.md"
 	}
+	if err := checkScanPattern(pattern, "**/*.md", "**/*.markdown"); err != nil {
+		return nil, nil, err
+	}
 
 	var files []FileInfo
 	var issues []ScanIssue
@@ -55,9 +58,16 @@ func ScanMarkdownContext(ctx context.Context, dir, pattern string) ([]FileInfo, 
 			return nil
 		}
 
-		// Check glob pattern (simple version: just check extension)
+		// Check glob pattern (simple version: just check extension).
+		// Syntax errors cannot occur here (checkScanPattern validated the
+		// pattern), but a Match error must never be swallowed into
+		// "no match" — that would silently skip files.
 		if pattern != "**/*.md" && pattern != "**/*.markdown" {
-			matched, _ := filepath.Match(pattern, filepath.Base(path))
+			matched, matchErr := filepath.Match(pattern, filepath.Base(path))
+			if matchErr != nil {
+				issues = append(issues, ScanIssue{Path: path, Err: matchErr})
+				return nil
+			}
 			if !matched {
 				return nil
 			}

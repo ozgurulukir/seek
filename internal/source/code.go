@@ -294,7 +294,10 @@ func processCodeFileContext(ctx context.Context, path, relPath string, info os.F
 
 	baseName := info.Name()
 	if pattern != "" && pattern != "**/*" && pattern != "*" {
-		matched, _ := filepath.Match(pattern, baseName)
+		matched, matchErr := filepath.Match(pattern, baseName)
+		if matchErr != nil {
+			return nil, matchErr
+		}
 		if !matched {
 			return nil, nil
 		}
@@ -356,6 +359,9 @@ func ScanCodeWithWarnings(dir, pattern string) ([]CodeFileInfo, []string, error)
 }
 
 func ScanCodeWithWarningsContext(ctx context.Context, dir, pattern string) ([]CodeFileInfo, []string, error) {
+	if err := checkScanPattern(pattern, "**/*", "*"); err != nil {
+		return nil, nil, err
+	}
 	var files []CodeFileInfo
 	var skipped []string
 	absDir, err := filepath.Abs(dir)
