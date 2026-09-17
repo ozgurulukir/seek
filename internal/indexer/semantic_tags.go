@@ -149,10 +149,14 @@ func (idx *Indexer) semanticFastFields(ctx context.Context, label string, chunks
 // disables the capability for the process lifetime (re-evaluated on the
 // next process start).
 func (idx *Indexer) semanticProvider() semantic.Provider {
+	idx.mu.Lock()
 	if idx.semChecked {
-		return idx.semClient
+		c := idx.semClient
+		idx.mu.Unlock()
+		return c
 	}
 	idx.semChecked = true
+	idx.mu.Unlock()
 
 	if idx.cfg == nil {
 		return nil
@@ -188,6 +192,8 @@ func (idx *Indexer) semanticProvider() semantic.Provider {
 		caps = append(caps, "topic")
 	}
 	idx.log.Printf("  semantic service: %s (capabilities: %s)\n", baseURL, strings.Join(caps, ", "))
+	idx.mu.Lock()
 	idx.semClient = client
+	idx.mu.Unlock()
 	return client
 }

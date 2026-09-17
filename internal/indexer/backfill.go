@@ -268,9 +268,13 @@ func (idx *Indexer) semanticFingerprintBasis(ctx context.Context, p semantic.Pro
 // content hash is layered on top by the caller. WithSemanticProvider resets
 // the cache so provider swaps observe the new identity.
 func (idx *Indexer) semanticSyncBasis(ctx context.Context) (store.SemanticFingerprint, bool) {
+	idx.mu.Lock()
 	if idx.semBasisSet {
-		return idx.semBasis, true
+		b := idx.semBasis
+		idx.mu.Unlock()
+		return b, true
 	}
+	idx.mu.Unlock()
 	p := idx.semanticProvider()
 	if p == nil {
 		// Disabled or service down: there is no identity to record against.
@@ -282,8 +286,10 @@ func (idx *Indexer) semanticSyncBasis(ctx context.Context) (store.SemanticFinger
 	if err != nil {
 		return store.SemanticFingerprint{}, false
 	}
+	idx.mu.Lock()
 	idx.semBasis = basis
 	idx.semBasisSet = true
+	idx.mu.Unlock()
 	return basis, true
 }
 

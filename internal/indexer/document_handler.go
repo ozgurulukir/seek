@@ -84,7 +84,7 @@ func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFil
 		return docStatusSkipped
 	}
 	if !ext.Supports(f.Path) {
-		idx.report.Errors = append(idx.report.Errors, SyncFailure{Path: f.Path, Kind: "unsupported", Error: "extractor does not support file"})
+		idx.addSyncFailure(f.Path, "unsupported", "extractor does not support file")
 		return docStatusUnsupported
 	}
 

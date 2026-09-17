@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync"
 
 	"github.com/ozgurulukir/seek/internal/chunk"
 	"github.com/ozgurulukir/seek/internal/config"
@@ -33,7 +34,12 @@ type Indexer struct {
 	writer   IndexWriter
 	log      Logger
 	ctxValue context.Context
-	report   SyncReport
+	// mu guards the instance-level mutable state below (report accounting and
+	// the lazily resolved semantic caches). Sync runs sequentially today; the
+	// lock keeps a future parallel sync/backfill on one shared Indexer from
+	// silently racing (review 2026-09-17 L12).
+	mu     sync.Mutex
+	report SyncReport
 	// ext is an explicit override for the extraction backend, taking precedence
 	// over both per-collection backend and the config default. Set via
 	// WithExtractor (e.g. from a --backend flag). When nil, the backend is
@@ -113,9 +119,11 @@ func (idx *Indexer) WithEnricher(enricher DocumentEnricher) *Indexer {
 // this hook instead of running a real service; the production path resolves
 // the provider from config on first use.
 func (idx *Indexer) WithSemanticProvider(p semantic.Provider) *Indexer {
+	idx.mu.Lock()
 	idx.semChecked = true
 	idx.semClient = p
 	idx.semBasisSet = false
+	idx.mu.Unlock()
 	return idx
 }
 
@@ -221,24 +229,36 @@ func (idx *Indexer) WithLogger(l Logger) *Indexer {
 }
 
 func (idx *Indexer) warnf(format string, v ...interface{}) {
+	idx.mu.Lock()
 	idx.report.Warnings++
+	idx.mu.Unlock()
 	idx.log.Printf(format, v...)
 }
 
 func (idx *Indexer) addReport(report SyncReport) {
+	idx.mu.Lock()
 	idx.report.add(report)
+	idx.mu.Unlock()
+}
+
+func (idx *Indexer) addSyncFailure(path, kind, errMsg string) {
+	idx.mu.Lock()
+	idx.report.Errors = append(idx.report.Errors, SyncFailure{Path: path, Kind: kind, Error: errMsg})
+	idx.mu.Unlock()
 }
 
 func (idx *Indexer) recordFailure(path, kind string, err error) {
 	if err == nil {
 		return
 	}
-	idx.report.Errors = append(idx.report.Errors, SyncFailure{Path: path, Kind: kind, Error: err.Error()})
+	idx.addSyncFailure(path, kind, err.Error())
 }
 
 // LastReport returns a snapshot of the most recent collection sync report.
 func (idx *Indexer) LastReport() SyncReport {
+	idx.mu.Lock()
 	report := idx.report
+	idx.mu.Unlock()
 	report.Errors = append([]SyncFailure(nil), report.Errors...)
 	return report
 }
@@ -258,24 +278,31 @@ func (idx *Indexer) SyncCollectionContext(ctx context.Context, col *store.Collec
 // SyncCollectionWithReport syncs one collection and returns structured
 // accounting alongside the compatibility error result.
 func (idx *Indexer) SyncCollectionWithReport(ctx context.Context, col *store.Collection) (SyncReport, error) {
+	idx.mu.Lock()
 	idx.report = SyncReport{}
 	if col == nil {
 		idx.report.Failed++
 		idx.report.Errors = append(idx.report.Errors, SyncFailure{Kind: "invalid_collection", Error: "nil collection"})
+		idx.mu.Unlock()
 		return idx.LastReport(), fmt.Errorf("sync collection: nil collection")
 	}
 	idx.report.Collection = col.Name
+	idx.mu.Unlock()
 	idx.WithContext(ctx)
 	h, ok := syncHandlers[col.Type]
 	if !ok {
+		idx.addSyncFailure("", "unsupported_collection", fmt.Sprintf("unknown collection type: %s", col.Type))
+		idx.mu.Lock()
 		idx.report.Unsupported++
-		idx.report.Errors = append(idx.report.Errors, SyncFailure{Kind: "unsupported_collection", Error: fmt.Sprintf("unknown collection type: %s", col.Type)})
+		idx.mu.Unlock()
 		return idx.LastReport(), fmt.Errorf("unknown collection type: %s", col.Type)
 	}
 	err := h.Sync(idx.ctx(), &HandlerDeps{Indexer: idx, Writer: idx.writer}, col)
 	if err != nil {
+		idx.mu.Lock()
 		idx.report.Failed++
-		idx.report.Errors = append(idx.report.Errors, SyncFailure{Kind: "collection", Error: err.Error()})
+		idx.mu.Unlock()
+		idx.addSyncFailure("", "collection", err.Error())
 	}
 	return idx.LastReport(), err
 }
