@@ -345,3 +345,33 @@ func TestPrepareBatchJSONLIdempotent(t *testing.T) {
 		t.Errorf("line1 input = %v, want %q", line1.Body["input"], "search_document: raw")
 	}
 }
+
+// TestReassembleBatchEmbeddings pins the M10 contract: missing chunk-N keys
+// (provider-side per-item failures) must surface as an error, not as silent
+// nil holes that the pipeline would skip — chunks never entered the vector
+// index with no error at all (review 2026-09-17 M10).
+func TestReassembleBatchEmbeddings(t *testing.T) {
+	texts := []string{"a", "b", "c"}
+	full := map[string][]float32{
+		"chunk-0": {1, 2},
+		"chunk-1": {3, 4},
+		"chunk-2": {5, 6},
+	}
+	embs, err := reassembleBatchEmbeddings(texts, full)
+	if err != nil {
+		t.Fatalf("complete results: unexpected error %v", err)
+	}
+	for i, e := range embs {
+		if e == nil {
+			t.Fatalf("complete results: embedding %d is nil", i)
+		}
+	}
+
+	partial := map[string][]float32{
+		"chunk-0": {1, 2},
+		"chunk-2": {5, 6},
+	}
+	if _, err := reassembleBatchEmbeddings(texts, partial); err == nil {
+		t.Fatal("incomplete results: expected error, got nil")
+	}
+}

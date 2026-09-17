@@ -358,13 +358,27 @@ func (c *Client) BatchEmbedAsyncContext(ctx context.Context, texts []string, onS
 	}
 
 	// 6. Reassemble in order
+	return reassembleBatchEmbeddings(texts, resultMap)
+}
+
+// reassembleBatchEmbeddings maps downloaded batch results back onto the
+// request order via their chunk-N keys. A missing key means that item failed
+// provider-side; DownloadBatchResults deliberately returns partial results,
+// but reporting success here would silently drop those chunks from the
+// vector index, so incompleteness is an error — the DB keeps whatever was
+// already embedded, and a re-run retries the rest (review 2026-09-17 M10).
+func reassembleBatchEmbeddings(texts []string, resultMap map[string][]float32) ([][]float32, error) {
 	embeddings := make([][]float32, len(texts))
+	missing := 0
 	for i := range texts {
-		key := fmt.Sprintf("chunk-%d", i)
-		if emb, ok := resultMap[key]; ok {
+		if emb, ok := resultMap[fmt.Sprintf("chunk-%d", i)]; ok {
 			embeddings[i] = emb
+		} else {
+			missing++
 		}
 	}
-
+	if missing > 0 {
+		return nil, fmt.Errorf("batch results incomplete: %d of %d embedding(s) missing; re-run to retry the missing chunks", missing, len(texts))
+	}
 	return embeddings, nil
 }
