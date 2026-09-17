@@ -468,7 +468,18 @@ func Load() (*AppConfig, error) {
 	ac := defaultAppConfig(cacheD)
 
 	cfgPath := filepath.Join(cfgDir, "config.yaml")
-	if data, err := os.ReadFile(cfgPath); err == nil {
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			// A permission or I/O failure on an EXISTING config must abort
+			// startup: silently continuing with defaults would make every
+			// configured provider and key vanish without a root cause
+			// (review 2026-09-17 L19).
+			return nil, fmt.Errorf("read config %s: %w", cfgPath, err)
+		}
+		data = nil
+	}
+	if data != nil {
 		if err := yaml.Unmarshal(data, &ac.Config); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
