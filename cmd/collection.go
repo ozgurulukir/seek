@@ -197,7 +197,7 @@ func (c *CollectionReindexCmd) Run(cfg *config.AppConfig) (err error) {
 	defer closeCollectionRuntime(&err, runtime)
 
 	svc := app.NewCollectionService(runtime)
-	log := pipeline.NewStdoutLogger(os.Stdout)
+	log := pipeline.NewStdoutLogger(os.Stderr)
 
 	if c.SemanticOnly {
 		report, err := svc.Backfill(ctx, c.Name, log)

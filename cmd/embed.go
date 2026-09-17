@@ -56,5 +56,5 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) (err error) {
 		Batch:       c.Batch,
 		Type:        c.Type,
 		VectorIndex: true,
-	}, pipeline.NewStdoutLogger(os.Stdout))
+	}, pipeline.NewStdoutLogger(os.Stderr))
 }

@@ -70,7 +70,7 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 			Realtime:    c.Realtime,
 			VectorIndex: true,
 			SkipEmbed:   c.NoEmbed,
-		}, pipeline.NewStdoutLogger(os.Stdout))
+		}, pipeline.NewStdoutLogger(os.Stderr))
 		if err != nil {
 			return fmt.Errorf("sync %q with path %q: %w", c.Collection, c.Path, err)
 		}
@@ -109,10 +109,10 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 			Realtime:    c.Realtime,
 			VectorIndex: true,
 			SkipEmbed:   c.NoEmbed,
-		}, pipeline.NewStdoutLogger(os.Stdout))
+		}, pipeline.NewStdoutLogger(os.Stderr))
 		if err != nil {
 			failedNames = append(failedNames, col.Name)
-			fmt.Printf("  ERROR [%s]: %v\n", col.Name, err)
+			fmt.Fprintf(os.Stderr, "  ERROR [%s]: %v\n", col.Name, err)
 		}
 	}
 
