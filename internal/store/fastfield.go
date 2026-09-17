@@ -6,12 +6,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // FastFieldStore provides fast field storage for sorting and aggregation.
 // It uses a dedicated SQLite table with JSON-encoded values.
 type FastFieldStore struct {
 	db *sql.DB
+	// ensureMu guards the table-ensured cache. Set is one of the hottest
+	// write paths (per-document fan-out across ~6-16 fields), so the two DDL
+	// statements are run once per store instead of on every call; a failure
+	// is never cached so a transient error can be retried.
+	ensureMu sync.Mutex
+	ensured  bool
 }
 
 // NewFastFieldStore creates a new fast field store.
@@ -21,6 +28,11 @@ func NewFastFieldStore(db *sql.DB) *FastFieldStore {
 
 // ensureTable creates the fast_fields table if it doesn't exist.
 func (f *FastFieldStore) ensureTable() error {
+	f.ensureMu.Lock()
+	defer f.ensureMu.Unlock()
+	if f.ensured {
+		return nil
+	}
 	_, err := f.db.Exec(`CREATE TABLE IF NOT EXISTS fast_fields (
 		doc_id INTEGER NOT NULL,
 		field_name TEXT NOT NULL,
@@ -34,7 +46,11 @@ func (f *FastFieldStore) ensureTable() error {
 	// The PK (doc_id, field_name) cannot serve these because it leads with doc_id,
 	// so without this index such filters fall back to a full table scan.
 	_, err = f.db.Exec(`CREATE INDEX IF NOT EXISTS idx_fast_fields_name_value ON fast_fields (field_name, field_value)`)
-	return err
+	if err != nil {
+		return err
+	}
+	f.ensured = true
+	return nil
 }
 
 // Set stores a fast field value for a document.
