@@ -44,9 +44,10 @@ func (s *Store) AutocompleteTerms(prefix string, limit int) ([]string, error) {
 	var terms []string
 	for rows.Next() {
 		var t string
-		if err := rows.Scan(&t); err == nil {
-			terms = append(terms, t)
+		if err := rows.Scan(&t); err != nil {
+			return nil, fmt.Errorf("autocomplete scan: %w", err)
 		}
+		terms = append(terms, t)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("autocomplete rows: %w", err)
