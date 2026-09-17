@@ -287,7 +287,17 @@ func readLine() (string, error) {
 	buf := make([]byte, 1024)
 	for {
 		n, err := os.Stdin.Read(buf)
-		if err != nil || n == 0 {
+		if err != nil {
+			// A failed read is an error, not an empty input — return it so
+			// the caller aborts instead of proceeding with whatever was
+			// typed before the failure. A partial line is still returned so
+			// the caller sees the user's input.
+			if len(line) == 0 {
+				return "", err
+			}
+			break
+		}
+		if n == 0 {
 			break
 		}
 

@@ -479,7 +479,18 @@ func Load() (*AppConfig, error) {
 func LoadUnresolved() (Config, error) {
 	cfg := defaultAppConfig(cacheDir()).Config
 	cfgPath := filepath.Join(configDir(), "config.yaml")
-	if data, err := os.ReadFile(cfgPath); err == nil {
+	// A read failure on an EXISTING config file must abort the caller: the
+	// credential write path overwrites the whole file, so treating a broken
+	// read as "no config" would silently reset the user's configuration to
+	// defaults. Only genuine absence falls through to the defaults.
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return Config{}, fmt.Errorf("read config %s: %w", cfgPath, err)
+		}
+		data = nil
+	}
+	if data != nil {
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			return Config{}, fmt.Errorf("parse config: %w", err)
 		}

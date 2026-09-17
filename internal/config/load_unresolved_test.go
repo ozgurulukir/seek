@@ -75,3 +75,23 @@ func TestLoadUnresolvedKeepsEnvIndirection(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadUnresolvedFailsOnUnreadableConfig pins the silent-failure-audit fix:
+// a config.yaml that exists but cannot be read must abort LoadUnresolved with
+// an error — treating the failure as "no config" would let a credential write
+// overwrite the whole file with defaults (review 2026-09-17 M6 follow-up).
+func TestLoadUnresolvedFailsOnUnreadableConfig(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
+	// Make the config path a directory: any ReadFile on it fails with an
+	// error that is not "not exist", on every platform.
+	cfgPath := filepath.Join(tmpHome, ".config", "seek", "config.yaml")
+	if err := os.MkdirAll(cfgPath, DefaultPrivateDirPerms); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := LoadUnresolved(); err == nil {
+		t.Fatal("expected error for unreadable config.yaml, got nil")
+	}
+}
