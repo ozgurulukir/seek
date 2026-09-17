@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +12,19 @@ import (
 	"github.com/ozgurulukir/seek/internal/pipeline"
 	"github.com/ozgurulukir/seek/internal/store"
 )
+
+// collectionByName resolves a collection so a store failure keeps its cause;
+// only a genuine miss reports "not found" (review 2026-09-17 L16 follow-up).
+func (s *CollectionService) collectionByName(name string) (*store.Collection, error) {
+	col, err := s.store.GetCollectionByName(name)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("collection %q not found", name)
+		}
+		return nil, fmt.Errorf("load collection %q: %w", name, err)
+	}
+	return col, nil
+}
 
 // CollectionService is the collection lifecycle boundary between commands and
 // persistence. Commands call this service instead of orchestrating SQL/Store
@@ -163,9 +178,9 @@ func (s *CollectionService) Reindex(ctx context.Context, name string, opts Reind
 	if s == nil || s.store == nil || s.pipeline == nil {
 		return ReindexResult{}, fmt.Errorf("collection service: not configured")
 	}
-	col, err := s.store.GetCollectionByName(name)
+	col, err := s.collectionByName(name)
 	if err != nil {
-		return ReindexResult{}, fmt.Errorf("collection %q not found", name)
+		return ReindexResult{}, err
 	}
 
 	vectorSpaceChanged := false
@@ -394,9 +409,9 @@ func (s *CollectionService) SyncPath(ctx context.Context, name, path string, opt
 	if s == nil || s.store == nil || s.pipeline == nil {
 		return indexer.SyncReport{}, fmt.Errorf("collection service: not configured")
 	}
-	col, err := s.store.GetCollectionByName(name)
+	col, err := s.collectionByName(name)
 	if err != nil {
-		return indexer.SyncReport{}, fmt.Errorf("collection %q not found", name)
+		return indexer.SyncReport{}, err
 	}
 	if err := ValidateCollectionPath(col, path); err != nil {
 		return indexer.SyncReport{}, err
@@ -418,9 +433,9 @@ func (s *CollectionService) Backfill(ctx context.Context, name string, log pipel
 	// Route indexer diagnostics to the caller's logger (stderr from cmd)
 	// instead of the Indexer's stdout default (review 2026-09-17 L15).
 	s.indexer.WithLogger(log)
-	col, err := s.store.GetCollectionByName(name)
+	col, err := s.collectionByName(name)
 	if err != nil {
-		return indexer.BackfillReport{}, fmt.Errorf("collection %q not found", name)
+		return indexer.BackfillReport{}, err
 	}
 	return s.indexer.BackfillSemantic(ctx, col, log)
 }
