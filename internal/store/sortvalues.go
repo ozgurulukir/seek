@@ -33,9 +33,21 @@ func (s *Store) documentSortValues(ctx context.Context, docIDs []int64, field st
 	if len(docIDs) == 0 {
 		return map[int64]interface{}{}, nil
 	}
-	// Names reach here only via the registry (SortValues gates on
-	// sourceDocuments), and the column name equals the registry name, so the
-	// identifier is code-owned despite being formatted in.
+	// Defense in depth (review 2026-09-17 L9): the name is formatted into
+	// SQL below, so re-assert membership against the code-owned allowlist
+	// instead of trusting that every caller came through the registry gate.
+	// A future registry entry whose name is not a documents column then
+	// fails closed instead of becoming SQL injection or a syntax error.
+	allowed := false
+	for _, def := range documentSortFields {
+		if def.Name == field {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return nil, fmt.Errorf("field %q is not a sortable documents column", field)
+	}
 	column := field
 
 	placeholders := make([]string, 0, len(docIDs))
