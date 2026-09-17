@@ -174,8 +174,16 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 		vlBaseURL = strings.TrimSpace(vlStr)
 	}
 
-	// Preserve existing configuration sections (rerank, extractor, task_prefix, etc.)
-	savedCfg := cfg.Config
+	// Start from the unexpanded on-disk config, not the resolved cfg: Load
+	// already expanded ${VAR} keys and copied the embedding key into the
+	// OCR/Rerank fallbacks, so persisting cfg.Config would write plaintext
+	// secrets to disk, break env-var rotation, and pin a stale pre-login key
+	// into ocr.api_key. Only the fields the user just entered are patched on
+	// top; everything else keeps its on-disk form (review 2026-09-17 M6).
+	savedCfg, err := config.LoadUnresolved()
+	if err != nil {
+		return err
+	}
 	savedCfg.Embedding.BaseURL = baseURL
 	savedCfg.Embedding.APIKey = apiKey
 	savedCfg.Embedding.Model = model

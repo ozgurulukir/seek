@@ -9,7 +9,9 @@ func TestMaskKey(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"", "********"},
+		// Empty stays empty: rendering an unset key must not imply a
+		// configured (masked) credential.
+		{"", ""},
 		{"12345678", "********"},
 		{"sk-1234567890abcdef", "sk-1...cdef"},
 	}

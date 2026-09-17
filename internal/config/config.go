@@ -469,6 +469,24 @@ func Load() (*AppConfig, error) {
 	return ac, nil
 }
 
+// LoadUnresolved returns the on-disk config (defaults + user file overrides)
+// without expanding env references or applying cross-section fallbacks.
+// Credential writers must start from it: persisting the resolved config would
+// bake plaintext secrets into the file, destroy ${VAR} indirection (env
+// rotation stops working), and pin stale fallback copies (e.g. ocr.api_key
+// silently inheriting the pre-login embedding key) into config.yaml
+// (review 2026-09-17 M6). Callers patch only the fields they own and Save.
+func LoadUnresolved() (Config, error) {
+	cfg := defaultAppConfig(cacheDir()).Config
+	cfgPath := filepath.Join(configDir(), "config.yaml")
+	if data, err := os.ReadFile(cfgPath); err == nil {
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			return Config{}, fmt.Errorf("parse config: %w", err)
+		}
+	}
+	return cfg, nil
+}
+
 // validateEmbeddingMode rejects an unknown embedding.mode value. The empty
 // value is allowed (it means auto) and is normalized by EffectiveMode.
 func validateEmbeddingMode(mode string) error {
