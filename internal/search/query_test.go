@@ -252,3 +252,20 @@ func TestToFTS5_UnaryNotUnderAnd(t *testing.T) {
 		}
 	}
 }
+
+// TestParseQueryRejectsInvalidPunctuation pins the L22 contract: unrecognized
+// punctuation must fail the parse instead of being silently swallowed as
+// end-of-input — `a @` used to parse as just `a`, losing the trailing term
+// without any error (review 2026-09-17 L22).
+func TestParseQueryRejectsInvalidPunctuation(t *testing.T) {
+	for _, input := range []string{"a @", "go !", "x #", "a @ b"} {
+		q, err := ParseQuery(input)
+		if err == nil {
+			t.Errorf("ParseQuery(%q) = %#v, want a syntax error", input, q)
+		}
+	}
+	// Legitimate queries still parse.
+	if q, err := ParseQuery("go AND NOT rust"); err != nil || q == nil {
+		t.Errorf("ParseQuery(\"go AND NOT rust\") = %v, %v", q, err)
+	}
+}

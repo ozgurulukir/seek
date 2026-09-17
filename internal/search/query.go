@@ -89,6 +89,11 @@ const (
 	tokenComma
 	tokenColon
 	tokenStar
+	// tokenInvalid marks a recognized-but-unsupported character (any
+	// punctuation outside the set above). It used to be reported as EOF,
+	// which made the parser silently swallow trailing garbage: `a @` parsed
+	// as just `a` (review 2026-09-17 L22).
+	tokenInvalid
 )
 
 type token struct {
@@ -228,7 +233,7 @@ func (s *scanner) scanToken() token {
 		return token{typ: tokenIdent, val: val, pos: pos}
 	default:
 		s.next()
-		return token{typ: tokenEOF, val: string(r), pos: pos}
+		return token{typ: tokenInvalid, val: string(r), pos: pos}
 	}
 }
 
