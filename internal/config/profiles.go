@@ -114,13 +114,16 @@ func renderSection(key string, cfg Config) (string, bool) {
 	case "chunk":
 		v = cfg.Chunk
 	case "embedding":
-		v = cfg.Embedding
+		// Redacted copies: the loaded config holds env-expanded API keys, and
+		// rendering them verbatim would leak the literal secret into terminal
+		// scrollback and session logs.
+		v = cfg.Embedding.Redacted()
 	case "rerank":
-		v = cfg.Rerank
+		v = cfg.Rerank.Redacted()
 	case "semantic":
 		v = cfg.Semantic
 	case "ocr":
-		v = cfg.OCR
+		v = cfg.OCR.Redacted()
 	case "extractor":
 		v = cfg.Extractor
 	case "vector_index":

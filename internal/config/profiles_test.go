@@ -209,3 +209,26 @@ func TestHasAdvancedKnobs(t *testing.T) {
 		t.Error("a set compression counts as an advanced knob")
 	}
 }
+
+// TestGroupRedactsAPIKeys pins the M5 contract: `seek config` (and
+// `seek doctor --verbose`) render the resolved config, whose API keys hold
+// expanded ${VAR} values — the rendered YAML must mask them, never print the
+// literal secret (review 2026-09-17 M5).
+func TestGroupRedactsAPIKeys(t *testing.T) {
+	cfg := &AppConfig{Config: Config{
+		Embedding: EmbeddingConfig{BaseURL: "https://api.example.com/v1", APIKey: "sk-1234567890abcdef", Model: "text-embedding-3-small"},
+		OCR:       OCRConfig{Enabled: true, APIKey: "ocr-secret-key-42"},
+		Rerank:    RerankConfig{Enabled: true, APIKey: "rerank-secret-key-7"},
+	}}
+	text := sectionText(Group(cfg, true))
+	for _, secret := range []string{"sk-1234567890abcdef", "ocr-secret-key-42", "rerank-secret-key-7"} {
+		if strings.Contains(text, secret) {
+			t.Errorf("rendered config leaked API key %q", secret)
+		}
+	}
+	for _, masked := range []string{"sk-1...cdef", "ocr-...y-42", "rera...ey-7"} {
+		if !strings.Contains(text, masked) {
+			t.Errorf("rendered config missing masked key %q:\n%s", masked, text)
+		}
+	}
+}
