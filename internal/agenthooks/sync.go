@@ -91,7 +91,7 @@ func RunSync(cfg *config.AppConfig, opts SyncOptions, stdout io.Writer) error {
 		return childErr
 	}, stdout)
 	now := time.Now()
-	stateErr := WriteState(statePath, State{Agent: opts.Agent, CompletedAt: now, LastAttemptAt: now, Error: errorString(childErr)})
+	stateErr := writeStateSerialized(statePath, State{Agent: opts.Agent, CompletedAt: now, LastAttemptAt: now, Error: errorString(childErr)})
 	if stateErr != nil {
 		fmt.Fprintf(os.Stderr, "WARN: record seek hook state: %v\n", stateErr)
 	}

@@ -1,6 +1,7 @@
 package agenthooks
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -36,12 +37,32 @@ func ReadState(path string) (State, bool) {
 	return state, json.Unmarshal(data, &state) == nil
 }
 
+// hookStateWriteTimeout bounds how long a state write waits for the per-agent
+// state lock before falling back to an unlocked atomic write; hook runners
+// budget seconds, so a state record must never delay them meaningfully.
+const hookStateWriteTimeout = time.Second
+
+// writeStateSerialized persists hook state through a short-lived per-agent
+// lock file so concurrent hook processes do not lose each other's records
+// (review 2026-09-17 L11). Writes are atomic either way; on lock contention
+// the write degrades to best-effort instead of delaying the hook. The state
+// lock is a leaf: it is never held while acquiring the writer lock.
+func writeStateSerialized(path string, state State) error {
+	lockCtx, cancel := context.WithTimeout(context.Background(), hookStateWriteTimeout)
+	defer cancel()
+	lock, err := AcquireWriterLock(lockCtx, path+".lock")
+	if err == nil {
+		defer lock.Close()
+	}
+	return WriteState(path, state)
+}
+
 // recordHookSkip notes a skipped sync (debounced, lock unavailable) without
 // disturbing the last successful completion time.
 func recordHookSkip(path string, state State, reason string) {
 	state.LastAttemptAt = time.Now()
 	state.SkippedReason = reason
-	if err := WriteState(path, state); err != nil {
+	if err := writeStateSerialized(path, state); err != nil {
 		fmt.Fprintf(os.Stderr, "WARN: record skipped seek hook: %v\n", err)
 	}
 }
