@@ -196,15 +196,20 @@ func (idx *Indexer) WithContext(ctx context.Context) *Indexer {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	idx.mu.Lock()
 	idx.ctxValue = ctx
+	idx.mu.Unlock()
 	return idx
 }
 
 func (idx *Indexer) ctx() context.Context {
-	if idx.ctxValue == nil {
+	idx.mu.Lock()
+	ctx := idx.ctxValue
+	idx.mu.Unlock()
+	if ctx == nil {
 		return context.Background()
 	}
-	return idx.ctxValue
+	return ctx
 }
 
 // writeFastFields is retained for package-level helpers and older callers;

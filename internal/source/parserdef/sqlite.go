@@ -20,7 +20,10 @@ import (
 // to a CWD-relative location (review 2026-09-17 L17).
 func expandTilde(p string) string {
 	if p == "~" {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return p
+		}
 		return home
 	}
 	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {

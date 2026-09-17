@@ -238,8 +238,8 @@ func (c *Client) PollBatchContext(ctx context.Context, batchID string, onStatus 
 }
 
 // sleepContext pauses for d unless ctx is canceled first, returning ctx.Err()
-// in that case. It reuses one stopped timer instead of allocating a fresh
-// time.After timer per loop iteration — the batch poll loop can run for ~24h
+// in that case. It uses one explicitly stopped timer instead of time.After's
+// untracked per-iteration timer in loops that can run for ~24h
 // (review 2026-09-17 L13).
 func sleepContext(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)

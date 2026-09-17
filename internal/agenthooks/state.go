@@ -51,7 +51,12 @@ func writeStateSerialized(path string, state State) error {
 	lockCtx, cancel := context.WithTimeout(context.Background(), hookStateWriteTimeout)
 	defer cancel()
 	lock, err := AcquireWriterLock(lockCtx, path+".lock")
-	if err == nil {
+	if err != nil {
+		// Degrading to the unlocked atomic write is intentional, but say so:
+		// a stale status record under hook contention should not be a
+		// mystery (review 2026-09-17 L11 follow-up).
+		fmt.Fprintf(os.Stderr, "WARN: hook state lock busy, writing %s unlocked: %v\n", path, err)
+	} else {
 		defer lock.Close()
 	}
 	return WriteState(path, state)
