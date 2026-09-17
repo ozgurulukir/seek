@@ -90,16 +90,21 @@ type vectorManifest struct {
 }
 
 func newHNSWIndex(dim, m, efSearch int) (*hnswIndex, error) {
+	// Normalize the search width once so the runtime value, the persisted
+	// manifest, and the Load mismatch check all agree. Persisting a raw <=0
+	// value made default-config round-trips declare a good graph "mismatched"
+	// and trigger an unnecessary rebuild (review 2026-09-17 L2).
+	if efSearch <= 0 {
+		efSearch = 50
+	}
 	g := hnsw.NewGraph[int64]()
 	g.M = m
-	if efSearch > 0 {
-		g.EfSearch = efSearch
-	} else {
-		g.EfSearch = 50
-	}
+	g.EfSearch = efSearch
 	g.Distance = hnsw.CosineDistance
-	// Register the distance function for persistence (required by coder/hnsw)
-	hnsw.RegisterDistanceFunc("cosine", hnsw.CosineDistance)
+	// "cosine" is pre-registered in coder/hnsw's distanceFuncs map; calling
+	// RegisterDistanceFunc here re-wrote that shared package map without
+	// synchronization while graph.Export iterates it during concurrent
+	// flushes — a data race (review 2026-09-17 L1).
 	return &hnswIndex{graph: g, dim: dim, m: m, efSearch: efSearch}, nil
 }
 
