@@ -118,31 +118,39 @@ func (s *Store) ListCollections() ([]Collection, error) {
 }
 
 // DeleteCollection removes a collection and all its documents, chunks, FTS
-// entries, and fast fields. Each DELETE is individually atomic; foreign key
-// cascades (ON DELETE CASCADE) handle orphan cleanup if the process is
-// interrupted between statements.
+// entries, and fast fields in a single transaction. The foreign-key cascade
+// only covers documents→chunks — fast_fields and documents_fts would survive
+// a mid-delete crash — so the five DELETEs must succeed or none of them is
+// applied: an interrupted `seek rm` must not leave a partially removed
+// collection behind (review 2026-09-17 M3).
 func (s *Store) DeleteCollection(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin delete transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	// Delete fast_fields for documents in this collection.
 	// The table is lazily created; ignore "no such table" errors.
-	if _, err := s.db.Exec(`DELETE FROM fast_fields WHERE doc_id IN (SELECT id FROM documents WHERE collection_id = ?)`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM fast_fields WHERE doc_id IN (SELECT id FROM documents WHERE collection_id = ?)`, id); err != nil {
 		if !strings.Contains(err.Error(), "no such table") {
 			return fmt.Errorf("delete fast_fields: %w", err)
 		}
 	}
 	// Delete FTS entries for documents in this collection
-	if _, err := s.db.Exec(`DELETE FROM documents_fts WHERE rowid IN (SELECT id FROM documents WHERE collection_id = ?)`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM documents_fts WHERE rowid IN (SELECT id FROM documents WHERE collection_id = ?)`, id); err != nil {
 		return fmt.Errorf("delete fts: %w", err)
 	}
-	if _, err := s.db.Exec(`DELETE FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE collection_id = ?)`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE collection_id = ?)`, id); err != nil {
 		return fmt.Errorf("delete chunks: %w", err)
 	}
-	if _, err := s.db.Exec(`DELETE FROM documents WHERE collection_id = ?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM documents WHERE collection_id = ?`, id); err != nil {
 		return fmt.Errorf("delete documents: %w", err)
 	}
-	if _, err := s.db.Exec(`DELETE FROM collections WHERE id = ?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM collections WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("delete collection: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // RenameCollection atomically renames a collection to a new unique name. Only
