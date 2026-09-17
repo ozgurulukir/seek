@@ -196,12 +196,25 @@ type sqliteSessionRow struct {
 	metadata map[string]string
 }
 
+// sqliteURIEscape percent-encodes the characters that would otherwise be
+// interpreted as URI structure in a SQLite file: DSN. Without it a source
+// path containing '?', '#', or '%' splits the query or corrupts the path —
+// and a mangled query can silently drop mode=ro, opening another
+// application's database read-write (review 2026-09-17 L20). '%' is encoded
+// first so the replacements are not re-encoded.
+var sqliteURIEscape = strings.NewReplacer(
+	"%", "%25",
+	"?", "%3F",
+	"#", "%23",
+	" ", "%20",
+)
+
 // openExternalDB opens an external SQLite DB in read-only mode with a busy timeout.
 // We do not set _journal_mode: read-only connections cannot change it, and the
 // source DB already has its own journal mode. busy_timeout lets us wait if the
 // source app is mid-write (WAL readers don't block, but this guards edge cases).
 func openExternalDB(path string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("file:%s?mode=ro&_busy_timeout=2000", path)
+	dsn := "file:" + sqliteURIEscape.Replace(path) + "?mode=ro&_busy_timeout=2000"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open external db: %w", err)
