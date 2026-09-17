@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -410,6 +411,8 @@ func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []Imag
 	}
 	updated := 0
 	var firstErr error
+	var firstReadErr error
+	readFailures := 0
 	for i := 0; i < len(items); i += batchSize {
 		if err := ctx.Err(); err != nil {
 			return updated, err
@@ -444,6 +447,14 @@ func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []Imag
 			item := items[j]
 			res := results[j-i]
 			if res.err != nil {
+				// Count and surface read failures: silently dropping them
+				// made permanently unembeddable images invisible (apparent
+				// success with only a low count), masking disk/permission
+				// errors (review 2026-09-17 M15).
+				readFailures++
+				if firstReadErr == nil {
+					firstReadErr = fmt.Errorf("read image %q: %w", item.ImagePath, res.err)
+				}
 				continue
 			}
 			embedItems = append(embedItems, EmbedItem{
@@ -483,6 +494,10 @@ func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []Imag
 			case <-time.After(pause):
 			}
 		}
+	}
+	if readFailures > 0 {
+		readErr := fmt.Errorf("%d of %d image(s) could not be read and were skipped: %w", readFailures, len(items), firstReadErr)
+		return updated, errors.Join(firstErr, readErr)
 	}
 	return updated, firstErr
 }

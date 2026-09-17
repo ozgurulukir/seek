@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -122,5 +123,24 @@ func TestVLClientPartialResponseErrors(t *testing.T) {
 		t.Fatal("expected error for partial VL response")
 	} else if !strings.Contains(err.Error(), "returned 1 embeddings, expected 2") {
 		t.Errorf("error = %q, want count mismatch mention", err.Error())
+	}
+}
+
+// TestEmbedImagesInBatchesReportsReadFailures pins the M15 contract: image
+// read failures must surface as an error, not as an apparent success with a
+// low count — the old code dropped failed reads with a bare continue and
+// returned (0, nil) when every image failed (review 2026-09-17 M15).
+func TestEmbedImagesInBatchesReportsReadFailures(t *testing.T) {
+	c := NewVLClient("k", "model", 8, "https://provider.example/v1/embeddings", TaskPrefix{})
+	items := []ImageBatchItem{
+		{ImagePath: filepath.Join(t.TempDir(), "missing1.png")},
+		{ImagePath: filepath.Join(t.TempDir(), "missing2.png")},
+	}
+	updated, err := c.EmbedImagesInBatches(items, 5, 0, nil)
+	if err == nil {
+		t.Fatal("expected read failures to produce an error, got nil")
+	}
+	if updated != 0 {
+		t.Fatalf("expected 0 updated, got %d", updated)
 	}
 }
