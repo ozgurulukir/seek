@@ -3,6 +3,7 @@ package chunk
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // ChunkCode splits source code content into logical chunks.
@@ -212,7 +213,10 @@ func splitCodeLines(block string, maxSize, overlap int) []string {
 	for _, line := range lines {
 		lineLen := len(line) + 1
 
-		// If line alone exceeds maxSize, break it into character slices
+		// If line alone exceeds maxSize, break it into character slices.
+		// Raw byte offsets used to slice mid-rune, producing invalid UTF-8
+		// fragments for non-ASCII content; both the window end and the
+		// advance are snapped to rune boundaries (review 2026-09-17 M13).
 		if lineLen > maxSize {
 			if current.Len() > 0 {
 				chunks = append(chunks, strings.TrimSpace(current.String()))
@@ -223,15 +227,43 @@ func splitCodeLines(block string, maxSize, overlap int) []string {
 			if step <= 0 {
 				step = maxSize
 			}
-			for i := 0; i < len(line); i += step {
+			for i := 0; i < len(line); {
 				end := i + maxSize
-				if end > len(line) {
+				if end >= len(line) {
 					end = len(line)
+				} else {
+					for end > i && !utf8.RuneStart(line[end]) {
+						end--
+					}
 				}
-				chunks = append(chunks, line[i:end])
-				if end == len(line) {
+				if end > i {
+					chunks = append(chunks, line[i:end])
+				}
+				if end >= len(line) {
 					break
 				}
+				next := i + step
+				if next <= i {
+					next = i + 1
+				}
+				for next < len(line) && !utf8.RuneStart(line[next]) {
+					next++
+				}
+				if next >= len(line) {
+					// Clamp to the last rune start so the remaining tail is
+					// emitted as a final fragment instead of being skipped.
+					last := len(line) - 1
+					for last > i && !utf8.RuneStart(line[last]) {
+						last--
+					}
+					next = last
+				}
+				if next <= i {
+					// Unreachable for valid UTF-8 (rune starts exist within
+					// every window); keep progress for garbage input.
+					next = i + 1
+				}
+				i = next
 			}
 			continue
 		}

@@ -3,6 +3,7 @@ package chunk_test
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ozgurulukir/seek/internal/chunk"
 )
@@ -235,5 +236,42 @@ func TestChunkCode_TypeScriptAndRustTopLevel(t *testing.T) {
 	rustChunks := chunk.ChunkCode(rustCode, "rust", 25, 5)
 	if len(rustChunks) < 2 {
 		t.Fatalf("expected >=2 Rust chunks, got %d", len(rustChunks))
+	}
+}
+
+// TestChunkCode_LongLineSplitsAtRuneBoundaries pins the M13 contract: a very
+// long line of multibyte runes must be fragmented into valid UTF-8 fragments
+// that still cover the original content. Raw byte offsets used to cut runes
+// in half, corrupting stored and indexed content
+// (review 2026-09-17 M13).
+func TestChunkCode_LongLineSplitsAtRuneBoundaries(t *testing.T) {
+	long := strings.Repeat("şğüığıçö", 300)
+	code := "func big() {\n\t// " + long + "\n}"
+
+	chunks := chunk.ChunkCode(code, "go", 200, 40)
+	if len(chunks) < 2 {
+		t.Fatalf("expected long line to split into multiple chunks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if !utf8.ValidString(c.Content) {
+			t.Fatalf("chunk %d contains invalid UTF-8: %q", i, c.Content[:min(len(c.Content), 40)])
+		}
+		if c.Content == "" {
+			t.Fatalf("chunk %d is empty", i)
+		}
+	}
+	// Overlapping windows must still reconstruct the line: every rune of the
+	// long comment survives in some fragment.
+	joined := strings.Join(func() []string {
+		out := make([]string, len(chunks))
+		for i, c := range chunks {
+			out[i] = c.Content
+		}
+		return out
+	}(), "\n")
+	for _, r := range []rune("şğüığıçö") {
+		if !strings.ContainsRune(joined, r) {
+			t.Fatalf("rune %q lost during fragmentation", r)
+		}
 	}
 }
