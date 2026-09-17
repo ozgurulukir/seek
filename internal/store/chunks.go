@@ -143,7 +143,7 @@ func (s *Store) GetSurroundingContextWithContext(ctx context.Context, docID int6
 			sLine, eLine int
 		)
 		if err := rows.Scan(&sNum, &content, &contentZstd, &sLine, &eLine); err != nil {
-			continue
+			return "", 0, 0, fmt.Errorf("scan surrounding chunk: %w", err)
 		}
 		if len(contentZstd) > 0 {
 			if decomp, err := DecompressString(contentZstd); err == nil {
