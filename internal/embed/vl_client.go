@@ -384,10 +384,8 @@ func (c *VLClient) EmbedTextsInBatchesContext(ctx context.Context, texts []strin
 		}
 
 		if end < len(texts) && pause > 0 {
-			select {
-			case <-ctx.Done():
-				return updated, ctx.Err()
-			case <-time.After(pause):
+			if err := sleepContext(ctx, pause); err != nil {
+				return updated, err
 			}
 		}
 	}
@@ -488,10 +486,8 @@ func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []Imag
 		}
 
 		if end < len(items) && pause > 0 {
-			select {
-			case <-ctx.Done():
-				return updated, ctx.Err()
-			case <-time.After(pause):
+			if err := sleepContext(ctx, pause); err != nil {
+				return updated, err
 			}
 		}
 	}

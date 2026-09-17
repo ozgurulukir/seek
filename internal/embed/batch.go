@@ -230,13 +230,26 @@ func (c *Client) PollBatchContext(ctx context.Context, batchID string, onStatus 
 			return job, fmt.Errorf("batch %s: %s", result.Status, string(respBody))
 		}
 
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(config.DefaultBatchPollInterval):
+		if err := sleepContext(ctx, config.DefaultBatchPollInterval); err != nil {
+			return nil, err
 		}
 	}
 	return nil, fmt.Errorf("batch polling exceeded maximum attempts (%d)", maxBatchPollAttempts)
+}
+
+// sleepContext pauses for d unless ctx is canceled first, returning ctx.Err()
+// in that case. It reuses one stopped timer instead of allocating a fresh
+// time.After timer per loop iteration — the batch poll loop can run for ~24h
+// (review 2026-09-17 L13).
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // DownloadBatchResults downloads and parses the batch output file.
