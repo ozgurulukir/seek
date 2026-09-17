@@ -185,6 +185,41 @@ func TestChunkCode_PreamblePreserved(t *testing.T) {
 	}
 }
 
+// TestChunkCode_OverlapTailForwardOrder verifies that the block-packing
+// overlap path carries the previous chunk's tail lines in forward source
+// order. They used to be written reversed (collected backwards, written
+// as-is), scrambling the head of every overlap-carrying chunk.
+func TestChunkCode_OverlapTailForwardOrder(t *testing.T) {
+	code := "func alpha() {\n\tline-a1\n\tline-a2\n\tline-a3\n\tline-a4\n}\n" +
+		"func beta() {\n\tline-b1\n\tline-b2\n\tline-b3\n\tline-b4\n}\n" +
+		"func gamma() {\n\tline-c1\n\tline-c2\n\tline-c3\n\tline-c4\n}"
+
+	chunks := chunk.ChunkCode(code, "go", 80, 40)
+	if len(chunks) < 3 {
+		t.Fatalf("expected 3 chunks (alpha / overlap+beta / overlap+gamma), got %d: %#v", len(chunks), chunks)
+	}
+
+	// Each successor chunk must open with the previous chunk's tail lines in
+	// source order; the reversed form (closing brace above the lines it must
+	// follow) is the distinctive marker of the old bug. The first overlap
+	// line's leading indent is trimmed by chunk-level TrimSpace, so the
+	// expected tail is matched from its first word.
+	forwardTails := []string{
+		"line-a1\n\tline-a2\n\tline-a3\n\tline-a4\n}",
+		"line-b1\n\tline-b2\n\tline-b3\n\tline-b4\n}",
+	}
+	reversedTails := []string{"}\n\tline-a4", "}\n\tline-b4"}
+	for i, want := range forwardTails {
+		c := chunks[i+1].Content
+		if !strings.Contains(c, want) {
+			t.Errorf("chunk %d missing forward-order overlap tail %q; got %q", i+1, want, c)
+		}
+		if strings.Contains(c, reversedTails[i]) {
+			t.Errorf("chunk %d contains reversed overlap lines: %q", i+1, c)
+		}
+	}
+}
+
 // TestChunkCode_TypeScriptAndRustTopLevel verifies that TypeScript type
 // aliases and Rust struct/enum/impl forms split on definition boundaries.
 func TestChunkCode_TypeScriptAndRustTopLevel(t *testing.T) {

@@ -86,8 +86,15 @@ func ChunkCode(content string, lang string, maxSize, overlap int) []Chunk {
 					ovBuilder.WriteString("\n")
 				}
 				if ovBuilder.Len() > 0 {
-					current.WriteString(strings.TrimSpace(ovBuilder.String()))
-					current.WriteString("\n\n")
+					// The backward walk collected lines in reverse; write them
+					// back in forward order so the overlap reads like the
+					// source (same double-reverse as splitCodeLines).
+					ovLines := strings.Split(strings.TrimSpace(ovBuilder.String()), "\n")
+					for i := len(ovLines) - 1; i >= 0; i-- {
+						current.WriteString(ovLines[i])
+						current.WriteString("\n")
+					}
+					current.WriteString("\n")
 				}
 			}
 		}
