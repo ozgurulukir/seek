@@ -44,14 +44,24 @@ func RunSync(cfg *config.AppConfig, opts SyncOptions, stdout io.Writer) error {
 		_, writeErr := io.WriteString(stdout, "{}\n")
 		return writeErr
 	}
-	defer lock.Close()
 	state, hasState := ReadState(statePath)
+	// Release before spawning: the child — a normal, locked `seek sync` —
+	// owns the writer lock for its own sync. The parent used to hold the lock
+	// for the child's whole run while the child bypassed it via --no-lock, so
+	// a hook runner killing the parent mid-child left an orphan writing
+	// SQLite/FTS/vector state with no lock holder (review 2026-09-17 M11).
+	// The parent only needs the lock to serialize the debounce decision; if
+	// two hook parents spawn overlapping children, the children serialize on
+	// the lock like any other writer.
+	if lockErr := lock.Close(); lockErr != nil {
+		fmt.Fprintf(os.Stderr, "WARN: release hook writer lock: %v\n", lockErr)
+	}
 	if hasState && time.Since(state.CompletedAt) < opts.Debounce {
 		recordHookSkip(statePath, state, "debounced")
 		_, err := io.WriteString(stdout, "{}\n")
 		return err
 	}
-	args := []string{"sync", "--no-lock"}
+	args := []string{"sync"}
 	if opts.Agent != "" {
 		args = append(args, "--type", opts.Agent)
 	}
@@ -73,7 +83,7 @@ func RunSync(cfg *config.AppConfig, opts SyncOptions, stdout io.Writer) error {
 	var childErr error
 	syncErr := runHooksSync(func() error {
 		command := exec.CommandContext(syncCtx, hookRuntimeBinary(), args...)
-		command.Env = withLockEnv(os.Environ())
+		command.Env = withoutLockEnv(os.Environ())
 		command.WaitDelay = hookContextWaitDelay
 		command.Stdout = io.Discard
 		command.Stderr = io.Discard
