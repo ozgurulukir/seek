@@ -406,6 +406,9 @@ func (p *parser) parseNear() (Query, error) {
 		if tok.typ == tokenEOF || tok.typ == tokenRParen {
 			break
 		}
+		if tok.typ == tokenInvalid {
+			return nil, fmt.Errorf("unexpected token %q at position %d", tok.val, tok.pos)
+		}
 		if tok.typ == tokenIdent || tok.typ == tokenString || tok.typ == tokenNumber {
 			terms = append(terms, tok.val)
 		}

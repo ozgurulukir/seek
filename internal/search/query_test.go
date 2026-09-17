@@ -256,9 +256,10 @@ func TestToFTS5_UnaryNotUnderAnd(t *testing.T) {
 // TestParseQueryRejectsInvalidPunctuation pins the L22 contract: unrecognized
 // punctuation must fail the parse instead of being silently swallowed as
 // end-of-input — `a @` used to parse as just `a`, losing the trailing term
-// without any error (review 2026-09-17 L22).
+// without any error. The NEAR case covers parseNear, which used to drop the
+// invalid token even after the general fix (review 2026-09-17 L22).
 func TestParseQueryRejectsInvalidPunctuation(t *testing.T) {
-	for _, input := range []string{"a @", "go !", "x #", "a @ b"} {
+	for _, input := range []string{"a @", "go !", "x #", "a @ b", "NEAR(a @ b, 2)"} {
 		q, err := ParseQuery(input)
 		if err == nil {
 			t.Errorf("ParseQuery(%q) = %#v, want a syntax error", input, q)
