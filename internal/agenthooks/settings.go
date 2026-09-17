@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/google/renameio"
@@ -58,11 +59,18 @@ func WriteSettings(path string, settings map[string]interface{}) error {
 // per settings file is enough for rollback, and hook repair touches the same
 // file several times. A path is only marked after a real backup was taken —
 // an absent file is not, so the first rewrite of a newly created file still
-// gets its snapshot.
-var hookSettingsBackedUp = map[string]bool{}
+// gets its snapshot. Guarded by a mutex so a future parallel caller cannot
+// hit the fatal concurrent-map read/write race (review 2026-09-17 L10).
+var (
+	hookSettingsBackedUpMu sync.Mutex
+	hookSettingsBackedUp   = map[string]bool{}
+)
 
 func backupHookSettings(path string) error {
-	if hookSettingsBackedUp[path] {
+	hookSettingsBackedUpMu.Lock()
+	backedUp := hookSettingsBackedUp[path]
+	hookSettingsBackedUpMu.Unlock()
+	if backedUp {
 		return nil
 	}
 	data, err := os.ReadFile(path)
@@ -76,6 +84,8 @@ func backupHookSettings(path string) error {
 	if err := os.WriteFile(backup, data, config.DefaultPrivateFilePerms); err != nil {
 		return err
 	}
+	hookSettingsBackedUpMu.Lock()
 	hookSettingsBackedUp[path] = true
+	hookSettingsBackedUpMu.Unlock()
 	return nil
 }
