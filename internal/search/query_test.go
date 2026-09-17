@@ -224,3 +224,31 @@ func TestToFTS5WithAnalyzer(t *testing.T) {
 		}
 	}
 }
+
+// TestToFTS5_UnaryNotUnderAnd pins the M9 contract: unary NOT combined via
+// AND must render as FTS5's binary NOT instead of being silently dropped —
+// `go AND NOT rust` used to search for just `go` (review 2026-09-17 M9).
+func TestToFTS5_UnaryNotUnderAnd(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"unary not on the right", "go AND NOT rust", "(go NOT rust)"},
+		{"implicit AND with unary not on the right", "go NOT rust", "(go NOT rust)"},
+		{"unary not on the left", "NOT rust AND go", "(go NOT rust)"},
+		{"chained negations", "go AND NOT rust AND NOT c", "((go NOT rust) NOT c)"},
+		{"pure negation still unanswerable", "NOT rust", ""},
+		{"negation on both sides unanswerable", "NOT go AND NOT rust", ""},
+	}
+	for _, tt := range tests {
+		q, err := ParseQuery(tt.input)
+		if err != nil {
+			t.Fatalf("%s: ParseQuery: %v", tt.name, err)
+		}
+		got, _ := ToFTS5(q)
+		if got != tt.want {
+			t.Errorf("%s: ToFTS5(%q) = %q, want %q", tt.name, tt.input, got, tt.want)
+		}
+	}
+}

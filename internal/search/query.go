@@ -489,12 +489,53 @@ func firstAnalyzed(a *Analyzer, s string) string {
 	return s
 }
 
+// unaryNotOperand reports whether q is the parser's lowering of a unary NOT —
+// a NOT node whose positive side is the empty dummy term (parseUnary) — and
+// returns the negated subquery.
+func unaryNotOperand(q Query) (Query, bool) {
+	b, ok := q.(*BooleanQuery)
+	if !ok || strings.ToUpper(b.Op) != "NOT" {
+		return nil, false
+	}
+	t, ok := b.Left.(*TermQuery)
+	if !ok || t.Value != "" {
+		return nil, false
+	}
+	return b.Right, true
+}
+
 func toFTS5(q Query, a *Analyzer) (string, bool) {
 	switch v := q.(type) {
 	case *BooleanQuery:
+		op := strings.ToUpper(v.Op)
+		if op == "AND" {
+			// Unary NOT operands (the parser lowers `NOT b` to a NOT node
+			// with an empty dummy positive side) render to "", which made
+			// AND silently swallow the negation — `go AND NOT rust` searched
+			// for just `go`. FTS5 supports binary NOT, so fold the negation
+			// into the positive operand instead (review 2026-09-17 M9).
+			lneg, lnegOK := unaryNotOperand(v.Left)
+			rneg, rnegOK := unaryNotOperand(v.Right)
+			if lnegOK && rnegOK {
+				// Pure negation on both sides: FTS5 cannot answer without a
+				// positive set.
+				return "", false
+			}
+			if lnegOK || rnegOK {
+				posQ, negQ := v.Left, rneg
+				if lnegOK {
+					posQ, negQ = v.Right, lneg
+				}
+				pos, _ := toFTS5(posQ, a)
+				neg, _ := toFTS5(negQ, a)
+				if pos == "" || pos == "()" || pos == `""` || neg == "" {
+					return "", false
+				}
+				return fmt.Sprintf("(%s NOT %s)", pos, neg), false
+			}
+		}
 		ls, _ := toFTS5(v.Left, a)
 		rs, _ := toFTS5(v.Right, a)
-		op := strings.ToUpper(v.Op)
 		if op == "NOT" {
 			if ls == "" || ls == "()" || ls == `""` {
 				// Pure negation queries (unary NOT) cannot be answered by FTS5 alone without a positive set.
