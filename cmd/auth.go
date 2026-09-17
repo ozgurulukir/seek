@@ -66,6 +66,18 @@ func isLocalEndpoint(url string) bool {
 
 var errCanceled = errors.New("canceled")
 
+// inputErr converts interactive-input failures into command errors. The
+// callers used to turn ANY readLine error into `return nil`, so an aborted
+// login (Ctrl-C) or a closed stdin exited 0 and automation believed auth was
+// configured (review 2026-09-17 M16).
+func inputErr(err error) error {
+	if errors.Is(err, errCanceled) {
+		fmt.Fprintln(os.Stderr, "aborted")
+		return errCanceled
+	}
+	return fmt.Errorf("read input: %w", err)
+}
+
 func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 	fmt.Println("\nSelect embedding provider:")
 	for i, p := range providers {
@@ -75,7 +87,7 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 
 	choiceStr, err := readLine()
 	if err != nil {
-		return nil
+		return inputErr(err)
 	}
 	choice := 0
 	if choiceStr != "" {
@@ -95,7 +107,7 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 		fmt.Print("Base URL (e.g. http://localhost:11434/v1 or https://api.example.com/v1): ")
 		rawURL, err := readLine()
 		if err != nil {
-			return nil
+			return inputErr(err)
 		}
 		baseURL = strings.TrimSpace(rawURL)
 		if baseURL == "" {
@@ -112,7 +124,7 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 		fmt.Print("Model name (e.g. text-embedding-3-small, bge-m3): ")
 		model, err = readLine()
 		if err != nil {
-			return nil
+			return inputErr(err)
 		}
 		if model == "" {
 			return fmt.Errorf("model name cannot be empty")
@@ -121,7 +133,7 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 		fmt.Print("Dimensions [1024]: ")
 		dimStr, err := readLine()
 		if err != nil {
-			return nil
+			return inputErr(err)
 		}
 		if dimStr != "" {
 			fmt.Sscanf(dimStr, "%d", &dimensions)
@@ -136,7 +148,7 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 		fmt.Print("\nAPI Key (leave blank for local 'ollama'): ")
 		keyStr, err := readLine()
 		if err != nil {
-			return nil
+			return inputErr(err)
 		}
 		apiKey = strings.TrimSpace(keyStr)
 		if apiKey == "" {
@@ -147,7 +159,7 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 		keyBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
 		fmt.Println()
 		if err != nil {
-			return nil
+			return inputErr(err)
 		}
 		apiKey = strings.TrimSpace(string(keyBytes))
 		if apiKey == "" {
@@ -159,7 +171,7 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 	fmt.Print("\nUse vision-language (image) embedding endpoint? [y/N]: ")
 	mmStr, err := readLine()
 	if err != nil {
-		return nil
+		return inputErr(err)
 	}
 	if yes := strings.ToLower(strings.TrimSpace(mmStr)); yes == "y" || yes == "yes" {
 		multimodal = true
@@ -169,7 +181,7 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 		fmt.Print("VL endpoint (blank for DashScope default): ")
 		vlStr, err := readLine()
 		if err != nil {
-			return nil
+			return inputErr(err)
 		}
 		vlBaseURL = strings.TrimSpace(vlStr)
 	}

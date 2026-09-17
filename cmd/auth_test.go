@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -61,5 +62,19 @@ func TestProvidersConfig(t *testing.T) {
 	}
 	if !foundOllama {
 		t.Errorf("expected nomic-embed-text in providers")
+	}
+}
+
+// TestInputErrPropagates pins the M16 contract: interactive input failures
+// must surface as command errors (non-zero exit) instead of `return nil` —
+// an aborted `seek auth login` used to look like success to automation
+// (review 2026-09-17 M16).
+func TestInputErrPropagates(t *testing.T) {
+	if !errors.Is(inputErr(errCanceled), errCanceled) {
+		t.Error("cancel must propagate as errCanceled")
+	}
+	boom := errors.New("stdin closed")
+	if !errors.Is(inputErr(boom), boom) {
+		t.Error("read errors must propagate wrapped, not vanish")
 	}
 }
