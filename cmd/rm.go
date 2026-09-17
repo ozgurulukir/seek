@@ -15,9 +15,11 @@ type RmCmd struct {
 }
 
 func (c *RmCmd) Run(cfg *config.AppConfig) (err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), agenthooks.WriterLockTimeout)
+	ctx, stop := commandContext()
+	defer stop()
+	lockCtx, cancel := context.WithTimeout(ctx, agenthooks.WriterLockTimeout)
 	defer cancel()
-	lock, err := agenthooks.AcquireWriterLock(ctx, agenthooks.WriterLockPath(cfg))
+	lock, err := agenthooks.AcquireWriterLock(lockCtx, agenthooks.WriterLockPath(cfg))
 	if err != nil {
 		return fmt.Errorf("acquire writer lock: %w", err)
 	}

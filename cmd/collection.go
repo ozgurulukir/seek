@@ -180,7 +180,9 @@ func (c *CollectionReindexCmd) Run(cfg *config.AppConfig) (err error) {
 
 	// The semantic-only backfill writes fast fields, so both passes take the
 	// writer lock (same model as sync/embed).
-	lockCtx, cancel := context.WithTimeout(context.Background(), agenthooks.WriterLockTimeout)
+	ctx, stop := commandContext()
+	defer stop()
+	lockCtx, cancel := context.WithTimeout(ctx, agenthooks.WriterLockTimeout)
 	defer cancel()
 	lock, err := agenthooks.AcquireWriterLock(lockCtx, agenthooks.WriterLockPath(cfg))
 	if err != nil {
@@ -198,7 +200,7 @@ func (c *CollectionReindexCmd) Run(cfg *config.AppConfig) (err error) {
 	log := pipeline.NewStdoutLogger(os.Stdout)
 
 	if c.SemanticOnly {
-		report, err := svc.Backfill(context.Background(), c.Name, log)
+		report, err := svc.Backfill(ctx, c.Name, log)
 		if err != nil {
 			return fmt.Errorf("reindex %q (--semantic-only): %w", c.Name, err)
 		}
@@ -208,7 +210,7 @@ func (c *CollectionReindexCmd) Run(cfg *config.AppConfig) (err error) {
 	}
 
 	if c.All {
-		results, err := svc.ReindexAll(context.Background(), app.ReindexOptions{
+		results, err := svc.ReindexAll(ctx, app.ReindexOptions{
 			AllowVectorSpaceChange: c.AllowVectorSpaceChange,
 		}, log)
 		if err != nil {
@@ -230,7 +232,7 @@ func (c *CollectionReindexCmd) Run(cfg *config.AppConfig) (err error) {
 		return nil
 	}
 
-	res, err := svc.Reindex(context.Background(), c.Name, app.ReindexOptions{
+	res, err := svc.Reindex(ctx, c.Name, app.ReindexOptions{
 		AllowVectorSpaceChange: c.AllowVectorSpaceChange,
 	}, log)
 	if err != nil {

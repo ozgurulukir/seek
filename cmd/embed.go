@@ -24,10 +24,12 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) (err error) {
 	if c.NoLock && os.Getenv(agenthooks.LockEnv) != "1" {
 		return fmt.Errorf("--no-lock is reserved for internal hook execution")
 	}
+	ctx, stop := commandContext()
+	defer stop()
 	if !c.NoLock {
-		ctx, cancel := context.WithTimeout(context.Background(), agenthooks.WriterLockTimeout)
+		lockCtx, cancel := context.WithTimeout(ctx, agenthooks.WriterLockTimeout)
 		defer cancel()
-		lock, err := agenthooks.AcquireWriterLock(ctx, agenthooks.WriterLockPath(cfg))
+		lock, err := agenthooks.AcquireWriterLock(lockCtx, agenthooks.WriterLockPath(cfg))
 		if err != nil {
 			return fmt.Errorf("acquire writer lock: %w", err)
 		}
@@ -48,7 +50,7 @@ func (c *EmbedCmd) Run(cfg *config.AppConfig) (err error) {
 
 	// M4: the full embed pass lives in internal/pipeline so `seek sync` and
 	// stop hooks can run it in-process. This command is a thin wrapper.
-	return runtime.EmbedPending(context.Background(), pipeline.Options{
+	return runtime.EmbedPending(ctx, pipeline.Options{
 		Force:       c.Force,
 		Realtime:    c.Realtime,
 		Batch:       c.Batch,

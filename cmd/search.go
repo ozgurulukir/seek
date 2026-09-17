@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,7 +50,8 @@ type SearchCmd struct {
 }
 
 func (c *SearchCmd) Run(cfg *config.AppConfig) (err error) {
-	ctx := context.Background()
+	ctx, stop := commandContext()
+	defer stop()
 
 	// Handle analyze mode
 	if c.Analyze {

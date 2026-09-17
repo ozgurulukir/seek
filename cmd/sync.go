@@ -26,7 +26,8 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 	if c.NoLock && os.Getenv(agenthooks.LockEnv) != "1" {
 		return fmt.Errorf("--no-lock is reserved for internal hook execution")
 	}
-	ctx := context.Background()
+	ctx, stop := commandContext()
+	defer stop()
 	if !c.NoLock {
 		lockCtx, cancel := context.WithTimeout(ctx, agenthooks.WriterLockTimeout)
 		defer cancel()
@@ -65,7 +66,7 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 			return errors.New("sync --path cannot be combined with --type; --path targets one named collection")
 		}
 		svc := app.NewCollectionService(runtime)
-		report, err := svc.SyncPath(context.Background(), c.Collection, c.Path, pipeline.Options{
+		report, err := svc.SyncPath(ctx, c.Collection, c.Path, pipeline.Options{
 			Realtime:    c.Realtime,
 			VectorIndex: true,
 			SkipEmbed:   c.NoEmbed,
