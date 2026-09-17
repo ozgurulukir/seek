@@ -138,25 +138,26 @@ func (s *Store) GetFastFieldSummaryContext(ctx context.Context, collection strin
 			memQuery += ` AND ff.field_value IS NOT NULL AND ff.field_value != '' AND ff.field_value != '""'`
 
 			memRows, err := s.db.QueryContext(ctx, memQuery, memArgs...)
-			if err == nil {
-				tokenSet := make(map[string]struct{})
-				for memRows.Next() {
-					var raw string
-					if err := memRows.Scan(&raw); err != nil {
-						memRows.Close()
-						return nil, fmt.Errorf("scan fast field %q values: %w", field, err)
-					}
-					for _, p := range splitMembershipTokens(decodeFastFieldText(raw)) {
-						tokenSet[p] = struct{}{}
-					}
-				}
-				if err := memRows.Err(); err != nil {
-					memRows.Close()
-					return nil, fmt.Errorf("iterate fast field %q values: %w", field, err)
-				}
-				memRows.Close()
-				distinctCount = len(tokenSet)
+			if err != nil {
+				return nil, fmt.Errorf("query fast field %q values: %w", field, err)
 			}
+			tokenSet := make(map[string]struct{})
+			for memRows.Next() {
+				var raw string
+				if err := memRows.Scan(&raw); err != nil {
+					memRows.Close()
+					return nil, fmt.Errorf("scan fast field %q values: %w", field, err)
+				}
+				for _, p := range splitMembershipTokens(decodeFastFieldText(raw)) {
+					tokenSet[p] = struct{}{}
+				}
+			}
+			if err := memRows.Err(); err != nil {
+				memRows.Close()
+				return nil, fmt.Errorf("iterate fast field %q values: %w", field, err)
+			}
+			memRows.Close()
+			distinctCount = len(tokenSet)
 		}
 
 		summaries = append(summaries, FastFieldSummary{

@@ -146,8 +146,17 @@ func (s *Store) GetSurroundingContextWithContext(ctx context.Context, docID int6
 			return "", 0, 0, fmt.Errorf("scan surrounding chunk: %w", err)
 		}
 		if len(contentZstd) > 0 {
-			if decomp, err := DecompressString(contentZstd); err == nil {
+			decomp, err := DecompressString(contentZstd)
+			switch {
+			case err == nil:
 				content = decomp
+			case content != "":
+				// Corrupt zstd blob: keep the raw content column rather than
+				// silently dropping the chunk from the context window;
+				// without a usable fallback, fail loudly — mirroring the FTS
+				// rebuild path (review 2026-09-17 L4 follow-up).
+			default:
+				return "", 0, 0, fmt.Errorf("decompress chunk seq %d: %w", sNum, err)
 			}
 		}
 		if content != "" {
