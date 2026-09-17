@@ -116,6 +116,12 @@ func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 	}
 
 	searchPos := 0
+	// Lookahead bound for the match scan: chunks are sequential, so the true
+	// position sits near the last match; a run of misses used to rescan the
+	// entire remaining document per chunk (quadratic on large inputs) and,
+	// searchPos never advancing, collapsed consecutive fallback spans onto
+	// the same lines (review 2026-09-17 M14).
+	const lookaheadSlack = 64
 	for i := range chunks {
 		cText := strings.TrimSpace(chunks[i].Content)
 		if cText == "" {
@@ -127,7 +133,9 @@ func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 		chunkLineCount := len(chunkLines)
 
 		startLine := searchPos + 1
-		for j := searchPos; j+chunkLineCount <= len(lines); j++ {
+		matched := false
+		windowEnd := searchPos + 2*chunkLineCount + lookaheadSlack
+		for j := searchPos; j+chunkLineCount <= len(lines) && j < windowEnd; j++ {
 			matches := true
 			for k := range chunkLines {
 				if strings.TrimSpace(lines[j+k]) != strings.TrimSpace(chunkLines[k]) {
@@ -140,13 +148,25 @@ func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 				// Advance by one line rather than by the whole chunk so an
 				// overlapping successor can still match shared source lines.
 				searchPos = j + 1
+				matched = true
 				break
+			}
+		}
+		if !matched {
+			// Step past this chunk's footprint so a run of misses yields
+			// distinct, advancing spans instead of identical fallbacks.
+			searchPos += chunkLineCount
+			if searchPos > len(lines) {
+				searchPos = len(lines)
 			}
 		}
 
 		endLine := startLine + chunkLineCount - 1
 		if endLine > totalLines {
 			endLine = totalLines
+		}
+		if startLine > totalLines {
+			startLine = totalLines
 		}
 		if startLine < 1 {
 			startLine = 1

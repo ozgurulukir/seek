@@ -278,3 +278,28 @@ func TestChunkMarkdown_ExcessiveOverlap(t *testing.T) {
 		t.Fatal("expected chunks, got 0")
 	}
 }
+
+// TestAssignLineNumbersAdvancesOnMiss pins the M14 contract: consecutive
+// unmatched chunks must get distinct, advancing spans instead of collapsing
+// onto the same lines, and a match after a miss still snaps to the true line
+// (review 2026-09-17 M14).
+func TestAssignLineNumbersAdvancesOnMiss(t *testing.T) {
+	content := "alpha\nbeta\ngamma\ndelta\n"
+	chunks := []Chunk{
+		{Content: "missing-one"},
+		{Content: "missing-two"},
+		{Content: "gamma"},
+		{Content: "delta"},
+	}
+	out := AssignLineNumbers(content, chunks)
+
+	if out[0].StartLine == out[1].StartLine {
+		t.Errorf("consecutive misses collapsed to the same start line %d", out[0].StartLine)
+	}
+	if out[2].StartLine != 3 {
+		t.Errorf("chunk matching \"gamma\" should snap to line 3, got %d", out[2].StartLine)
+	}
+	if out[3].StartLine != 4 {
+		t.Errorf("chunk matching \"delta\" should snap to line 4, got %d", out[3].StartLine)
+	}
+}
