@@ -2,6 +2,8 @@ package indexer
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -345,6 +347,14 @@ func (idx *Indexer) syncConversation(
 			return err
 		}
 		existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, f.Path)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			// A store failure is not "document absent": falling through would
+			// trigger a wasteful full re-parse or a spurious failure with no
+			// root cause (review 2026-09-17 L14).
+			idx.warnf("  WARN: look up document %s: %v\n", f.Path, err)
+			failed++
+			continue
+		}
 		if err == nil && existing.Mtime >= f.Mtime {
 			skipped++
 			continue
