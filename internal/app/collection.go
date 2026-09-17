@@ -415,6 +415,9 @@ func (s *CollectionService) Backfill(ctx context.Context, name string, log pipel
 	if s == nil || s.store == nil || s.indexer == nil {
 		return indexer.BackfillReport{}, fmt.Errorf("collection service: not configured")
 	}
+	// Route indexer diagnostics to the caller's logger (stderr from cmd)
+	// instead of the Indexer's stdout default (review 2026-09-17 L15).
+	s.indexer.WithLogger(log)
 	col, err := s.store.GetCollectionByName(name)
 	if err != nil {
 		return indexer.BackfillReport{}, fmt.Errorf("collection %q not found", name)

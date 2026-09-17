@@ -151,6 +151,10 @@ func (p *Pipeline) Sync(ctx context.Context, col *store.Collection, opts Options
 	if p == nil || p.indexer == nil || p.db == nil {
 		return indexer.SyncReport{}, fmt.Errorf("sync pipeline is not configured")
 	}
+	// Route indexer diagnostics (WARN/progress) to the caller's logger —
+	// cmd supplies stderr — instead of the Indexer's stdout default
+	// (review 2026-09-17 L15, silent-failure audit follow-up).
+	p.indexer.WithLogger(log)
 	report, err := p.indexer.SyncCollectionWithReport(ctx, col)
 	if err != nil {
 		return report, err

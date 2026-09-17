@@ -102,7 +102,7 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 			continue
 		}
 
-		fmt.Printf("Syncing %q (%s)...\n", col.Name, col.Type)
+		fmt.Fprintf(os.Stderr, "Syncing %q (%s)...\n", col.Name, col.Type)
 
 		_, err := runtime.Pipeline.Sync(ctx, col, pipeline.Options{
 			Type:        c.Type,
