@@ -1,6 +1,8 @@
 package search
 
 import (
+	"encoding/json"
+	"sort"
 	"testing"
 	"time"
 )
@@ -171,5 +173,37 @@ func TestValidateFieldWithTime(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := ValidateField(fd, now); err != nil {
 		t.Errorf("expected no error for RFC3339 date, got: %v", err)
+	}
+}
+
+// TestCompareFastFieldValuesMixedTypes pins the M12 contract: a mixed-type
+// column must sort deterministically. The old comparator returned "a > b"
+// for both (a,b) and (b,a) across types — antisymmetry broken, sort.Slice
+// order arbitrary (review 2026-09-17 M12).
+func TestCompareFastFieldValuesMixedTypes(t *testing.T) {
+	values := []interface{}{"en", float64(42), "zh", float64(7), json.Number("3"), "a", float64(100)}
+
+	// Antisymmetry: compare(a,b) must be the negation of compare(b,a).
+	for _, a := range values {
+		for _, b := range values {
+			ab := compareFastFieldValues(a, b)
+			ba := compareFastFieldValues(b, a)
+			if ab == -ba || (ab == 0 && ba == 0) {
+				continue
+			}
+			t.Errorf("antisymmetry violated: compare(%v,%v)=%d but compare(%v,%v)=%d", a, b, ab, b, a, ba)
+		}
+	}
+
+	sorted := append([]interface{}(nil), values...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return compareFastFieldValues(sorted[i], sorted[j]) < 0
+	})
+	// Numbers first (ascending), then strings (ascending).
+	want := []interface{}{json.Number("3"), float64(7), float64(42), float64(100), "a", "en", "zh"}
+	for i := range want {
+		if compareFastFieldValues(sorted[i], want[i]) != 0 {
+			t.Fatalf("sorted[%d] = %v, want %v (full: %v)", i, sorted[i], want[i], sorted)
+		}
 	}
 }

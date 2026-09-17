@@ -345,68 +345,76 @@ func (e *Engine) sortResults(ctx context.Context, results []Result, opts Options
 	return results, nil
 }
 
-// compareFastFieldValues compares two fast field values.
+// compareFastFieldValues compares two fast field values with a total order:
+// numbers (float64/json.Number) first, then strings, then everything else by
+// its string form. Fast-field columns come from json.Unmarshal, so a column
+// can mix types; comparing across types used to return "a > b" for BOTH
+// (a,b) and (b,a), breaking antisymmetry and making sort.Slice produce
+// arbitrary order (review 2026-09-17 M12).
 // Returns -1 if a < b, 0 if a == b, 1 if a > b.
 func compareFastFieldValues(a, b interface{}) int {
-	switch av := a.(type) {
-	case string:
-		bv, ok := b.(string)
-		if !ok {
-			return 1
-		}
-		if av < bv {
+	ra, rb := fastFieldValueRank(a), fastFieldValueRank(b)
+	if ra != rb {
+		if ra < rb {
 			return -1
 		}
-		if av > bv {
-			return 1
-		}
-		return 0
-	case float64:
-		bv, ok := b.(float64)
-		if !ok {
-			return 1
-		}
-		if av < bv {
-			return -1
-		}
-		if av > bv {
-			return 1
-		}
-		return 0
-	case json.Number:
-		bv, ok := b.(json.Number)
-		if !ok {
-			return 1
-		}
-		af, aerr := av.Float64()
-		bf, berr := bv.Float64()
-		if aerr != nil || berr != nil {
-			// Fall back to string comparison
-			if av.String() < bv.String() {
-				return -1
-			}
-			if av.String() > bv.String() {
-				return 1
-			}
-			return 0
-		}
-		if af < bf {
-			return -1
-		}
-		if af > bf {
-			return 1
-		}
-		return 0
-	default:
-		// Fallback: string comparison
-		as := fmt.Sprintf("%v", a)
-		bs := fmt.Sprintf("%v", b)
-		if as < bs {
-			return -1
-		}
-		if as > bs {
-			return 1
-		}
-		return 0
+		return 1
 	}
+	switch ra {
+	case 0:
+		af, aok := numericFastFieldValue(a)
+		bf, bok := numericFastFieldValue(b)
+		if !aok || !bok {
+			// Malformed number: fall back to string form.
+			return compareStringsFastField(fmt.Sprintf("%v", a), fmt.Sprintf("%v", b))
+		}
+		switch {
+		case af < bf:
+			return -1
+		case af > bf:
+			return 1
+		}
+		return 0
+	case 1:
+		return compareStringsFastField(a.(string), b.(string))
+	default:
+		return compareStringsFastField(fmt.Sprintf("%v", a), fmt.Sprintf("%v", b))
+	}
+}
+
+// fastFieldValueRank orders mixed-type columns deterministically: numbers
+// before strings before anything else.
+func fastFieldValueRank(v interface{}) int {
+	switch v.(type) {
+	case float64, json.Number:
+		return 0
+	case string:
+		return 1
+	default:
+		return 2
+	}
+}
+
+// numericFastFieldValue extracts a float64 from the fast-field number
+// representations (float64 from json.Unmarshal, json.Number for raw numbers).
+func numericFastFieldValue(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func compareStringsFastField(as, bs string) int {
+	switch {
+	case as < bs:
+		return -1
+	case as > bs:
+		return 1
+	}
+	return 0
 }
