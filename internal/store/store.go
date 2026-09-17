@@ -29,6 +29,11 @@ type Store struct {
 	closeErr       error
 }
 
+// maxSQLiteConns bounds the connection pool: enough for parallel readers,
+// few enough that writers queue on the busy_timeout instead of stampeding
+// the single SQLite write lock.
+const maxSQLiteConns = 4
+
 func Open(dbPath string) (*Store, error) {
 	// The index holds the searchable text of the user's notes, conversations,
 	// and code — a private file. Databases created by older seek versions are
@@ -37,10 +42,23 @@ func Open(dbPath string) (*Store, error) {
 	if fi, err := os.Stat(dbPath); err == nil && !fi.IsDir() {
 		_ = os.Chmod(dbPath, config.DefaultPrivateFilePerms)
 	}
+	// SQLite DSNs pass options after a '?' in the connection string, so a
+	// literal '?' in the path would be swallowed as the parameter separator
+	// and silently corrupt the open. Reject it up front — fail fast at the
+	// boundary instead (review 2026-09-17 M4).
+	if strings.ContainsRune(dbPath, '?') {
+		return nil, fmt.Errorf("invalid db path %q: must not contain '?'", dbPath)
+	}
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
+	// WAL allows concurrent readers alongside one writer, but an unbounded
+	// pool lets connections stampede the single write lock while `seek
+	// service` syncs and the user searches. Bound the pool; write contention
+	// resolves through the DSN busy_timeout (review 2026-09-17 M4).
+	db.SetMaxOpenConns(maxSQLiteConns)
+	db.SetMaxIdleConns(maxSQLiteConns)
 	fastFields := NewFastFieldStore(db)
 	s := &Store{db: db, repositories: newStoreRepositories(db, fastFields)}
 	if err := s.migrate(); err != nil {
