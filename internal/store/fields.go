@@ -142,11 +142,17 @@ func (s *Store) GetFastFieldSummaryContext(ctx context.Context, collection strin
 				tokenSet := make(map[string]struct{})
 				for memRows.Next() {
 					var raw string
-					if err := memRows.Scan(&raw); err == nil {
-						for _, p := range splitMembershipTokens(decodeFastFieldText(raw)) {
-							tokenSet[p] = struct{}{}
-						}
+					if err := memRows.Scan(&raw); err != nil {
+						memRows.Close()
+						return nil, fmt.Errorf("scan fast field %q values: %w", field, err)
 					}
+					for _, p := range splitMembershipTokens(decodeFastFieldText(raw)) {
+						tokenSet[p] = struct{}{}
+					}
+				}
+				if err := memRows.Err(); err != nil {
+					memRows.Close()
+					return nil, fmt.Errorf("iterate fast field %q values: %w", field, err)
 				}
 				memRows.Close()
 				distinctCount = len(tokenSet)
