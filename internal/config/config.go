@@ -443,6 +443,14 @@ func applyFallbacks(cfg *Config) {
 }
 
 func Load() (*AppConfig, error) {
+	// Fail fast when the home directory cannot be resolved: every default
+	// path (config, DB, cache) derives from it, and an empty home would
+	// silently point collections and stores at CWD-relative locations
+	// (review 2026-09-17 L17).
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil || home == "" {
+		return nil, fmt.Errorf("cannot resolve home directory (set HOME/USERPROFILE): %v", homeErr)
+	}
 	cfgDir := configDir()
 	cacheD := cacheDir()
 	// Private data lives here (config, index) — owner-only directories. Note

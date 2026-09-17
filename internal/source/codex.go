@@ -33,6 +33,12 @@ func ScanCodexFiles() ([]ConversationFile, error) {
 
 func ScanCodexFilesContext(ctx context.Context) ([]ConversationFile, error) {
 	home, _ := os.UserHomeDir()
+	if home == "" {
+		// Without a home directory the default session dirs would resolve to
+		// CWD-relative paths — scanning the wrong directory is worse than
+		// finding nothing (review 2026-09-17 L17).
+		return nil, fmt.Errorf("cannot resolve home directory; pass the Codex sessions path explicitly")
+	}
 
 	dirs := []string{
 		filepath.Join(home, ".codex", "sessions"),
@@ -79,6 +85,10 @@ func LoadCodexThreadNames() map[string]string {
 
 func LoadCodexThreadNamesContext(ctx context.Context) map[string]string {
 	home, _ := os.UserHomeDir()
+	if home == "" {
+		// A CWD-relative session index would silently read the wrong file.
+		return nil
+	}
 	return loadSessionIndexContext(ctx, home)
 }
 

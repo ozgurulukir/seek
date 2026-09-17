@@ -40,6 +40,12 @@ func ScanClaudeFiles() ([]ConversationFile, error) {
 
 func ScanClaudeFilesContext(ctx context.Context) ([]ConversationFile, error) {
 	home, _ := os.UserHomeDir()
+	if home == "" {
+		// Without a home directory the default projects dir would resolve to
+		// a CWD-relative path — scanning the wrong directory is worse than
+		// finding nothing (review 2026-09-17 L17).
+		return nil, fmt.Errorf("cannot resolve home directory; pass the Claude projects path explicitly")
+	}
 	projectsDir := filepath.Join(home, ".claude", "projects")
 
 	if _, err := os.Stat(projectsDir); os.IsNotExist(err) {

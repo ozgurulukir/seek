@@ -14,14 +14,20 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// expandTilde expands a leading ~ to the user's home directory.
+// expandTilde expands a leading ~ to the user's home directory. When the home
+// directory cannot be resolved the path is returned unchanged, so the
+// downstream open fails loudly on a "~..." path instead of silently resolving
+// to a CWD-relative location (review 2026-09-17 L17).
 func expandTilde(p string) string {
 	if p == "~" {
 		home, _ := os.UserHomeDir()
 		return home
 	}
 	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return p
+		}
 		return filepath.Join(home, p[2:])
 	}
 	return p
