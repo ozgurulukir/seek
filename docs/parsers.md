@@ -15,6 +15,13 @@ Run `seek advanced parsers list` to check automatic discovery status:
 | `zed` | SQLite | `~/.local/share/zed/threads/threads.db` | Zed editor AI assistant panel threads (zstd compressed) |
 | `claude` | JSONL | `~/.claude/projects/**/*.jsonl` | Claude Code conversations (text-only schema mode) |
 | `codex` | JSONL | `~/.codex/sessions/**/*.jsonl` | Codex conversations (text-only schema mode) |
+| `zcode` | JSONL | `~/.zcode/cli/rollout/*.jsonl` | ZCode sessions (model-I/O rollouts; sliding-window dedup) |
+
+The `zcode` schema demonstrates the JSONL driver's **sliding-window mode**: each
+rollout line carries a cumulative window of the conversation (`request.messages`
++ `request.messageOffset`), and the driver dedups items by global index so
+overlapping request lines index each turn exactly once. Each line's
+`response.text` becomes the assistant turn.
 
 ---
 

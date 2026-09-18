@@ -3,6 +3,17 @@
 All notable changes to `seek` are documented here. This follows
 [Keep a Changelog](https://keepachangelog.com/) conventions.
 
+## [Unreleased]
+
+### Added
+
+- **ZCode conversation support:** embedded `zcode` parser schema indexes
+  `~/.zcode/cli/rollout` model-I/O JSONL (`seek add --parser zcode`), and the
+  JSONL parser driver gained a sliding-window mode (`messages_path` +
+  `offset_field`) that dedups cumulative per-request conversation windows by
+  global index. A manually configured ZCode `Stop` hook in
+  `~/.zcode/cli/config.json` keeps the index fresh (see `docs/service.md`).
+
 ## [0.5.7] - 2026-09-18
 
 ### Added

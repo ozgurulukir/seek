@@ -5,7 +5,7 @@
 `seek` gives humans and AI agents instant, unified recall across your entire workspace:
 - 🔍 **Hybrid Fusion Search:** SQLite FTS5 (BM25) + HNSW Vector Search + RRF (Reciprocal Rank Fusion)
 - 💻 **Source Code & Notes:** 35+ programming languages (`.gitignore`-aware), Markdown, PDFs, and rich documents
-- 🤖 **AI Agent Memory:** Claude Code, Codex, Opencode, Copilot CLI, and Hermes Agent sessions (including multimodal screenshots)
+- 🤖 **AI Agent Memory:** Claude Code, Codex, ZCode, Opencode, Copilot CLI, and Hermes Agent sessions (including multimodal screenshots)
 - 🎯 **Precision Source Addressing:** Precise 1-based line ranges (`file.go:L25-L68`) with surrounding context expansion (`-C 1`)
 - ⚡ **Full Local/Offline Mode:** Zero cloud keys required for keyword search; local Ollama (`nomic-embed-text`) + FlashRank (`ms-marco-TinyBERT`) cover semantic search and reranking on your machine
 - 🧠 **Cross-Encoder Re-ranking:** Config-driven reranking via FlashRank, BGE-Reranker, Cohere, or Jina
@@ -202,6 +202,7 @@ seek add --codex                   # Codex sessions (+images)
 seek add --opencode                # opencode sessions
 seek add --copilot                 # GitHub Copilot CLI sessions
 seek add --hermes                  # Hermes Agent sessions
+seek add --parser zcode            # ZCode sessions (~/.zcode/cli/rollout)
 seek sync                          # incremental index update then embed new chunks
 seek sync --no-embed               # index only (keyword-first: skip embedding entirely)
 seek sync --realtime               # force the realtime request batch (used by stop-hooks)

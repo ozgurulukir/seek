@@ -52,6 +52,43 @@ status message `Syncing seek index...` while it runs.
 
 When Claude Code or Codex finishes a session, `seek sync` runs automatically to parse and index the conversation immediately.
 
+### ZCode (manual hook)
+
+ZCode is not in the install registry, but its hook system accepts the same
+seek subprocess. Add a `hooks` block to `~/.zcode/cli/config.json` (set
+`enabled: true` — configuration-file hooks are off by default):
+
+```json
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "seek hooks sync",
+              "timeout": 600,
+              "statusMessage": "Syncing seek index..."
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+Without `--agent`, the hook syncs the whole index (including the `zcode`
+parser collection, if added via `seek add --parser zcode`). Note that ZCode
+hooks run inline — `async` has no runtime effect — and use `timeout` in
+seconds. Pair the hook with the conversation collection:
+
+```bash
+seek add --parser zcode
+```
+
 ---
 
 ## ⚡ Concurrency & SQLite WAL Architecture
