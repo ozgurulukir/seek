@@ -3,7 +3,7 @@
 All notable changes to `seek` are documented here. This follows
 [Keep a Changelog](https://keepachangelog.com/) conventions.
 
-## [Unreleased]
+## [0.5.8] - 2026-09-18
 
 ### Added
 
