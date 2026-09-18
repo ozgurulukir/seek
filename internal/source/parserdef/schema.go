@@ -74,6 +74,16 @@ type MessagesSpec struct {
 	ContentPath     string   `yaml:"content_path"`      // dot-path to content for assistant/unknown role
 	ContentPathUser string   `yaml:"content_path_user"` // dot-path to content for user role (Claude asymmetry)
 	TextTypes       []string `yaml:"text_types"`        // block type whitelist for array content (text, input_text, output_text)
+
+	// Sliding-window JSONL lines (Mode C-W, ZCode rollout style): a matching
+	// line carries an array of messages plus the array's global start index,
+	// so consecutive lines overlap heavily. The driver dedups by global index
+	// instead of re-emitting each message once per request line.
+	MessagesPath     string `yaml:"messages_path"`      // dot-path to the in-line message array
+	ItemRoleField    string `yaml:"item_role_field"`    // dot-path within an item for its role
+	ItemContentPath  string `yaml:"item_content_path"`  // dot-path within an item for its content
+	OffsetField      string `yaml:"offset_field"`       // dot-path to the window's global first-message index
+	ResponseTextPath string `yaml:"response_text_path"` // dot-path for the line's own assistant text
 }
 
 // VariantSpec is a first-match rule for inline message elements.
@@ -201,15 +211,26 @@ func (v *VersionSpec) validate(srcPrefix string, verIdx int, driver string) erro
 	}
 	// Messages mode validation depends on driver.
 	if driver == "jsonl" || driver == "jsonfiles" {
-		// JSONL driver: line_filter + role_field + content_path required.
+		// JSONL driver: either classic per-line messages (role_field +
+		// content_path) or sliding-window lines (messages_path + item fields).
+		// line_filter identifies message lines in both modes.
 		if len(v.Messages.LineFilter) == 0 {
 			return fmt.Errorf("%s: messages.line_filter is required for jsonl driver", prefix)
 		}
-		if v.Messages.RoleField == "" {
-			return fmt.Errorf("%s: messages.role_field is required for jsonl driver", prefix)
-		}
-		if v.Messages.ContentPath == "" {
-			return fmt.Errorf("%s: messages.content_path is required for jsonl driver", prefix)
+		if v.Messages.MessagesPath != "" {
+			if v.Messages.ItemRoleField == "" || v.Messages.ItemContentPath == "" {
+				return fmt.Errorf("%s: messages_path requires item_role_field and item_content_path", prefix)
+			}
+			if v.Messages.OffsetField == "" {
+				return fmt.Errorf("%s: messages_path requires offset_field (window dedup index)", prefix)
+			}
+		} else {
+			if v.Messages.RoleField == "" {
+				return fmt.Errorf("%s: messages.role_field is required for jsonl driver", prefix)
+			}
+			if v.Messages.ContentPath == "" {
+				return fmt.Errorf("%s: messages.content_path is required for jsonl driver", prefix)
+			}
 		}
 		// Session ID: either id_from_filename, id (JSON field), or id_field from a specific line type.
 		if !v.Sessions.IDFromFilename && v.Sessions.ID == "" {

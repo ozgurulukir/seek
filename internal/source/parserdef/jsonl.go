@@ -34,6 +34,14 @@ type jsonlSessionRow struct {
 	mtime    time.Time
 	messages []Message
 	metadata map[string]string
+
+	// Sliding-window dedup state (messages_path mode): windowMax is the
+	// highest global message index emitted so far and windowPrevOffset is the
+	// previous line's window start, used to detect a history reset.
+	windowMax        int64
+	windowPrevOffset int64
+	windowStarted    bool
+	windowWarned     bool
 }
 
 // detectJSONLSource discovers JSONL files matching the source spec.
@@ -168,7 +176,9 @@ func scanJSONLFileContext(ctx context.Context, filePath string, ver *VersionSpec
 		filterSet[t] = true
 	}
 
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -187,8 +197,17 @@ func scanJSONLFileContext(ctx context.Context, filePath string, ver *VersionSpec
 
 		// Check if this line type is a message line.
 		if filterSet[topLevel.Type] {
-			msg, ok := parseJSONLMessageLine(line, topLevel.Type, ver)
-			if ok {
+			if ver.Messages.MessagesPath != "" {
+				// Sliding-window mode: the line carries an array of messages
+				// plus a global offset; dedup by global index. A structurally
+				// unexpected line is a schema/format drift — warn once per
+				// file instead of indexing a silently empty session.
+				if _, drifted := parseJSONLWindowLine(line, topLevel.Type, ver, row); drifted && !row.windowWarned {
+					row.windowWarned = true
+					fmt.Fprintf(os.Stderr, "WARN: %s: window line %d missing %q or %q is not an array\n",
+						filepath.Base(filePath), lineNo, ver.Messages.OffsetField, ver.Messages.MessagesPath)
+				}
+			} else if msg, ok := parseJSONLMessageLine(line, topLevel.Type, ver); ok {
 				row.messages = append(row.messages, msg)
 			}
 			// Extract metadata from message lines (cwd, etc. are on user/assistant lines).
@@ -215,6 +234,87 @@ func scanJSONLFileContext(ctx context.Context, filePath string, ver *VersionSpec
 	}
 
 	return row, nil
+}
+
+// parseJSONLWindowLine extracts the not-yet-seen messages from a JSONL line
+// that carries a sliding window over the session (e.g. ZCode model-I/O
+// rollouts: request.messages + request.messageOffset). Each item's global
+// index is offset + array position; only indices past the high-water mark are
+// emitted, so overlapping windows do not re-index the same turn.
+//
+// A window start that moves backwards resets the mark (history compaction).
+// Known limitation: after a partial trim that leaves an overlapping index
+// range, indices are renumbered but the mark is not — a few turns around the
+// boundary may be emitted twice. Duplicate turns only marginally affect
+// search scoring, so this is accepted rather than tracked.
+//
+// The boolean results are (parsed, drifted): parsed is false when the line is
+// not valid JSON (truncated rollout lines are expected for live logs — the
+// classic driver skips those silently too), drifted is true when the line is
+// valid JSON but lacks the configured offset or its messages path is not an
+// array — a schema/format drift worth surfacing (once per file) rather than
+// silently indexing a session with no turns. Item-level skips (unknown roles,
+// empty content) are the normal filter path shared with the classic driver
+// and are not counted.
+func parseJSONLWindowLine(line, lineType string, ver *VersionSpec, row *jsonlSessionRow) (parsed, drifted bool) {
+	var obj interface{}
+	if err := json.Unmarshal([]byte(line), &obj); err != nil {
+		return false, false
+	}
+
+	offset := int64(0)
+	offsetOK := false
+	if raw := navigateJSON(obj, ver.Messages.OffsetField); raw != nil {
+		if f, ok := raw.(float64); ok {
+			offset, offsetOK = int64(f), true
+		}
+	}
+	if !offsetOK {
+		return true, true
+	}
+	items, ok := navigateJSON(obj, ver.Messages.MessagesPath).([]interface{})
+	if !ok {
+		return true, true
+	}
+
+	if !row.windowStarted {
+		row.windowMax = -1 // first window: nothing emitted yet
+	}
+	if row.windowStarted && offset < row.windowPrevOffset {
+		row.windowMax = -1 // window reset: start over
+	}
+	row.windowPrevOffset = offset
+	row.windowStarted = true
+
+	for i, elem := range items {
+		item, ok := elem.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		globalIdx := offset + int64(i)
+		if globalIdx <= row.windowMax {
+			continue
+		}
+		role, _ := navigateJSON(item, ver.Messages.ItemRoleField).(string)
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		content := extractContentValue(navigateJSON(item, ver.Messages.ItemContentPath), ver.Messages.TextTypes)
+		if content == "" {
+			continue
+		}
+		row.messages = append(row.messages, Message{Role: role, Content: content})
+		row.windowMax = globalIdx
+	}
+
+	// The line's own response text is the assistant turn the request produced;
+	// it never appears (non-empty) inside later windows, so emit it directly.
+	if ver.Messages.ResponseTextPath != "" {
+		if text, _ := navigateJSON(obj, ver.Messages.ResponseTextPath).(string); text != "" {
+			row.messages = append(row.messages, Message{Role: "assistant", Content: text})
+		}
+	}
+	return true, false
 }
 
 // parseJSONLMessageLine extracts a single message from a JSONL line that passed the type filter.

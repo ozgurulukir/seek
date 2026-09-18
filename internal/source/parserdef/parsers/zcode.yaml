@@ -1,0 +1,26 @@
+format: 1
+name: zcode
+description: ZCode oturumları (~/.zcode/cli/rollout/, model-I/O JSONL; kayan pencere)
+
+sources:
+  - driver: jsonl
+    when: { dir_exists: "~/.zcode/cli/rollout" }
+    paths: ["~/.zcode/cli/rollout"]
+    versions:
+      - version: 1
+        sessions:
+          id_from_filename: true
+          cursor_from_mtime: true
+          cursor_format: epoch_s
+          metadata:
+            model: "model.modelId"
+        messages:
+          # Her satır bir LLM isteği: request.messages, messageOffset'ten
+          # başlayan kümülatif penceredir; driver global indeksle tekilleştirir.
+          line_filter: ["model_io"]
+          messages_path: "request.messages"
+          item_role_field: "role"
+          item_content_path: "content"
+          text_types: ["text"]
+          offset_field: "request.messageOffset"
+          response_text_path: "response.text"

@@ -2,6 +2,7 @@ package parserdef
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -568,4 +569,222 @@ func TestRealDB_ClaudeSchema(t *testing.T) {
 
 	t.Logf("claude schema: %d sessions, %d messages total",
 		len(sessions), countMessages(sessions))
+}
+
+// ---- Sliding-window mode (ZCode rollout style) ----
+
+func TestJSONL_SlidingWindow_DedupsOverlappingLines(t *testing.T) {
+	dir := t.TempDir()
+	// Three model_io lines whose windows overlap: each carries the previous
+	// turns plus its own new ones. Global indices dedup them. As in real
+	// rollouts, in-window assistant entries carry empty content (the actual
+	// text arrives via response.text), so they are skipped.
+	lines := []string{
+		`{"type":"model_io","sessionId":"sess-1","request":{"messageOffset":0,"messages":[{"role":"user","content":[{"type":"text","text":"First question"}]}]},"response":{"text":"First answer"}}`,
+		`{"type":"model_io","sessionId":"sess-1","request":{"messageOffset":1,"messages":[{"role":"assistant","content":""},{"role":"user","content":[{"type":"text","text":"Follow-up"}]}]},"response":{"text":"Second answer"}}`,
+		`{"type":"model_io","sessionId":"sess-1","request":{"messageOffset":3,"messages":[{"role":"assistant","content":""}]},"response":{"text":"Third answer"}}`,
+	}
+	writeJSONLFile(t, dir, "model-io-sess-1.jsonl", lines)
+
+	def := &ParserDef{
+		Format: 1,
+		Name:   "test-window",
+		Sources: []SourceSpec{{
+			Driver: "jsonl",
+			Paths:  []string{dir},
+			Versions: []VersionSpec{{
+				Version: 1,
+				Sessions: SessionsSpec{
+					IDFromFilename:  true,
+					CursorFromMtime: true,
+					CursorFormat:    "epoch_s",
+				},
+				Messages: MessagesSpec{
+					LineFilter:       []string{"model_io"},
+					MessagesPath:     "request.messages",
+					ItemRoleField:    "role",
+					ItemContentPath:  "content",
+					TextTypes:        []string{"text"},
+					OffsetField:      "request.messageOffset",
+					ResponseTextPath: "response.text",
+				},
+			}},
+		}},
+	}
+	if err := def.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	src, ver, files, err := def.Match()
+	if err != nil {
+		t.Fatalf("Match: %v", err)
+	}
+	sessions, sErrs, err := syncJSONLSessions(src, ver, files, time.Time{})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if len(sErrs) != 0 {
+		t.Fatalf("session errors: %v", sErrs)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(sessions))
+	}
+	sess := sessions[0]
+
+	// Expected: user "First question" (idx 0), assistant "First answer" from
+	// window idx 1, user "Follow-up" (idx 2), then per-line responses
+	// "Second answer" and "Third answer".
+	var got []string
+	for _, m := range sess.Messages {
+		got = append(got, m.Role+":"+m.Content)
+	}
+	want := []string{
+		"user:First question",
+		"assistant:First answer",
+		"user:Follow-up",
+		"assistant:Second answer",
+		"assistant:Third answer",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("messages = %v, want %v", got, want)
+	}
+	if sess.ID != "model-io-sess-1" {
+		t.Errorf("ID = %q, want model-io-sess-1 (from filename)", sess.ID)
+	}
+}
+
+func TestJSONL_SlidingWindow_WindowReset(t *testing.T) {
+	dir := t.TempDir()
+	// After a compaction the window start moves backwards; the driver must
+	// resume emitting instead of silently dropping everything.
+	lines := []string{
+		`{"type":"model_io","request":{"messageOffset":50,"messages":[{"role":"user","content":"old"}]}}`,
+		`{"type":"model_io","request":{"messageOffset":0,"messages":[{"role":"user","content":"fresh start"}]}}`,
+	}
+	writeJSONLFile(t, dir, "reset.jsonl", lines)
+
+	def := &ParserDef{
+		Format: 1,
+		Name:   "test-reset",
+		Sources: []SourceSpec{{
+			Driver: "jsonl",
+			Paths:  []string{dir},
+			Versions: []VersionSpec{{
+				Version: 1,
+				Sessions: SessionsSpec{
+					IDFromFilename:  true,
+					CursorFromMtime: true,
+					CursorFormat:    "epoch_s",
+				},
+				Messages: MessagesSpec{
+					LineFilter:      []string{"model_io"},
+					MessagesPath:    "request.messages",
+					ItemRoleField:   "role",
+					ItemContentPath: "content",
+					OffsetField:     "request.messageOffset",
+				},
+			}},
+		}},
+	}
+
+	src, ver, files, err := def.Match()
+	if err != nil {
+		t.Fatalf("Match: %v", err)
+	}
+	sessions, _, err := syncJSONLSessions(src, ver, files, time.Time{})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if len(sessions) != 1 || len(sessions[0].Messages) != 2 {
+		t.Fatalf("want 1 session with 2 messages, got %+v", sessions)
+	}
+	if sessions[0].Messages[1].Content != "fresh start" {
+		t.Errorf("post-reset message = %q, want %q", sessions[0].Messages[1].Content, "fresh start")
+	}
+}
+
+func TestSchema_MessagesPathRequiresItemFields(t *testing.T) {
+	def := &ParserDef{
+		Format: 1,
+		Name:   "bad-window",
+		Sources: []SourceSpec{{
+			Driver: "jsonl",
+			Paths:  []string{"~/.x"},
+			Versions: []VersionSpec{{
+				Version:  1,
+				Sessions: SessionsSpec{IDFromFilename: true},
+				Messages: MessagesSpec{
+					LineFilter:   []string{"model_io"},
+					MessagesPath: "request.messages",
+				},
+			}},
+		}},
+	}
+	if err := def.Validate(); err == nil {
+		t.Error("Validate succeeded; want error for missing item_role_field/item_content_path")
+	}
+}
+
+func TestJSONL_SlidingWindow_WarnsOncePerFile(t *testing.T) {
+	dir := t.TempDir()
+	// First line lacks the offset field (format drift); the rest are healthy.
+	lines := []string{
+		`{"type":"model_io","request":{"messages":[{"role":"user","content":"no offset here"}]}}`,
+		`{"type":"model_io","request":{"messageOffset":0,"messages":[{"role":"user","content":"real question"}]},"response":{"text":"real answer"}}`,
+	}
+	writeJSONLFile(t, dir, "drift.jsonl", lines)
+
+	def := &ParserDef{
+		Format: 1,
+		Name:   "test-drift",
+		Sources: []SourceSpec{{
+			Driver: "jsonl",
+			Paths:  []string{dir},
+			Versions: []VersionSpec{{
+				Version: 1,
+				Sessions: SessionsSpec{
+					IDFromFilename:  true,
+					CursorFromMtime: true,
+					CursorFormat:    "epoch_s",
+				},
+				Messages: MessagesSpec{
+					LineFilter:      []string{"model_io"},
+					MessagesPath:    "request.messages",
+					ItemRoleField:   "role",
+					ItemContentPath: "content",
+					OffsetField:     "request.messageOffset",
+				},
+			}},
+		}},
+	}
+
+	// Capture stderr to count the drift warnings.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldErr := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = oldErr }()
+
+	src, ver, files, err := def.Match()
+	if err != nil {
+		t.Fatalf("Match: %v", err)
+	}
+	sessions, _, err := syncJSONLSessions(src, ver, files, time.Time{})
+	w.Close()
+	out, _ := io.ReadAll(r)
+	r.Close()
+
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	// The drifted line contributes nothing; the healthy line yields its user
+	// turn (no response_text_path configured in this schema).
+	if len(sessions) != 1 || len(sessions[0].Messages) != 1 {
+		t.Fatalf("want 1 session with 1 message, got %+v", sessions)
+	}
+	if n := strings.Count(string(out), "WARN:"); n != 1 {
+		t.Errorf("drift warnings = %d, want exactly 1 (warn-once per file); stderr: %q", n, string(out))
+	}
 }
