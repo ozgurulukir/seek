@@ -196,10 +196,9 @@ func TestSyncPath_RelativePathResolved(t *testing.T) {
 		t.Fatal(err)
 	}
 	rel, err := filepath.Rel(cwd, md)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if filepath.IsAbs(rel) {
+	if err != nil || filepath.IsAbs(rel) {
+		// e.g. CI: temp dir and CWD live on different Windows drives, so no
+		// relative path is expressible.
 		t.Skip("collection dir is not under the test CWD; relative path is not expressible")
 	}
 
