@@ -1,6 +1,6 @@
 ---
 name: seek
-description: Search user's personal notes, source code repositories (Go, Rust, Python, TS, etc.), Claude Code and Codex conversation history. Use when user asks about past conversations, code implementations, notes, or "do I have notes or code about X".
+description: Search user's personal notes, source code repositories (Go, Rust, Python, TS, etc.), Claude Code, Codex and ZCode conversation history. Use when user asks about past conversations, code implementations, notes, or "do I have notes or code about X".
 license: MIT
 compatibility: Requires seek binary installed and in PATH. Hybrid/vector search requires an embedding API key configured in ~/.config/seek/config.yaml.
 metadata:
@@ -11,7 +11,7 @@ allowed-tools: Bash(seek:*) Read
 
 # seek — Personal Knowledge & Source Code Search
 
-`seek` is the user's local search engine. It indexes source code repositories, markdown notes, Claude Code conversations, Codex conversations, rich documents, and CLI agent sessions with BM25 + vector hybrid search. Text and images share the same vector space via a configurable embedding provider — defaults to **qwen3-vl-embedding** (multimodal) on Alibaba Bailian (DashScope), but any OpenAI-compatible provider works.
+`seek` is the user's local search engine. It indexes source code repositories, markdown notes, Claude Code conversations, Codex and ZCode conversations, rich documents, and CLI agent sessions with BM25 + vector hybrid search. Text and images share the same vector space via a configurable embedding provider — defaults to **qwen3-vl-embedding** (multimodal) on Alibaba Bailian (DashScope), but any OpenAI-compatible provider works.
 
 Binary location: `seek`
 
@@ -115,6 +115,7 @@ seek add --copilot       # GitHub Copilot CLI sessions (schema-driven)
 seek add --zed           # Zed Agent panel threads (schema-driven)
 seek add --claude-schema # Claude (text-only, schema-driven, no image extraction)
 seek add --codex-schema  # Codex (text-only, schema-driven, no image extraction)
+seek add --parser zcode  # ZCode sessions (~/.zcode/cli/rollout, schema-driven)
 seek add --parser <name> # any parser schema by name
 
 # List available parser schemas + detection status
@@ -205,6 +206,9 @@ seek hooks install
 seek hooks uninstall
 ```
 
+ZCode syncs via a manually configured `Stop` hook in `~/.zcode/cli/config.json`
+(already installed on this machine) — no `seek hooks install` involvement.
+
 See also: [Hooks Reference](references/hooks.md)
 
 ### Authentication & Config
@@ -276,7 +280,7 @@ seek search "query" \
 - [OCR Reference](references/ocr.md) — local Ollama/GLM-OCR quickstart, privacy boundary, compatibility, and troubleshooting
 - [Semantic Service](references/semantic.md) — degraded vs full local NLP setup, health verification, and backfill
 - [Service](references/service.md) — background periodic sync+embed service
-- [Hooks](references/hooks.md) — Claude Code and Codex auto-indexing hooks
+- [Hooks](references/hooks.md) — Claude Code, Codex, and ZCode auto-indexing hooks
 - [Troubleshooting](references/troubleshooting.md) — no results, API errors, index issues
 
 ## Configuration Notes

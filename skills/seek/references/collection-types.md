@@ -9,7 +9,7 @@
 | `images` | Any directory | Image files (png/jpg/webp) with VL embedding |
 | `pdf` | Any directory | PDF pages rasterized to PNG, VL embedding per page + OCR text (if enabled) |
 | `documents` | Any directory | Rich documents (docx/xlsx/pptx/epub/html/...) via extraction backend (builtin/xberg) |
-| `parser` | External SQLite/JSONL | Schema-driven: opencode, copilot-cli, zed, claude (text-only), codex (text-only) |
+| `parser` | External SQLite/JSONL | Schema-driven: opencode, copilot-cli, zed, zcode, claude (text-only), codex (text-only) |
 
 PDF OCR is opt-in and runs only for pages without an embedded text layer. Configure
 the OpenAI-compatible vision endpoint under `ocr:`; in strict offline mode the
@@ -84,8 +84,14 @@ seek add --copilot             # GitHub Copilot CLI sessions
 seek add --zed                 # Zed Agent panel threads
 seek add --claude-schema       # Claude conversations (text-only, no image extraction)
 seek add --codex-schema        # Codex conversations (text-only, no image extraction)
+seek add --parser zcode        # ZCode sessions (~/.zcode/cli/rollout model-I/O JSONL)
 seek add --parser <name>       # any parser schema by name
 ```
+
+The `zcode` schema handles ZCode's rollout format, where each JSONL line is a
+cumulative conversation window (`request.messages` + `request.messageOffset`);
+the driver dedups messages by global index and takes assistant turns from each
+line's `response.text`.
 
 ### Listing available schemas
 

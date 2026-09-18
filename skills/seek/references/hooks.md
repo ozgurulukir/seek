@@ -77,6 +77,41 @@ failures are also returned through the process exit status and recorded for
 **Uninstall removes** only the Seek command from its matching hook entry. Other
 commands and hooks are preserved.
 
+## ZCode (manual hook)
+
+ZCode is not part of `seek hooks install`, but its hook system accepts the same
+subprocess. The user's machine already has this configured in
+`~/.zcode/cli/config.json`:
+
+```json
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "seek hooks sync",
+              "timeout": 600,
+              "statusMessage": "Syncing seek index..."
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+Notes: configuration-file hooks are disabled by default, so `enabled: true` is
+required; hooks run inline (`async` has no effect); `timeout` is in seconds.
+Without `--agent` the command syncs the whole index, including the `zcode`
+parser collection (`seek add --parser zcode`). ZCode's rollout files
+(`~/.zcode/cli/rollout/*.jsonl`) are cumulative model-I/O windows; the parser
+dedups them by global message index.
+
 ## Binary Resolution
 
 The hook finds the `seek` binary using:
