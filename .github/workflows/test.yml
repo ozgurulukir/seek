@@ -36,12 +36,13 @@ jobs:
         run: |
           $version = "0.16.0"
           $root = "C:\zig"
-          $url = "https://ziglang.org/download/$version/zig-windows-x86_64-$version.zip"
+          # Zig 0.16.0 renamed archives: arch comes first (zig-x86_64-windows-…)
+          $url = "https://ziglang.org/download/$version/zig-x86_64-windows-$version.zip"
           Write-Output "downloading $url"
           Invoke-WebRequest -Uri $url -OutFile "$root.zip"
           Expand-Archive -Path "$root.zip" -DestinationPath $root -Force
-          "$root\zig-windows-x86_64-$version" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          & "$root\zig-windows-x86_64-$version\zig.exe" version
+          "$root\zig-x86_64-windows-$version" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "$root\zig-x86_64-windows-$version\zig.exe" version
       - name: Build
         shell: pwsh
         env:
