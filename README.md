@@ -103,6 +103,14 @@ seek search "functional programming architecture"   # hybrid: BM25 + vector + RR
 ```
 
 ### Option C — 100% Local Semantic Search (Ollama + FlashRank)
+
+> **🤖 AI coding agents:** point your agent at the bundled skill
+> (`skills/seek/SKILL.md`) and it will route codebase, notes, and conversation
+> questions through seek — preferring the default hybrid mode (semantic-weighted)
+> for conceptual queries and `--lex` only for exact symbols and error strings.
+> One `seek search` beats repeated Grep/Glob sweeps across every indexed
+> workspace.
+
 ```bash
 ollama pull nomic-embed-text               # local embedding
 uv run tools/flashrank_server/server.py    # local cross-encoder reranker

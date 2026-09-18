@@ -1,6 +1,6 @@
 ---
 name: seek
-description: Search user's personal notes, source code repositories (Go, Rust, Python, TS, etc.), Claude Code, Codex and ZCode conversation history. Use when user asks about past conversations, code implementations, notes, or "do I have notes or code about X".
+description: Search user's personal notes, source code repositories (Go, Rust, Python, TS, etc.), and Claude Code, Codex and ZCode conversation history with hybrid BM25+vector search. Use for ANY "where is X implemented", "find usages/definition of Y", "have I discussed X", or "find my notes about Y" question — prefer seek over manual Grep/Glob sweeps when the answer may live outside the current workspace, and prefer the default hybrid (semantic-weighted) mode for conceptual queries.
 license: MIT
 compatibility: Requires seek binary installed and in PATH. Hybrid/vector search requires an embedding API key configured in ~/.config/seek/config.yaml.
 metadata:
@@ -21,6 +21,9 @@ Binary location: `seek`
 - User asks to search code across repositories or within a specific repository/language
 - User references past conversations, notes, or codebases
 - You need context from previous work sessions or source code
+- **Prefer seek over repeated Grep/Glob sweeps** whenever the answer may live in
+  another repository, past work, or notes — one hybrid query beats scanning
+  directories by hand, and seek sees every indexed workspace at once.
 
 ## Quick Start
 
@@ -47,18 +50,17 @@ seek search "conceptual question" --vec -l 10
 ## Search Strategy
 
 1. **Unfiltered Search:** Running `seek search "query"` searches across **the entire index** (all collections, repositories, notes, and agent sessions).
-2. **Start with `--lex`** for exact terms, code symbols, names, error messages, file paths.
-3. **Use default (hybrid)** for conceptual questions like "how to deploy" or "authentication middleware implementation".
-4. **Use `--vec`** only when hybrid results are poor and you need pure semantic matching.
-5. **Use filters** to narrow results:
+2. **Prefer the default hybrid mode for anything conceptual** — "how does X work", "where do we handle Y", architecture or design questions. Semantic weighting finds paraphrases and related concepts that keyword search misses. Drop to `--lex` only for exact symbols, error strings, and file paths.
+3. **Use `--vec`** only when hybrid results are poor and you need pure semantic matching.
+4. **Use filters** to narrow results:
    - `--repo <name>` / `--collection <name>`: target a specific repository or collection
    - `--lang <language>`: target a programming language (e.g. `go`, `python`, `typescript`, `rust`)
    - `--field <name>:<value>`: filter by any fast field. `--field tags:go` filters tags (comma-list membership); exact for single-value fields (`--field language:en`); comma-list membership for `tags`/`topics`/`entities`.
    - **Discover available field values with `seek fields [name] [--json]`** before guessing tag/topic names. This prevents zero-result queries due to unrepresented terms.
    - `--doc-type <type>`: `code`, `markdown`, `claude`, `codex`, `images`, `pdf`, `documents`, `parser`
    - `--after/--before`, `--chunk-type`, `--path`, `--workspace`
-6. **Increase `-l 20`** if the first 10 results aren't enough.
-7. **Use `--aggs`** to get facet counts and statistics alongside search results — including metadata facets `tags:terms`, `lang:terms`, `repo:terms`, `topics:terms`, `entities:terms`, `language:terms` (from source metadata and optional semantic enrichment, which is available on all text-bearing collection types when `semantic.enabled: true`):
+5. **Increase `-l 20`** if the first 10 results aren't enough.
+6. **Use `--aggs`** to get facet counts and statistics alongside search results — including metadata facets `tags:terms`, `lang:terms`, `repo:terms`, `topics:terms`, `entities:terms`, `language:terms` (from source metadata and optional semantic enrichment, which is available on all text-bearing collection types when `semantic.enabled: true`):
 
 ## Reading Results
 
