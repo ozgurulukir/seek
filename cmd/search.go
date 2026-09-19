@@ -291,8 +291,12 @@ func formatSnippet(content string, maxLen int) string {
 	// Clean up whitespace
 	s := strings.ReplaceAll(content, "\n", " ")
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > maxLen {
-		s = s[:maxLen] + "..."
+	if len([]rune(s)) > maxLen {
+		// Truncate by runes, not bytes: a byte slice s[:maxLen] could split a
+		// multi-byte UTF-8 rune and emit invalid UTF-8 (M13-style bug in the
+		// search display path, distinct from the chunking path).
+		runes := []rune(s)
+		s = string(runes[:maxLen]) + "..."
 	}
 	return s
 }

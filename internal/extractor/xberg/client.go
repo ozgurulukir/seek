@@ -216,10 +216,16 @@ func titleFromPath(path string) string {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	// Rune-bounded so a multi-byte UTF-8 rune is never split mid-character.
+	// (utf8.Truncate only exists in Go >= 1.25.)
+	runes := []rune(s)
+	if n < 1 {
+		n = 1
+	}
+	if len(runes) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return string(runes[:n]) + "..."
 }
 
 // Compile-time interface check.
