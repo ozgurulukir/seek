@@ -1,4 +1,6 @@
-.PHONY: build install clean test
+.PHONY: build install clean test skill-services skill-services-check
+
+PYTHON_RUN ?= uv run --python 3.11 --no-project
 
 build:
 	@mkdir -p bin
@@ -12,3 +14,9 @@ clean:
 
 test:
 	go test -tags "fts5 sqlite_fts5" ./...
+
+skill-services:
+	$(PYTHON_RUN) scripts/sync-skill-services.py
+
+skill-services-check:
+	$(PYTHON_RUN) scripts/sync-skill-services.py --check

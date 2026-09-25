@@ -1,0 +1,20 @@
+{
+  "name": "seek-plugins",
+  "interface": {
+    "displayName": "seek"
+  },
+  "plugins": [
+    {
+      "name": "seek",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/ozgurulukir/seek.git"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

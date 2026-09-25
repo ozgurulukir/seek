@@ -1,0 +1,36 @@
+name: Skill service bundle
+
+on:
+  push:
+    paths:
+      - "tools/semantic/**"
+      - "tools/xberg_server/**"
+      - "tools/flashrank_server/**"
+      - "tools/embed_server/**"
+      - "skills/seek/scripts/services/**"
+      - "scripts/sync-skill-services.py"
+      - ".github/workflows/skill-services.yml"
+  pull_request:
+    paths:
+      - "tools/semantic/**"
+      - "tools/xberg_server/**"
+      - "tools/flashrank_server/**"
+      - "tools/embed_server/**"
+      - "skills/seek/scripts/services/**"
+      - "scripts/sync-skill-services.py"
+      - ".github/workflows/skill-services.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Check bundled service files
+        run: python scripts/sync-skill-services.py --check

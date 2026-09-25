@@ -285,6 +285,22 @@ seek search "query" \
 - [Hooks](references/hooks.md) — Claude Code, Codex, and ZCode auto-indexing hooks
 - [Troubleshooting](references/troubleshooting.md) — no results, API errors, index issues
 
+## Optional Python Services
+
+The skill bundles the optional Python service sources under
+`scripts/services/`, so a standalone skill installation has them too. When
+the user asks to configure, start, or troubleshoot a service, resolve the
+loaded skill directory (Claude Code exposes `${CLAUDE_SKILL_DIR}`; otherwise
+use the installed skill's `SKILL.md` location) and use the matching bundled
+service directory. The semantic tagger is in `scripts/services/semantic`,
+rich document extraction in `scripts/services/xberg_server`, reranking in
+`scripts/services/flashrank_server`, and embedding/OCR helpers in
+`scripts/services/embed_server`. Keep generated environments and caches in a
+writable user data directory, not beside installed skill files; semantic setup
+supports `SEEK_SEMANTIC_HOME` for this. These services remain optional; do not
+install their large model stacks unless the user asks for that capability.
+Read the matching service script and reference before choosing setup commands.
+
 ## Configuration Notes
 
 **Embedding:**

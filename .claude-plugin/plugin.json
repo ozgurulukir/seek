@@ -1,0 +1,12 @@
+{
+  "name": "seek",
+  "version": "0.5.9",
+  "description": "Search local notes, source repositories, and coding agent conversations with hybrid keyword and semantic search.",
+  "author": {
+    "name": "Ozgur Ulukir",
+    "url": "https://github.com/ozgurulukir"
+  },
+  "repository": "https://github.com/ozgurulukir/seek",
+  "license": "MIT",
+  "keywords": ["search", "notes", "code", "claude-code", "codex"]
+}

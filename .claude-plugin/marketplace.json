@@ -1,0 +1,18 @@
+{
+  "name": "seek-plugins",
+  "description": "Coding agent skills and tools from seek.",
+  "owner": {
+    "name": "Ozgur Ulukir",
+    "url": "https://github.com/ozgurulukir"
+  },
+  "plugins": [
+    {
+      "name": "seek",
+      "source": {
+        "source": "github",
+        "repo": "ozgurulukir/seek"
+      },
+      "description": "Search local notes, source repositories, and coding agent conversations with hybrid keyword and semantic search."
+    }
+  ]
+}
