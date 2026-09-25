@@ -3,6 +3,15 @@
 All notable changes to `seek` are documented here. This follows
 [Keep a Changelog](https://keepachangelog.com/) conventions.
 
+## [0.5.9] - 2026-09-25
+
+### Fixed
+
+- **Chunking UTF-8 safety:** overlap truncation (`tailBytes`), snippet generation, and string truncation helpers now snap to rune boundaries, avoiding broken UTF-8 byte sequences.
+- **Indexer orphan cleanup guard:** `safeCleanupOrphans` requires the collection directory to exist before purging missing documents, protecting against unmounted or relocated sources wiping indexed collections.
+- **Embeddings loopback & error bounding:** direct `VLClient` instances enforce loopback-only connections under `privacy.offline_only`; non-2xx error bodies are bounded to 2 KiB across all embedding/OCR/rerank/batch HTTP clients; batch polling terminates immediately on non-200 responses.
+- **Hybrid search content fidelity:** RRF fusion preserves the full chunk payload and line-span attributes over 40-token BM25 snippets when merging vector and lexical hits for the same document.
+
 ## [0.5.8] - 2026-09-18
 
 ### Added
