@@ -39,7 +39,16 @@ func rrfFusionWithK(bm25, vec []Result, limit int, k int) []Result {
 	}
 	for rank, r := range vec {
 		scores[r.DocumentID] += 1.0 / float64(k+rank+1)
-		if _, exists := resultMap[r.DocumentID]; !exists {
+		cur, exists := resultMap[r.DocumentID]
+		if !exists {
+			resultMap[r.DocumentID] = r
+			continue
+		}
+		// A shared (hybrid) hit may already be stored from the BM25 leg,
+		// which carries only a 40-token snippet (ChunkID == 0). If the
+		// vector leg resolved the same document to a full chunk, prefer it
+		// so Content/ChunkID/line-span come from the richer candidate.
+		if cur.ChunkID == 0 && r.ChunkID > 0 {
 			resultMap[r.DocumentID] = r
 		}
 	}

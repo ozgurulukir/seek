@@ -21,7 +21,7 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 		diskPaths[f.Path] = true
 	}
 	if len(scanIssues) == 0 {
-		if _, err := idx.cleanupOrphans(col.ID, diskPaths, "images"); err != nil {
+		if _, err := idx.safeCleanupOrphans(col, diskPaths, "images"); err != nil {
 			return fmt.Errorf("cleanup images: %w", err)
 		}
 	} else {
@@ -82,7 +82,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 		diskPaths[f.Path] = true
 	}
 	if len(scanIssues) == 0 {
-		if _, err := idx.cleanupOrphans(col.ID, diskPaths, "PDFs"); err != nil {
+		if _, err := idx.safeCleanupOrphans(col, diskPaths, "PDFs"); err != nil {
 			return fmt.Errorf("cleanup PDFs: %w", err)
 		}
 	} else {

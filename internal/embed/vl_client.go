@@ -41,6 +41,11 @@ type VLClient struct {
 	endpoint   string
 	taskPrefix TaskPrefix
 	http       *http.Client
+	// refuseNetwork marks a client that must not send requests to a
+	// non-loopback endpoint (search.privacy.offline_only). Requests fail fast,
+	// before any chunk, query, or image text leaves the machine. This mirrors
+	// Client.offline and provides defense-in-depth beyond the factory check.
+	refuseNetwork bool
 }
 
 // NewVLClient creates a new multimodal embedding client. If endpoint is empty,
@@ -54,13 +59,18 @@ func newVLClient(apiKey, model string, dimensions int, endpoint string, taskPref
 	if endpoint == "" {
 		endpoint = DefaultVLEndpoint
 	}
+	// Offline-only mode must never egress to a non-loopback host. The factory
+	// enforces this too, but a direct newVLClient call could otherwise bypass
+	// it, so refuse here as well (defense-in-depth).
+	refuseNetwork := offline && !config.IsNumericLoopbackURL(endpoint)
 	return &VLClient{
-		apiKey:     apiKey,
-		model:      model,
-		dimensions: dimensions,
-		endpoint:   endpoint,
-		taskPrefix: taskPrefix,
-		http:       newHTTPClient(config.DefaultVLTimeout, offline),
+		apiKey:        apiKey,
+		model:         model,
+		dimensions:    dimensions,
+		endpoint:      endpoint,
+		taskPrefix:    taskPrefix,
+		http:          newHTTPClient(config.DefaultVLTimeout, offline),
+		refuseNetwork: refuseNetwork,
 	}
 }
 
@@ -221,6 +231,10 @@ func (c *VLClient) doRequest(items []EmbedItem) ([][]float32, error) {
 }
 
 func (c *VLClient) doRequestContext(ctx context.Context, items []EmbedItem) ([][]float32, error) {
+	if c.refuseNetwork {
+		return nil, fmt.Errorf("offline_only is enabled: refusing to send request to %q", c.endpoint)
+	}
+
 	var contents []vlContent
 
 	for _, item := range items {
@@ -266,13 +280,16 @@ func (c *VLClient) doRequestContext(ctx context.Context, items []EmbedItem) ([][
 	}
 	defer resp.Body.Close()
 
+	// Non-2xx responses must not echo unbounded provider output back into the
+	// error path (maxErrorBody cap).
+	if resp.StatusCode != http.StatusOK {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		return nil, fmt.Errorf("vl API %d: %s", resp.StatusCode, string(snippet))
+	}
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("vl API %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var vlResp vlResponse

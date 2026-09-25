@@ -125,12 +125,14 @@ func (c *OCRClient) ExtractText(imageDataURI string) (string, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		return "", fmt.Errorf("ocr status %d: %s", resp.StatusCode, truncate(string(snippet), 300))
+	}
+
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
-	}
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("ocr status %d: %s", resp.StatusCode, truncate(string(data), 300))
 	}
 
 	var out ocrResponse

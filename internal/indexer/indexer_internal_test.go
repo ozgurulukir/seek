@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,5 +147,159 @@ func TestSyncHandlersRegistry(t *testing.T) {
 		t.Error("unknown collection type must return an error")
 	} else if !strings.Contains(err.Error(), "unknown collection type") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// cleanupTestIndexer wires a real SQLite store and a fresh collection so the
+// guarded orphan cleanup can be exercised end to end.
+func cleanupTestIndexer(t *testing.T) (*Indexer, *store.Store, *store.Collection) {
+	t.Helper()
+	tmp := t.TempDir()
+	db, err := store.Open(filepath.Join(tmp, "test.db"))
+	if err != nil {
+		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
+			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\"")
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	root := filepath.Join(tmp, "root")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	col, err := db.CreateCollection("test", store.CollectionTypeDocuments, root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := New(cfgFromTest(t, tmp, filepath.Join(tmp, "test.db")), db)
+	idx.WithLogger(nopLogger{})
+	return idx, db, col
+}
+
+func seedDoc(t *testing.T, db *store.Store, col *store.Collection, path string) {
+	t.Helper()
+	if _, err := db.UpsertAndReplaceIndex(context.Background(), store.DocumentIndex{
+		CollectionID: col.ID,
+		Path:         path,
+		Title:        filepath.Base(path),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSafeCleanupOrphansNilPurges(t *testing.T) {
+	idx, db, col := cleanupTestIndexer(t)
+	seedDoc(t, db, col, filepath.Join(col.Path, "stale.md"))
+
+	removed, err := idx.safeCleanupOrphans(col, nil, "documents")
+	if err != nil {
+		t.Fatalf("nil livePaths: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("nil livePaths removed = %d, want 1", removed)
+	}
+	docs, _ := db.ListDocumentPaths(col.ID)
+	if len(docs) != 0 {
+		t.Fatalf("nil livePaths must purge collection, %d documents remain", len(docs))
+	}
+}
+
+func TestSafeCleanupOrphansMissingRootPreserves(t *testing.T) {
+	idx, db, col := cleanupTestIndexer(t)
+	seedDoc(t, db, col, filepath.Join(col.Path, "stale.md"))
+
+	var logBuf string
+	idx.WithLogger(captureLogger{&logBuf})
+
+	// Simulate an unmounted/renamed scan root: path no longer exists.
+	col.Path = filepath.Join(col.Path, "gone")
+
+	removed, err := idx.safeCleanupOrphans(col, map[string]bool{}, "documents")
+	if err != nil {
+		t.Fatalf("missing root: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("missing root removed = %d, want 0", removed)
+	}
+	docs, _ := db.ListDocumentPaths(col.ID)
+	if len(docs) != 1 {
+		t.Fatalf("missing root wiped documents: %d remain, want 1", len(docs))
+	}
+	if !strings.Contains(logBuf, "scan root unavailable") {
+		t.Fatalf("missing root did not warn: %q", logBuf)
+	}
+}
+
+func TestSafeCleanupOrphansEmptyScanPurges(t *testing.T) {
+	idx, db, col := cleanupTestIndexer(t)
+	seedDoc(t, db, col, filepath.Join(col.Path, "stale.md"))
+
+	// Source files are the source of truth: a legitimate empty scan of an
+	// existing directory (e.g. the user deleted every file) must purge so the
+	// index reflects the deletion.
+	removed, err := idx.safeCleanupOrphans(col, map[string]bool{}, "documents")
+	if err != nil {
+		t.Fatalf("empty scan: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("empty scan removed = %d, want 1", removed)
+	}
+	docs, _ := db.ListDocumentPaths(col.ID)
+	if len(docs) != 0 {
+		t.Fatalf("empty scan must purge, %d documents remain", len(docs))
+	}
+}
+
+func TestSafeCleanupOrphansRemovesOrphans(t *testing.T) {
+	idx, db, col := cleanupTestIndexer(t)
+	live := filepath.Join(col.Path, "live.md")
+	stale := filepath.Join(col.Path, "stale.md")
+	seedDoc(t, db, col, live)
+	seedDoc(t, db, col, stale)
+
+	removed, err := idx.safeCleanupOrphans(col, map[string]bool{live: true}, "documents")
+	if err != nil {
+		t.Fatalf("normal cleanup: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("normal cleanup removed = %d, want 1", removed)
+	}
+	docs, _ := db.ListDocumentPaths(col.ID)
+	if _, ok := docs[live]; !ok {
+		t.Fatal("live document was removed")
+	}
+	if _, ok := docs[stale]; ok {
+		t.Fatal("stale document was not removed")
+	}
+}
+
+func TestSafeCleanupOrphansFileRootPreserves(t *testing.T) {
+	idx, db, col := cleanupTestIndexer(t)
+	seedDoc(t, db, col, filepath.Join(col.Path, "stale.md"))
+
+	// A file (not a directory) is an incomplete scan root: never purge.
+	filePath := filepath.Join(col.Path, "notadir.md")
+	if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	col.Path = filePath
+
+	var logBuf string
+	idx.WithLogger(captureLogger{&logBuf})
+
+	removed, err := idx.safeCleanupOrphans(col, map[string]bool{}, "documents")
+	if err != nil {
+		t.Fatalf("file root: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("file root removed = %d, want 0", removed)
+	}
+	docs, _ := db.ListDocumentPaths(col.ID)
+	if len(docs) != 1 {
+		t.Fatalf("file root wiped documents: %d remain, want 1", len(docs))
+	}
+	if !strings.Contains(logBuf, "not a directory") {
+		t.Fatalf("file root did not warn: %q", logBuf)
 	}
 }

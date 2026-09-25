@@ -110,12 +110,14 @@ func (c *Client) UploadBatchFileContext(ctx context.Context, jsonlData []byte) (
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		return "", fmt.Errorf("upload failed %d: %s", resp.StatusCode, string(snippet))
+	}
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("read upload response: %w", err)
-	}
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("upload failed %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result struct {
@@ -152,12 +154,14 @@ func (c *Client) CreateBatchContext(ctx context.Context, fileID string) (*BatchJ
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		return nil, fmt.Errorf("create batch failed %d: %s", resp.StatusCode, string(snippet))
+	}
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read create batch response: %w", err)
-	}
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("create batch failed %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result struct {
@@ -227,7 +231,7 @@ func (c *Client) PollBatchContext(ctx context.Context, batchID string, onStatus 
 		case "completed":
 			return job, nil
 		case "failed", "expired", "cancelled":
-			return job, fmt.Errorf("batch %s: %s", result.Status, string(respBody))
+			return job, fmt.Errorf("batch %s: %s", result.Status, boundedErrorSnippet(respBody))
 		}
 
 		if err := sleepContext(ctx, config.DefaultBatchPollInterval); err != nil {
@@ -271,12 +275,14 @@ func (c *Client) DownloadBatchResultsContext(ctx context.Context, fileID string)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		return nil, fmt.Errorf("download failed %d: %s", resp.StatusCode, string(snippet))
+	}
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read download response: %w", err)
-	}
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("download failed %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	results := make(map[string][]float32)

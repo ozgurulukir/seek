@@ -19,7 +19,7 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 		diskPaths[f.Path] = true
 	}
 	if len(scanIssues) == 0 {
-		if _, err := idx.cleanupOrphans(col.ID, diskPaths, "documents"); err != nil {
+		if _, err := idx.safeCleanupOrphans(col, diskPaths, "documents"); err != nil {
 			return fmt.Errorf("cleanup markdown documents: %w", err)
 		}
 	} else {

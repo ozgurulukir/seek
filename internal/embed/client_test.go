@@ -160,6 +160,50 @@ func TestEmbedHTTPError(t *testing.T) {
 	}
 }
 
+// TestEmbedHTTPErrorBodyBounded verifies that a large (or hostile) non-OK
+// response body is not echoed verbatim into the error message: only a bounded
+// prefix (maxErrorBody) may appear.
+func TestEmbedHTTPErrorBodyBounded(t *testing.T) {
+	const bodyLen = 5000
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(strings.Repeat("x", bodyLen)))
+	})
+
+	_, err := c.EmbedDocuments([]string{"a"})
+	if err == nil {
+		t.Fatal("expected error for non-200 status")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "500") {
+		t.Errorf("error = %q, want status code mention", msg)
+	}
+	// The echoed body must be bounded to at most maxErrorBody bytes; assert the
+	// whole error is far smaller than the original 5000-byte body.
+	if len(msg) > maxErrorBody+100 {
+		t.Errorf("error length = %d, want <= %d (body was echoed unbounded)", len(msg), maxErrorBody+100)
+	}
+	if strings.Count(msg, "x") > maxErrorBody {
+		t.Errorf("error echoed %d body bytes, want <= %d", strings.Count(msg, "x"), maxErrorBody)
+	}
+}
+
+// TestEmbedSuccessFullyReadsBody confirms a normal 200 response still parses
+// successfully (the bounded error read must not affect the success path).
+func TestEmbedSuccessFullyReadsBody(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		writeEmbeddings(w, 1)
+	})
+
+	got, err := c.EmbedDocuments([]string{"a"})
+	if err != nil {
+		t.Fatalf("EmbedDocuments: %v", err)
+	}
+	if len(got) != 1 || !reflect.DeepEqual(got[0], []float32{1, 1}) {
+		t.Errorf("embeddings = %v, want [[1 1]]", got)
+	}
+}
+
 func TestEmbedAPIErrorField(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -3,6 +3,7 @@ package chunk
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestChunkMarkdownSmallContent(t *testing.T) {
@@ -301,5 +302,123 @@ func TestAssignLineNumbersAdvancesOnMiss(t *testing.T) {
 	}
 	if out[3].StartLine != 4 {
 		t.Errorf("chunk matching \"delta\" should snap to line 4, got %d", out[3].StartLine)
+	}
+}
+
+// TestSplitBySizeUTF8Boundary verifies that overlapping tail slices never begin
+// mid-rune: every returned part must be valid UTF-8 and must not start with a
+// UTF-8 continuation byte.
+func TestSplitBySizeUTF8Boundary(t *testing.T) {
+	// Multibyte Turkish + CJK + emoji content. Each unit mixes 2-, 3- and
+	// 4-byte runes so byte offsets frequently land inside a rune.
+	unit := "İstanbul şehri çok güzel 🙂 你好世界\n\n"
+	var sb strings.Builder
+	for i := 0; i < 40; i++ {
+		sb.WriteString(unit)
+	}
+	content := sb.String()
+
+	// maxSize/overlap chosen so the overlap boundary is a byte offset that is
+	// NOT a rune boundary for the multibyte tail.
+	for _, overlap := range []int{1, 3, 7, 13, 30, 61} {
+		parts := splitBySize(content, 300, overlap)
+		if len(parts) < 2 {
+			t.Fatalf("overlap=%d: expected multiple parts, got %d", overlap, len(parts))
+		}
+		for i, p := range parts {
+			if !utf8.ValidString(p) {
+				t.Errorf("overlap=%d part %d is invalid UTF-8: %q", overlap, i, p)
+			}
+			if p == "" {
+				continue
+			}
+			if !utf8.RuneStart(p[0]) {
+				t.Errorf("overlap=%d part %d begins with a UTF-8 continuation byte (0x%02x): %q",
+					overlap, i, p[0], p)
+			}
+		}
+	}
+}
+
+// TestChunkMarkdownUTF8Boundary drives the same multibyte content through the
+// public API to confirm chunks survive to consumers (e.g. FTS) as valid UTF-8.
+func TestChunkMarkdownUTF8Boundary(t *testing.T) {
+	unit := "İstanbul şehri çok güzel 🙂 你好世界\n\n"
+	content := strings.Repeat(unit, 40)
+
+	chunks := ChunkMarkdown(content, 300, 50)
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
+	}
+	for _, c := range chunks {
+		if !utf8.ValidString(c.Content) {
+			t.Errorf("chunk %d content is invalid UTF-8: %q", c.Seq, c.Content)
+		}
+		if c.Content == "" {
+			continue
+		}
+		if !utf8.RuneStart(c.Content[0]) {
+			t.Errorf("chunk %d begins with a UTF-8 continuation byte (0x%02x): %q",
+				c.Seq, c.Content[0], c.Content)
+		}
+	}
+}
+
+// TestTailBytes pins the helper contract, including the case where the naive
+// tail[len(tail)-n:] slice would have split a rune.
+func TestTailBytes(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		n    int
+		want string
+	}{
+		{"n<=0 returns empty", "abc", 0, ""},
+		{"len<=n returns whole string", "abc", 5, "abc"},
+		{"ascii exactly n", "abcdef", 3, "def"},
+		// "İstanbul" — 'İ' is 2 bytes (0xC4 0xB0), so len=9. n=1 -> byte 8
+		// is 'l' (ASCII, a rune start), so no advance.
+		{"ascii tail unaffected", "İstanbul", 1, "l"},
+		// n=2 -> byte 7 is 'u', byte 8 is 'l'; both rune starts.
+		{"multi-byte prefix not touched", "İstanbul", 2, "ul"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tailBytes(tt.in, tt.n); got != tt.want {
+				t.Errorf("tailBytes(%q, %d) = %q, want %q", tt.in, tt.n, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestTailBytesAdvancesToRuneStart pins the exact bug: a byte index that lands
+// on a continuation byte must be advanced to the next rune start.
+func TestTailBytesAdvancesToRuneStart(t *testing.T) {
+	// "aİ" = 'a' (0x61) + 'İ' (0xC4 0xB0). len = 3.
+	s := "aİ"
+	// n=2 -> i = 1 = 0xC4, a rune start (already valid).
+	if got := tailBytes(s, 2); got != "İ" {
+		t.Fatalf("tailBytes(%q, 2) = %q, want %q", s, got, "İ")
+	}
+	// n=1 -> i = 2 = 0xB0, a continuation byte. Naive s[len-1:] would yield
+	// "\xb0" (invalid). tailBytes must advance past the partial rune and
+	// return "" because the boundary is the end of string.
+	naive := s[len(s)-1:]
+	if utf8.ValidString(naive) {
+		t.Fatalf("precondition failed: naive tail %q unexpectedly valid", naive)
+	}
+	if got := tailBytes(s, 1); got != "" {
+		t.Fatalf("tailBytes(%q, 1) = %q, want %q (advanced past partial rune)", s, got, "")
+	}
+	// A longer mixed string: ensure the result is always valid UTF-8.
+	mixed := "prefix🙂suffix"
+	for n := 1; n < len(mixed); n++ {
+		got := tailBytes(mixed, n)
+		if !utf8.ValidString(got) {
+			t.Fatalf("tailBytes(%q, %d) = %q is invalid UTF-8", mixed, n, got)
+		}
+		if got != "" && !utf8.RuneStart(got[0]) {
+			t.Fatalf("tailBytes(%q, %d) = %q starts mid-rune", mixed, n, got)
+		}
 	}
 }

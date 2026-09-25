@@ -126,6 +126,83 @@ func TestVLClientPartialResponseErrors(t *testing.T) {
 	}
 }
 
+// TestNewVLClientOfflineRefusesNonLoopback pins the defense-in-depth guard:
+// a direct newVLClient call with offline=true and a non-loopback endpoint must
+// refuse to send, so privacy.offline_only cannot be bypassed by skipping the
+// factory's check.
+func TestNewVLClientOfflineRefusesNonLoopback(t *testing.T) {
+	c := newVLClient("k", "vl-model", 2, "https://evil.example/v1", TaskPrefix{}, true)
+	if !c.refuseNetwork {
+		t.Fatal("refuseNetwork = false for non-loopback offline client, want true")
+	}
+	_, err := c.EmbedText("secret")
+	if err == nil {
+		t.Fatal("expected refusal, got nil error")
+	}
+	if !strings.Contains(err.Error(), "offline_only") {
+		t.Errorf("error = %q, want offline_only mention", err.Error())
+	}
+}
+
+// TestNewVLClientOfflineAllowsLoopback verifies the guard does not block a
+// numeric loopback endpoint: offline=true against 127.0.0.1 must not be
+// refused (it may still succeed or fail to connect, but never with an
+// offline_only refusal).
+func TestNewVLClientOfflineAllowsLoopback(t *testing.T) {
+	var texts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req vlRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		for _, content := range req.Input.Contents {
+			if txt, ok := content["text"]; ok {
+				texts = append(texts, txt)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(vlResponse{
+			Output: struct {
+				Embeddings []struct {
+					Embedding []float32 `json:"embedding"`
+					Index     int       `json:"index"`
+				} `json:"embeddings"`
+			}{
+				Embeddings: []struct {
+					Embedding []float32 `json:"embedding"`
+					Index     int       `json:"index"`
+				}{{Embedding: []float32{0.5, 0.5}, Index: 0}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := newVLClient("k", "vl-model", 2, srv.URL, TaskPrefix{}, true)
+	if c.refuseNetwork {
+		t.Fatal("refuseNetwork = true for loopback offline client, want false")
+	}
+	c.http = srv.Client()
+
+	if _, err := c.EmbedText("local"); err != nil {
+		if strings.Contains(err.Error(), "offline_only") {
+			t.Errorf("loopback offline request was refused: %v", err)
+		}
+	}
+}
+
+// TestVLClientSuccessPathStillWorks guards against the offline guard or the
+// bounded error-body change regressing the normal online success path.
+func TestVLClientSuccessPathStillWorks(t *testing.T) {
+	var texts []string
+	c := newTestVLClient(t, &texts)
+	if _, err := c.EmbedText("hello"); err != nil {
+		t.Fatalf("EmbedText: %v", err)
+	}
+	if len(texts) != 1 || texts[0] != "search_query: hello" {
+		t.Errorf("texts = %v, want [search_query: hello]", texts)
+	}
+}
+
 // TestEmbedImagesInBatchesReportsReadFailures pins the M15 contract: image
 // read failures must surface as an error, not as an apparent success with a
 // low count — the old code dropped failed reads with a bare continue and

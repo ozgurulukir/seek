@@ -6,7 +6,10 @@ import (
 )
 
 func TestTruncate_UTF8Safe(t *testing.T) {
-	for _, tc := range []struct{ in string; n int }{
+	for _, tc := range []struct {
+		in string
+		n  int
+	}{
 		{"İstanbul", 3},
 		{"hello", 10},
 		{"", 0},

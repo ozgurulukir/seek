@@ -102,13 +102,14 @@ func (c *RerankClient) Rerank(ctx context.Context, query string, documents []str
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		return nil, fmt.Errorf("rerank API %d: %s", resp.StatusCode, string(snippet))
+	}
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("rerank API %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var parsedResp rerankResponse

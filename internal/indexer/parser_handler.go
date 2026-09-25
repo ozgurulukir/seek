@@ -108,7 +108,7 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 	}
 
 	if len(sessionErrors) == 0 {
-		if _, err := idx.cleanupOrphans(col.ID, seenPaths, "sessions"); err != nil {
+		if _, err := idx.safeCleanupOrphans(col, seenPaths, "sessions"); err != nil {
 			return fmt.Errorf("cleanup sessions: %w", err)
 		}
 	} else {

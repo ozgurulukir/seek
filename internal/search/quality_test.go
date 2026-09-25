@@ -2,11 +2,88 @@ package search
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/store"
 )
+
+func TestRRFFusionWithK_PrefersFullChunkOverSnippet(t *testing.T) {
+	// A document shared between the BM25 (snippet, ChunkID == 0) and vector
+	// (full chunk, ChunkID > 0) legs must keep the richer vector content while
+	// retaining the summed RRF score and rank ordering.
+	const (
+		sharedDoc = int64(1)
+		otherDoc  = int64(2)
+	)
+	bm25 := []Result{
+		{DocumentID: sharedDoc, ChunkID: 0, Content: "short snippet text", Title: "bm25-title"},
+		{DocumentID: otherDoc, ChunkID: 0, Content: "other snippet", Title: "other-title"},
+	}
+	vec := []Result{
+		{DocumentID: sharedDoc, ChunkID: 42, Content: "the full chunk content", Title: "vec-title", StartLine: 10, EndLine: 20},
+	}
+
+	result := rrfFusionWithK(bm25, vec, DefaultLimit, DefaultRRFK)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 results (dedup by docID), got %d", len(result))
+	}
+
+	// The shared doc scores from both lists → highest → first.
+	if result[0].DocumentID != sharedDoc {
+		t.Fatalf("expected shared doc %d first, got doc%d", sharedDoc, result[0].DocumentID)
+	}
+
+	// The richer vector candidate must win for content + chunk identity.
+	got := result[0]
+	if kind := ContentKind(got); kind != "full" {
+		t.Errorf("ContentKind = %q, want full", kind)
+	}
+	if got.ChunkID != 42 {
+		t.Errorf("ChunkID = %d, want 42", got.ChunkID)
+	}
+	if got.Content != "the full chunk content" {
+		t.Errorf("Content = %q, want full chunk content", got.Content)
+	}
+	if got.StartLine != 10 || got.EndLine != 20 {
+		t.Errorf("line span = (%d,%d), want (10,20)", got.StartLine, got.EndLine)
+	}
+
+	// RRF scoring must be unchanged: sum of both rank contributions.
+	wantScore := 1.0/float64(DefaultRRFK+1) + 1.0/float64(DefaultRRFK+1)
+	if math.Abs(got.Score-wantScore) > 1e-9 {
+		t.Errorf("shared doc score = %f, want %f", got.Score, wantScore)
+	}
+
+	// The single-source doc keeps its snippet and its lower rank.
+	if result[1].DocumentID != otherDoc {
+		t.Errorf("expected other doc %d second, got doc%d", otherDoc, result[1].DocumentID)
+	}
+	if kind := ContentKind(result[1]); kind != "snippet" {
+		t.Errorf("other doc ContentKind = %q, want snippet", kind)
+	}
+	wantOther := 1.0 / float64(DefaultRRFK+2)
+	if math.Abs(result[1].Score-wantOther) > 1e-9 {
+		t.Errorf("other doc score = %f, want %f", result[1].Score, wantOther)
+	}
+}
+
+func TestRRFFusionWithK_KeepsSnippetWhenVectorIsNotRicher(t *testing.T) {
+	// When both legs are document-level (ChunkID == 0), the first-seen BM25
+	// entry must be retained — the fix only upgrades to a richer candidate.
+	bm25 := []Result{{DocumentID: 1, ChunkID: 0, Content: "bm25 snippet", Title: "bm25-title"}}
+	vec := []Result{{DocumentID: 1, ChunkID: 0, Content: "vec snippet", Title: "vec-title"}}
+
+	result := rrfFusionWithK(bm25, vec, DefaultLimit, DefaultRRFK)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(result))
+	}
+	if result[0].Content != "bm25 snippet" {
+		t.Errorf("expected BM25 snippet retained, got %q", result[0].Content)
+	}
+}
 
 func TestContentKind(t *testing.T) {
 	if got := ContentKind(Result{}); got != "snippet" {

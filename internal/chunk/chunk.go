@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -217,7 +218,7 @@ func splitBySize(text string, maxSize, overlap int) []string {
 			tail := current.String()
 			current.Reset()
 			if overlap > 0 && len(tail) > overlap {
-				current.WriteString(tail[len(tail)-overlap:])
+				current.WriteString(tailBytes(tail, overlap))
 				current.WriteString("\n\n")
 			}
 		}
@@ -230,4 +231,20 @@ func splitBySize(text string, maxSize, overlap int) []string {
 	}
 
 	return parts
+}
+
+// tailBytes returns the last n bytes of s advanced to the next valid UTF-8
+// rune boundary so the overlap never starts mid-rune.
+func tailBytes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	i := len(s) - n
+	for i < len(s) && !utf8.RuneStart(s[i]) {
+		i++
+	}
+	return s[i:]
 }

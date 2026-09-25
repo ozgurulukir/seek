@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -341,7 +342,7 @@ func (idx *Indexer) syncConversation(
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-	if _, err := idx.cleanupOrphans(col.ID, diskPaths, "conversations"); err != nil {
+	if _, err := idx.safeCleanupOrphans(col, diskPaths, "conversations"); err != nil {
 		return fmt.Errorf("cleanup conversations: %w", err)
 	}
 
@@ -542,6 +543,32 @@ func (idx *Indexer) cleanupOrphans(colID int64, livePaths map[string]bool, label
 	return removed, nil
 }
 
+// safeCleanupOrphans guards cleanupOrphans against data loss from scans of an
+// unavailable scan root. The source files are the source of truth, so a
+// legitimate scan of an existing directory that yields no live files (e.g. the
+// user deleted every file) must still purge so the index reflects the deletion.
+// The guard therefore only requires that the scan root still exists as a
+// directory; this catches unmounted/renamed/missing roots and a file-instead-
+// of-dir root, which are the cases where an empty scan is suspicious. A nil
+// livePaths keeps the explicit full-purge semantics of cleanupOrphans (used by
+// reindex).
+func (idx *Indexer) safeCleanupOrphans(col *store.Collection, livePaths map[string]bool, label string) (int, error) {
+	// Explicit full purge (e.g. reindex): keep the old behaviour.
+	if livePaths == nil {
+		return idx.cleanupOrphans(col.ID, nil, label)
+	}
+	info, err := os.Stat(col.Path)
+	if err != nil {
+		idx.warnf("  WARN: skipping orphan cleanup for %q: scan root unavailable: %v\n", col.Name, err)
+		return 0, nil
+	}
+	if !info.IsDir() {
+		idx.warnf("  WARN: skipping orphan cleanup for %q: scan root is not a directory: %s\n", col.Name, col.Path)
+		return 0, nil
+	}
+	return idx.cleanupOrphans(col.ID, livePaths, label)
+}
+
 func toIndexChunks(chunks []chunk.Chunk, withLines bool) []store.IndexChunk {
 	out := make([]store.IndexChunk, 0, len(chunks))
 	for _, c := range chunks {
@@ -555,11 +582,11 @@ func toIndexChunks(chunks []chunk.Chunk, withLines bool) []store.IndexChunk {
 	return out
 }
 
-func (idx *Indexer) cleanupStaleCodeDocuments(colID int64, files []source.CodeFileInfo) error {
+func (idx *Indexer) cleanupStaleCodeDocuments(col *store.Collection, files []source.CodeFileInfo) error {
 	diskPaths := make(map[string]bool, len(files))
 	for _, f := range files {
 		diskPaths[f.Path] = true
 	}
-	_, err := idx.cleanupOrphans(colID, diskPaths, "documents")
+	_, err := idx.safeCleanupOrphans(col, diskPaths, "documents")
 	return err
 }

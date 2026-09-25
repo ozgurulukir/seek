@@ -13,6 +13,20 @@ import (
 	"github.com/ozgurulukir/seek/internal/config"
 )
 
+// maxErrorBody bounds how many bytes of a non-OK response body are read and
+// echoed into error messages. This prevents large or hostile responses from
+// being dumped verbatim into errors/logs (potential secret/response leakage).
+const maxErrorBody = 2 << 10 // 2KiB
+
+// boundedErrorSnippet returns at most the first maxErrorBody bytes of an
+// already-read response body, for safe inclusion in error messages.
+func boundedErrorSnippet(body []byte) string {
+	if len(body) > maxErrorBody {
+		body = body[:maxErrorBody]
+	}
+	return string(body)
+}
+
 // TaskPrefix holds model-specific input prefixes for asymmetric embedding
 // models (e.g. Nomic's "search_query: "/"search_document: "). The zero
 // value applies no prefixes.
@@ -160,13 +174,14 @@ func (c *Client) embedContext(ctx context.Context, texts []string) ([][]float32,
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		return nil, fmt.Errorf("embedding API %d: %s", resp.StatusCode, string(snippet))
+	}
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("embedding API %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var embResp embeddingResponse

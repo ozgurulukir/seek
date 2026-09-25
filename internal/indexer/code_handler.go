@@ -20,7 +20,7 @@ func (idx *Indexer) syncCode(col *store.Collection) error {
 		idx.recordFailure(path, "scan", fmt.Errorf("unreadable path"))
 	}
 	if len(skippedPaths) == 0 {
-		if err := idx.cleanupStaleCodeDocuments(col.ID, files); err != nil {
+		if err := idx.cleanupStaleCodeDocuments(col, files); err != nil {
 			return fmt.Errorf("cleanup code documents: %w", err)
 		}
 	} else {
