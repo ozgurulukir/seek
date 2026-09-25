@@ -85,6 +85,27 @@ func TestRRFFusionWithK_KeepsSnippetWhenVectorIsNotRicher(t *testing.T) {
 	}
 }
 
+func TestRRFFusionWithK_MultipleVectorChunksKeepsHighestRanked(t *testing.T) {
+	// When multiple vector chunks match the same document, the highest-ranking
+	// vector chunk should be preserved as the representative chunk.
+	bm25 := []Result{{DocumentID: 1, ChunkID: 0, Content: "bm25 snippet"}}
+	vec := []Result{
+		{DocumentID: 1, ChunkID: 10, Content: "vector chunk 10 (top rank)"},
+		{DocumentID: 1, ChunkID: 20, Content: "vector chunk 20 (lower rank)"},
+	}
+
+	result := rrfFusionWithK(bm25, vec, DefaultLimit, DefaultRRFK)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(result))
+	}
+	if result[0].ChunkID != 10 {
+		t.Errorf("expected ChunkID = 10, got %d", result[0].ChunkID)
+	}
+	if result[0].Content != "vector chunk 10 (top rank)" {
+		t.Errorf("expected content from top-ranked chunk, got %q", result[0].Content)
+	}
+}
+
 func TestContentKind(t *testing.T) {
 	if got := ContentKind(Result{}); got != "snippet" {
 		t.Errorf("document-level = %q, want snippet", got)

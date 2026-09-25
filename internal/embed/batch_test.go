@@ -202,6 +202,24 @@ func TestPollBatchFailed(t *testing.T) {
 	}
 }
 
+func TestPollBatchHTTPError(t *testing.T) {
+	c := newTestBatchClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte("bad gateway upstream"))
+	})
+
+	_, err := c.PollBatch("batch-1", nil)
+	if err == nil {
+		t.Fatal("expected error for HTTP 502 in poll batch")
+	}
+	if !strings.Contains(err.Error(), "poll batch failed 502") {
+		t.Errorf("error = %q, want mention of status 502", err.Error())
+	}
+	if !strings.Contains(err.Error(), "bad gateway upstream") {
+		t.Errorf("error = %q, want snippet content", err.Error())
+	}
+}
+
 func TestDownloadBatchResults(t *testing.T) {
 	// Two valid lines plus one error line and one non-200 line that must be skipped.
 	body := `{"custom_id":"chunk-0","response":{"status_code":200,"body":{"data":[{"embedding":[1,2],"index":0}]}}}

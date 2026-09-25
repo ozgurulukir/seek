@@ -124,7 +124,7 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 }
 
 func (idx *Indexer) reindexParserCollection(col *store.Collection) error {
-	_, err := idx.cleanupOrphans(col.ID, nil, "")
+	_, err := idx.safeCleanupOrphans(col, nil, "")
 	return err
 }
 

@@ -200,6 +200,12 @@ func (c *Client) PollBatchContext(ctx context.Context, batchID string, onStatus 
 			return nil, fmt.Errorf("poll batch: %w", err)
 		}
 
+		if resp.StatusCode != 200 {
+			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+			resp.Body.Close()
+			return nil, fmt.Errorf("poll batch failed %d: %s", resp.StatusCode, string(snippet))
+		}
+
 		respBody, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
