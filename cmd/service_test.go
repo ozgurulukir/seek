@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,8 +45,13 @@ func TestServiceTemplates_RunSyncOnce(t *testing.T) {
 		t.Fatalf("systemd template contains %d ExecStart entries, want 1", got)
 	}
 
-	if got, want := fmt.Sprintf(`cmd.exe /c ""%s" sync"`, data.Binary), `cmd.exe /c ""/path with spaces/seek" sync"`; got != want {
-		t.Fatalf("windows task command = %q, want %q", got, want)
+	if got, want := windowsTaskAction(data.Binary), `"/path with spaces/seek" sync`; got != want {
+		t.Fatalf("windows task action = %q, want %q", got, want)
+	}
+	// The action must go through CreateProcess directly: cmd.exe would expand
+	// %VAR% even inside double quotes and treat embedded quotes as syntax.
+	if strings.Contains(windowsTaskAction(data.Binary), "cmd.exe") {
+		t.Fatalf("windows task action still routes through cmd.exe: %q", windowsTaskAction(data.Binary))
 	}
 }
 

@@ -46,11 +46,13 @@ var plistTemplate = template.Must(template.New("plist").Funcs(template.FuncMap{
 </plist>
 `))
 
-// shellQuote wraps a string in single quotes for safe shell embedding,
-// escaping any embedded single quotes. This prevents shell injection when
-// binary paths contain spaces or special characters.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+// windowsTaskAction renders the schtasks /TR action string for the sync
+// task. Task Scheduler launches the action via CreateProcess, not cmd.exe,
+// so a plainly quoted argv is correct — routing through `cmd.exe /c` would
+// expose the binary path to cmd metacharacter expansion (%VAR% expands even
+// inside double quotes) and quote injection.
+func windowsTaskAction(bin string) string {
+	return fmt.Sprintf(`"%s" sync`, bin)
 }
 
 var systemdServiceTemplate = template.Must(template.New("systemdService").Parse(`[Unit]
@@ -155,7 +157,7 @@ func startWindowsService(bin string, interval int) error {
 	if minutes < 1 {
 		minutes = 1
 	}
-	trArg := fmt.Sprintf(`cmd.exe /c ""%s" sync"`, bin)
+	trArg := windowsTaskAction(bin)
 	out, err := exec.Command("schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO", fmt.Sprintf("%d", minutes), "/TN", windowsTask, "/TR", trArg).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("schtasks create: %s (%w)", string(out), err)
