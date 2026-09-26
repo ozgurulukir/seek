@@ -12,8 +12,9 @@ import (
 	"github.com/ozgurulukir/seek/internal/config"
 )
 
-// ReadSettings reads an agent settings file. A missing file is an empty
-// settings map, not an error.
+// ReadSettings reads an agent settings file. A missing file — or a file
+// holding the literal JSON null — is an empty settings map, not an error;
+// hook surgery must be able to write into the result either way.
 func ReadSettings(path string) (map[string]interface{}, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -25,6 +26,9 @@ func ReadSettings(path string) (map[string]interface{}, error) {
 	var settings map[string]interface{}
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", filepath.Base(path), err)
+	}
+	if settings == nil {
+		settings = make(map[string]interface{})
 	}
 	return settings, nil
 }
