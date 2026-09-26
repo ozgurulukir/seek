@@ -290,7 +290,12 @@ func (s *Store) resetEmbeddingSpace(ctx context.Context, desired *EmbeddingProfi
 		if oldReplacement != nil {
 			s.SetVectorIndex(oldReplacement)
 		}
-		return s.SyncVectorIndexContext(ctx)
+		// Deliberately cancel-proof: the most common trigger for this restore
+		// is ctx cancellation mid-reset, and a canceled restore would leave
+		// the live index empty for the rest of the process while SQLite still
+		// holds the embeddings — an empty graph that a normal Close would
+		// then persist as-is.
+		return s.SyncVectorIndexContext(context.WithoutCancel(ctx))
 	}
 
 	if current != nil {
