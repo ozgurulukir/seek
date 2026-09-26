@@ -37,10 +37,12 @@ type Indexer struct {
 	writer   IndexWriter
 	log      Logger
 	ctxValue context.Context
-	// mu guards the instance-level mutable state below (report accounting and
-	// the lazily resolved semantic caches). Sync runs sequentially today; the
-	// lock keeps a future parallel sync/backfill on one shared Indexer from
-	// silently racing (review 2026-09-17 L12).
+	// mu guards the instance-level mutable state below (logger, report
+	// accounting and the lazily resolved semantic caches). Sync runs
+	// sequentially today; the lock keeps a future parallel sync/backfill on
+	// one shared Indexer from silently racing (review 2026-09-17 L12). The
+	// logger is guarded because WithLogger is called per-operation, not just
+	// at composition time.
 	mu     sync.Mutex
 	report SyncReport
 	// ext is an explicit override for the extraction backend, taking precedence
@@ -237,15 +239,21 @@ func (idx *Indexer) writeFastFields(docID int64, label string, metadata map[stri
 }
 
 func (idx *Indexer) WithLogger(l Logger) *Indexer {
+	if l == nil {
+		l = defaultLogger{}
+	}
+	idx.mu.Lock()
 	idx.log = l
+	idx.mu.Unlock()
 	return idx
 }
 
 func (idx *Indexer) warnf(format string, v ...interface{}) {
 	idx.mu.Lock()
 	idx.report.Warnings++
+	log := idx.log
 	idx.mu.Unlock()
-	idx.log.Printf(format, v...)
+	log.Printf(format, v...)
 }
 
 func (idx *Indexer) addReport(report SyncReport) {
