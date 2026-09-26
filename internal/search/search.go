@@ -111,10 +111,18 @@ func (e *Engine) searchBM25Raw(ctx context.Context, query string, limit int, opt
 		ftsQuery = renderFTS5(opts.Query, opts.Analyzer)
 	} else if opts.QueryMode != "raw" {
 		parsed, err := ParseQuery(query)
-		if err == nil && parsed != nil {
+		switch {
+		case err == nil && parsed != nil:
 			ftsQuery = renderFTS5(parsed, opts.Analyzer)
+		case errors.Is(err, ErrUnknownField):
+			// Actionable validation error: surface it instead of
+			// resubmitting the rejected string to FTS5, where it would die
+			// as an opaque "no such column" — or, in hybrid mode, silently
+			// kill the BM25 leg while vector results keep flowing.
+			return nil, err
+		default:
+			// On other parse errors, fall back to raw query
 		}
-		// On parse error, fall back to raw query
 	}
 
 	return e.repository.SearchFTS(ctx, ftsQuery, limit, opts.Filters)

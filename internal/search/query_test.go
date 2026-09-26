@@ -1,6 +1,10 @@
 package search
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestParseQuery(t *testing.T) {
 	tests := []struct {
@@ -18,6 +22,13 @@ func TestParseQuery(t *testing.T) {
 		{`hello~2`, false, "*search.FuzzyQuery"},
 		{`hello~`, false, "*search.FuzzyQuery"},
 		{`title:hello`, false, "*search.FieldQuery"},
+		{`content:sql`, false, "*search.FieldQuery"},
+		{`TITLE:hello`, false, "*search.FieldQuery"},
+		// Field-scoped terms render verbatim into the FTS5 MATCH string; an
+		// unknown column name must be rejected at parse time, not surface as
+		// an opaque FTS5 "no such column" error at query time.
+		{`tags:go`, true, ""},
+		{`nosuchcol:x`, true, ""},
 		{`NEAR(hello world, 5)`, false, "*search.NearQuery"},
 		{`(a AND b) OR c`, false, "*search.BooleanQuery"},
 		{`hello`, false, "*search.TermQuery"},
@@ -54,6 +65,22 @@ func TestParseQuery(t *testing.T) {
 			_ = q.String()
 			_ = tt.wantType
 		})
+	}
+}
+
+// TestParseQuery_UnknownFieldIsSentinelError pins the errors.Is contract: the
+// validation error must be distinguishable from ordinary parse errors so the
+// search engine can surface it instead of falling back to the raw query.
+func TestParseQuery_UnknownFieldIsSentinelError(t *testing.T) {
+	_, err := ParseQuery("tags:go")
+	if err == nil {
+		t.Fatal("expected error for unknown field, got nil")
+	}
+	if !errors.Is(err, ErrUnknownField) {
+		t.Fatalf("err = %v, want errors.Is(err, ErrUnknownField)", err)
+	}
+	if !strings.Contains(err.Error(), "supported: title, content") {
+		t.Fatalf("err = %v, want actionable supported-fields hint", err)
 	}
 }
 

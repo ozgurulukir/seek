@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -866,6 +867,16 @@ func TestSearchBM25(t *testing.T) {
 		}
 		if len(res) != 3 {
 			t.Errorf("expected 3 results for 'language', got %d", len(res))
+		}
+	})
+
+	t.Run("unknown field surfaces parse error", func(t *testing.T) {
+		// The unknown-field validation error must propagate past the raw-query
+		// fallback — resubmitting "tags:go" to FTS5 would only die as an
+		// opaque "no such column" (or silently kill the hybrid BM25 leg).
+		_, err := engine.SearchBM25(ctx, "tags:go", 10, Options{})
+		if !errors.Is(err, ErrUnknownField) {
+			t.Fatalf("err = %v, want errors.Is(err, ErrUnknownField)", err)
 		}
 	})
 

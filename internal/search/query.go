@@ -337,6 +337,24 @@ func (p *parser) parseUnary() (Query, error) {
 	return p.parsePrimary()
 }
 
+// ErrUnknownField marks a field-scoped query term naming a column that
+// documents_fts does not have. Callers can errors.Is it to surface the
+// actionable message instead of resubmitting the string to FTS5 (where it
+// dies as an opaque "no such column" — or silently kills the hybrid BM25
+// leg via the raw-query fallback).
+var ErrUnknownField = errors.New("unknown field")
+
+// fts5FieldNames are the documents_fts columns a field-scoped term may
+// target (the FTS DDL declares exactly title, content — see internal/store).
+// Field-scoped terms render verbatim into the MATCH string, so any other
+// name would only fail later as an opaque FTS5 "no such column" error;
+// unknown fields are rejected at parse time instead. Fast-field filtering is
+// a separate mechanism (`seek search --field name:value`), not query syntax.
+var fts5FieldNames = map[string]struct{}{
+	"title":   {},
+	"content": {},
+}
+
 func (p *parser) parsePrimary() (Query, error) {
 	tok := p.s.scanToken()
 	if tok.typ == tokenEOF {
@@ -367,7 +385,11 @@ func (p *parser) parsePrimary() (Query, error) {
 			if err != nil {
 				return nil, err
 			}
-			return &FieldQuery{Field: strings.ToLower(tok.val), Query: term}, nil
+			field := strings.ToLower(tok.val)
+			if _, ok := fts5FieldNames[field]; !ok {
+				return nil, fmt.Errorf("%w %q at position %d (supported: title, content)", ErrUnknownField, tok.val, tok.pos)
+			}
+			return &FieldQuery{Field: field, Query: term}, nil
 		}
 		// Check for prefix (ends with *)
 		if strings.HasSuffix(tok.val, "*") {
