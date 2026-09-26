@@ -1,6 +1,7 @@
 package xberg
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -100,6 +101,23 @@ func TestExtract_Success(t *testing.T) {
 	}
 	if res.Title != "report" {
 		t.Errorf("Title = %q, want report", res.Title)
+	}
+}
+
+// An oversized (or hostile) response body must be rejected at the cap, not
+// buffered without bound.
+func TestExtract_ResponseOverCap(t *testing.T) {
+	srv := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxExtractResponseBytes+1))
+	})
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.Extract(context.Background(), writeDoc(t, "report.docx"))
+	if err == nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("err = %v, want response cap error", err)
 	}
 }
 

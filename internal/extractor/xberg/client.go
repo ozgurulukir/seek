@@ -18,6 +18,11 @@ import (
 	"github.com/ozgurulukir/seek/internal/extractor"
 )
 
+// maxExtractResponseBytes caps how much of an extraction response is
+// buffered in memory. The response body is remote data; a broken or hostile
+// server answering with an unbounded body would otherwise OOM the sync.
+const maxExtractResponseBytes = 64 << 20 // 64 MiB
+
 // Client is an extractor.Extractor backed by a remote xberg serve API.
 // It POSTs files as multipart byte uploads (xberg disables local-URI inputs
 // by default for safety), and requests markdown output by default so that
@@ -117,9 +122,12 @@ func (c *Client) Extract(ctx context.Context, path string) (extractor.Result, er
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxExtractResponseBytes+1))
 	if err != nil {
 		return extractor.Result{}, fmt.Errorf("xberg: read response: %w", err)
+	}
+	if len(data) > maxExtractResponseBytes {
+		return extractor.Result{}, fmt.Errorf("xberg: %s: response exceeds %d byte cap", path, maxExtractResponseBytes)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return extractor.Result{}, fmt.Errorf("xberg: %s status %d: %s", path, resp.StatusCode, truncate(string(data), 300))
