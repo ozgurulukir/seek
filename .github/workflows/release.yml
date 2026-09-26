@@ -119,7 +119,7 @@ jobs:
 
           mkdir -p bin
           CGO_ENABLED=1 go build -tags "fts5 sqlite_fts5" \
-            -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT}" \
+            -ldflags="-s -w -X github.com/ozgurulukir/seek/internal/buildinfo.Version=${VERSION} -X github.com/ozgurulukir/seek/internal/buildinfo.Commit=${COMMIT}" \
             -o "bin/seek${EXT}" .
 
       - name: Smoke test binary (FTS5 runtime)

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/alecthomas/kong"
+	"github.com/ozgurulukir/seek/internal/buildinfo"
 )
 
 // exitSignal is the sentinel a kong Exit callback panics with to fake "exit"
@@ -48,7 +49,7 @@ func newHelpApp(t *testing.T, args ...string) (string) {
 		kong.Description("Personal document search engine — BM25 + vector hybrid search"),
 		kong.Writers(&buf, &buf),
 		kong.Exit(func(int) { panic(exitSignal{}) }),
-		kong.Vars{"version": fmt.Sprintf("%s (%s)", Version, Commit)},
+		kong.Vars{"version": fmt.Sprintf("%s (%s)", buildinfo.Version, buildinfo.Commit)},
 	)
 	if err != nil {
 		t.Fatalf("kong.New: %v", err)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ozgurulukir/seek/internal/app"
+	"github.com/ozgurulukir/seek/internal/buildinfo"
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
@@ -105,7 +106,7 @@ func buildMCPServer(db *store.Store, cfg *config.AppConfig) (*mcp.Server, error)
 func buildMCPServerWithServices(runtime *app.Runtime, cfg *config.AppConfig) (*mcp.Server, error) {
 	runtime.Search.WithLogger(mcpLogger{})
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "seek", Version: "dev"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "seek", Version: buildinfo.Version}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "seek_search",

@@ -8,12 +8,8 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/ozgurulukir/seek/cmd"
+	"github.com/ozgurulukir/seek/internal/buildinfo"
 	"github.com/ozgurulukir/seek/internal/config"
-)
-
-var (
-	Version = "dev"
-	Commit  = "none"
 )
 
 var cli struct {
@@ -45,7 +41,7 @@ func main() {
 		kong.Description("Personal document search engine — BM25 + vector hybrid search"),
 		kong.UsageOnError(),
 		kong.Vars{
-			"version": fmt.Sprintf("%s (%s)", Version, Commit),
+			"version": fmt.Sprintf("%s (%s)", buildinfo.Version, buildinfo.Commit),
 		},
 	)
 
