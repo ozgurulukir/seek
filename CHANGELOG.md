@@ -3,6 +3,26 @@
 All notable changes to `seek` are documented here. This follows
 [Keep a Changelog](https://keepachangelog.com/) conventions.
 
+## [0.5.10] - 2026-09-26
+
+### Added
+
+- **Packaged optional Python services with the seek skill:** the semantic tagger, embedding server, and flashrank reranker now ship inside the `seek` skill/plugin package (marketplace manifests, per-platform setup scripts, and a CI workflow keeping the packaged copies in sync), so agents can bring up the optional NLP endpoints without cloning the repo.
+
+### Fixed
+
+Second multi-agent code-review verification pass — claims re-verified against HEAD, each fix landed with a regression test:
+
+- **Agent hooks:** a settings file containing the literal JSON `null` no longer panics hook install/repair (nil map); it is treated as an empty writable settings map.
+- **Windows service:** the Task Scheduler task is registered as a quoted argv (`"<seek.exe>" sync`) launched via CreateProcess instead of routing through `cmd.exe /c`, removing `%VAR%` expansion and quote-injection exposure from the binary path.
+- **Semantic enrichment:** a transient semantic `/health` failure no longer persists an empty-capability fingerprint basis, which re-selected the whole collection for re-enrichment (twice with a half-up service). Backfill degrades to a warn + no-op pass; sync records nothing and warns once.
+- **Vector index:** cancelling an embedding-space reset (Ctrl-C) can no longer leave the live HNSW index empty for the rest of the process; the restore now runs cancellation-proof and the empty graph is never persisted.
+- **Indexer:** the per-operation logger swap (`WithLogger`) is guarded by the instance mutex like every other shared field.
+- **xberg extractor:** extraction responses are capped at 64 MiB instead of buffering an unbounded remote body.
+- **MCP:** the MCP server reports the real release version (via `internal/buildinfo`, ldflags-injected) instead of a hardcoded `"dev"`.
+- **Search:** unknown field-scoped query terms (`tags:go`) now fail at parse time with an actionable error (`supported: title, content`) instead of an opaque FTS5 `no such column` — or silently degrading the hybrid BM25 leg; `title:`/`content:` queries are unchanged.
+- **Docs:** corrected the stale full-vector-sync description in AGENTS.md.
+
 ## [0.5.9] - 2026-09-25
 
 ### Fixed
