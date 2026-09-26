@@ -73,7 +73,15 @@ func (idx *Indexer) BackfillSemantic(ctx context.Context, col *store.Collection,
 
 	basis, err := idx.semanticFingerprintBasis(ctx, p)
 	if err != nil {
-		return report, fmt.Errorf("semantic backfill %s: %w", col.Name, err)
+		// Transient health failure after the provider already resolved (the
+		// service answered at resolution but is not answering /health now):
+		// degrade to a no-op pass, same as the unavailable-provider case
+		// above. Fingerprinting against an empty-capability basis instead
+		// would mismatch every persisted fingerprint and re-select — and with
+		// a half-up service, re-enrich — the whole collection, twice (this
+		// pass and the next healthy one).
+		log.Printf("  WARN: semantic backfill %s: semantic service health check failed (%v) — nothing to backfill\n", col.Name, err)
+		return report, nil
 	}
 
 	// The store query takes one desired fingerprint; per-document content
@@ -225,8 +233,11 @@ func stripSemanticOwned(persisted map[string]string) map[string]string {
 // identity (base URL), the capability set the service reports via /health,
 // and the enrichment schema version. Per-document content hashes are layered
 // on top by backfillDocument (and recordSemanticSyncState on the sync path).
-// A health failure degrades to an empty capability set so the pass can still
-// run against a partially-reporting service.
+// A health failure is an ERROR: callers skip the pass rather than fingerprint
+// against an empty capability set, which would invalidate every persisted
+// fingerprint (one transient blip would otherwise force two whole-collection
+// re-enrichment passes). A /health that RESPONDS with a partial model set is
+// not a failure — whatever capabilities are true are populated.
 //
 // Plan §3.2 calls this "service/model identity". The configured MODEL name is
 // deliberately not part of the basis: SemanticConfig has no model selector —
@@ -250,7 +261,7 @@ func (idx *Indexer) semanticFingerprintBasis(ctx context.Context, p semantic.Pro
 	defer cancel()
 	health, err := p.Health(hctx)
 	if err != nil {
-		return basis, nil // degrade: empty capability set
+		return basis, fmt.Errorf("semantic health check: %w", err)
 	}
 	basis.Capabilities = store.SemanticCapabilities{
 		Language:  health.Models.LID,
@@ -284,6 +295,18 @@ func (idx *Indexer) semanticSyncBasis(ctx context.Context) (store.SemanticFinger
 	}
 	basis, err := idx.semanticFingerprintBasis(ctx, p)
 	if err != nil {
+		// The enrichment itself succeeded, so this is a half-up service
+		// (answering /tag but not /health). Skip recording semantic state —
+		// documents keep their previous fingerprint and are re-selected by a
+		// later healthy pass — but do not drop the failure silently, and warn
+		// only once per process/provider rather than once per document.
+		idx.mu.Lock()
+		first := !idx.semBasisFailed
+		idx.semBasisFailed = true
+		idx.mu.Unlock()
+		if first {
+			idx.warnf("  WARN: semantic state not recorded this sync (service health check failed): %v\n", err)
+		}
 		return store.SemanticFingerprint{}, false
 	}
 	idx.mu.Lock()
@@ -319,7 +342,7 @@ func (idx *Indexer) semanticSyncBasis(ctx context.Context) (store.SemanticFinger
 //   - non-nil (even empty): enrichment succeeded, possibly recomputing to
 //     nothing; the document is marked current with the full desired
 //     fingerprint so later passes/backfills skip it.
-func (idx *Indexer) recordSemanticSyncState(ctx context.Context, colType store.CollectionType, docID int64, fastFields map[string]string, chunks []store.IndexChunk, label string) error {
+func (idx *Indexer) recordSemanticSyncState(ctx context.Context, colType store.CollectionType, docID int64, fastFields map[string]string, chunks []store.IndexChunk) error {
 	if docID == 0 || !semanticEligible(colType) {
 		return nil
 	}

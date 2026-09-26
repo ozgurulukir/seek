@@ -183,12 +183,14 @@ func TestBackfillSemanticE2E(t *testing.T) {
 	}
 }
 
-// TestBackfillSemanticDegrade verifies degrade-on-failure: when enrichment
-// fails (timeout, malformed response, service down) the previously stored
-// fast fields are preserved, the status records the failure, the Failed count
-// increments, and the other documents still get processed. (A service that
-// answers a VALID but empty envelope is a success recompute-to-nothing, not a
-// failure — see TestBackfillSemanticSuccessButEmptyConverges.)
+// TestBackfillSemanticDegrade verifies degrade-on-failure: when an
+// enrichment request fails (timeout, malformed response) the previously
+// stored fast fields are preserved, the status records the failure, the
+// Failed count increments, and the other documents still get processed. (A
+// service that answers a VALID but empty envelope is a success
+// recompute-to-nothing, not a failure — see
+// TestBackfillSemanticSuccessButEmptyConverges. A service whose /health
+// fails is a pass-level no-op — see TestBackfillSemanticHealthFailureNoOps.)
 func TestBackfillSemanticDegrade(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -201,10 +203,6 @@ func TestBackfillSemanticDegrade(t *testing.T) {
 		{
 			name: "malformed json",
 			fake: &fakeSemanticProvider{healthOk: true, health: semanticHealthAll(), tagErr: errors.New("semantic: decode: invalid character")},
-		},
-		{
-			name: "service down",
-			fake: &fakeSemanticProvider{healthOk: false},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -267,6 +265,68 @@ func TestBackfillSemanticDegrade(t *testing.T) {
 	}
 }
 
+// TestBackfillSemanticHealthFailureNoOps pins the churn contract: a pass
+// whose /health check fails must leave every document untouched — persisting
+// a degraded (empty-capability) fingerprint would mismatch every stored
+// fingerprint and re-select the whole collection on this and the next
+// healthy pass.
+func TestBackfillSemanticHealthFailureNoOps(t *testing.T) {
+	tmp := t.TempDir()
+	for _, name := range []string{"a.md", "b.md"} {
+		if err := os.WriteFile(filepath.Join(tmp, name), []byte("# Title\n\nBody text.\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db := openBackfillStore(t)
+	cfg := cfgFromTest(t, tmp, filepath.Join(tmp, "test.db"))
+	col, err := db.CreateCollection("notes", store.CollectionTypeMarkdown, tmp, "*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := New(cfg, db).WithLogger(nopLogger{})
+	if err := idx.SyncCollection(col); err != nil {
+		t.Fatal(err)
+	}
+
+	// Give a.md a prior semantic state so "untouched" is observable.
+	docs := mustListDocs(t, db, col.ID)
+	prior := docs[filepath.Join(tmp, "a.md")]
+	if err := db.UpdateSemanticState(context.Background(), prior, "old-fp", "basis", "h-a", store.SemanticStatusError, map[string]string{"tags": "prior-tag"}); err != nil {
+		t.Fatal(err)
+	}
+
+	idx.WithSemanticProvider(&fakeSemanticProvider{healthOk: false})
+	report, err := idx.BackfillSemantic(context.Background(), col, nopLogger{})
+	if err != nil {
+		t.Fatalf("BackfillSemantic: %v", err)
+	}
+	if report != (BackfillReport{}) {
+		t.Fatalf("report = %+v, want an all-zero no-op pass", report)
+	}
+	// Prior state is untouched (not re-fingerprinted against an empty basis).
+	v, err := db.FastFields().Get(prior, "tags")
+	if err != nil || v != "prior-tag" {
+		t.Fatalf("prior tags = %v (%v), want preserved prior-tag", v, err)
+	}
+	states, err := db.GetSemanticStates(context.Background(), []int64{prior})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := states[prior]; st.Status != store.SemanticStatusError || st.Fingerprint != "old-fp" {
+		t.Fatalf("prior state = %+v, want unchanged error/old-fp", st)
+	}
+	// The never-enriched document is untouched too (still none, not marked
+	// error against a degraded basis).
+	other := docs[filepath.Join(tmp, "b.md")]
+	states, err = db.GetSemanticStates(context.Background(), []int64{other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := states[other]; st.Status != store.SemanticStatusNone {
+		t.Fatalf("other state = %+v, want none", st)
+	}
+}
+
 // mustListDocs returns collection paths → doc IDs, failing the test on error.
 func mustListDocs(t *testing.T, db *store.Store, colID int64) map[string]int64 {
 	t.Helper()
@@ -300,10 +360,11 @@ func TestBackfillSemanticRetriesAfterFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// First pass: service is down. The doc fails with status error and its
-	// fingerprint records the desired identity+content hash (not the
-	// identity-only basis), so it stays selectable on the next pass.
-	down := &fakeSemanticProvider{healthOk: false}
+	// First pass: enrichment fails (service answers /health but not /tag).
+	// The doc fails with status error and its fingerprint records the desired
+	// identity+content hash (not the identity-only basis), so it stays
+	// selectable on the next pass.
+	down := &fakeSemanticProvider{healthOk: true, health: semanticHealthAll(), tagErr: errors.New("enrichment failed")}
 	idx.WithSemanticProvider(down)
 	if _, err := idx.BackfillSemantic(context.Background(), col, nopLogger{}); err != nil {
 		t.Fatalf("degraded backfill: %v", err)

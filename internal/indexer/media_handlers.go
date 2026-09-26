@@ -163,7 +163,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 			failed++
 			continue
 		}
-		if err := idx.recordSemanticSyncState(idx.ctx(), col.Type, docID, fastFields, indexChunks, f.Name); err != nil {
+		if err := idx.recordSemanticSyncState(idx.ctx(), col.Type, docID, fastFields, indexChunks); err != nil {
 			idx.warnf("  WARN: record semantic state %s: %v\n", f.Path, err)
 		}
 

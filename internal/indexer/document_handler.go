@@ -114,7 +114,7 @@ func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFil
 		idx.recordFailure(f.Path, "persistence", err)
 		return docStatusFailed
 	}
-	if err := idx.recordSemanticSyncState(idx.ctx(), col.Type, docID, fastFields, docChunks, f.Path); err != nil {
+	if err := idx.recordSemanticSyncState(idx.ctx(), col.Type, docID, fastFields, docChunks); err != nil {
 		idx.warnf("  WARN: record semantic state %s: %v\n", f.Path, err)
 	}
 	return docStatusIndexed

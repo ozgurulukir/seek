@@ -62,6 +62,10 @@ type Indexer struct {
 	// resets it so provider swaps recompute the identity.
 	semBasis    store.SemanticFingerprint
 	semBasisSet bool
+	// semBasisFailed records that semanticSyncBasis's last health check
+	// failed, so the sync path warns once instead of once per document while
+	// still retrying the check on every call. WithSemanticProvider resets it.
+	semBasisFailed bool
 	// enricher is the document-finalization seam all handlers route fast
 	// fields through. Defaults to the config-backed indexerEnricher; inject
 	// via WithEnricher.
@@ -126,6 +130,7 @@ func (idx *Indexer) WithSemanticProvider(p semantic.Provider) *Indexer {
 	idx.semChecked = true
 	idx.semClient = p
 	idx.semBasisSet = false
+	idx.semBasisFailed = false
 	idx.mu.Unlock()
 	return idx
 }
@@ -507,7 +512,7 @@ func (idx *Indexer) syncConversation(
 		// fields (their content hash would claim a "current" state the tags
 		// do not match), so their fingerprint stays untouched.
 		if fromLine == 0 && text != "" {
-			if err := idx.recordSemanticSyncState(idx.ctx(), col.Type, docID, request.FastFields, indexChunks, f.Path); err != nil {
+			if err := idx.recordSemanticSyncState(idx.ctx(), col.Type, docID, request.FastFields, indexChunks); err != nil {
 				idx.warnf("  WARN: record semantic state %s: %v\n", f.Path, err)
 			}
 		}
