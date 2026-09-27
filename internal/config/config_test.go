@@ -269,6 +269,19 @@ func TestTaskPrefixes(t *testing.T) {
 			Model:      "nomic-embed-text",
 			TaskPrefix: TaskPrefixConfig{Query: "sorgu: "},
 		}, "sorgu: ", "search_document: "},
+		{"explicit document only, query auto", EmbeddingConfig{
+			Model:      "nomic-embed-text",
+			TaskPrefix: TaskPrefixConfig{Document: "dokuman: "},
+		}, "search_query: ", "dokuman: "},
+		{"uppercase model case-insensitive", EmbeddingConfig{
+			Model: "NOMIC-EMBED-TEXT-V1.5",
+		}, "search_query: ", "search_document: "},
+		{"uppercase e5 model case-insensitive", EmbeddingConfig{
+			Model: "E5-SMALL-V2",
+		}, "query: ", "passage: "},
+		{"uppercase bge model case-insensitive", EmbeddingConfig{
+			Model: "BGE-LARGE-EN-V1.5",
+		}, "Represent this sentence for searching relevant passages: ", ""},
 		{"empty model none", EmbeddingConfig{}, "", ""},
 	}
 	for _, tc := range cases {
