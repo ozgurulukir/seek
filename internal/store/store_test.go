@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -566,5 +567,120 @@ func TestFTSRebuildOnTokenizerChange(t *testing.T) {
 	}
 	if len(terms) == 0 || terms[0] != "vocabulary" {
 		t.Fatalf("expected autocomplete ['vocabulary'], got %v", terms)
+	}
+}
+
+func BenchmarkUpdateChunkEmbeddings(b *testing.B) {
+	s, err := Open(filepath.Join(b.TempDir(), "bench.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer s.Close()
+
+	col, err := s.CreateCollection("bench-col", "markdown", "/tmp", "*.md")
+	if err != nil {
+		b.Fatal(err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "/tmp/bench.md", "Bench", "hash", 1, 1)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	const chunkSize = 50
+	chunkIDs := make([]int64, chunkSize)
+	for i := 0; i < chunkSize; i++ {
+		if err := s.InsertChunk(docID, i, "chunk content", nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+	rows, err := s.db.Query(`SELECT id FROM chunks WHERE document_id = ? ORDER BY seq ASC`, docID)
+	if err != nil {
+		b.Fatal(err)
+	}
+	var idx int
+	for rows.Next() {
+		rows.Scan(&chunkIDs[idx])
+		idx++
+	}
+	rows.Close()
+
+	emb := []float32{0.1, 0.2, 0.3, 0.4}
+
+	b.Run("Sequential_50", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			for _, id := range chunkIDs {
+				if err := s.PersistChunkEmbeddingContext(context.Background(), id, emb); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
+
+	b.Run("Batch_50", func(b *testing.B) {
+		b.ReportAllocs()
+		updates := make([]ChunkEmbeddingUpdate, len(chunkIDs))
+		for i, id := range chunkIDs {
+			updates[i] = ChunkEmbeddingUpdate{ID: id, Embedding: emb}
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := s.PersistChunkEmbeddingsBatchContext(context.Background(), updates); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func TestUpdateChunkEmbeddingsBatch(t *testing.T) {
+	store := newTestStore(t)
+	vIdx := newLinearIndex(2)
+	store.SetVectorIndex(vIdx)
+
+	col, err := store.CreateCollection("vec-batch-col", "markdown", "/tmp", "*.md")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	docID, err := store.UpsertDocument(col.ID, "/path/to/doc", "Doc", "hash", 1, 1)
+	if err != nil {
+		t.Fatalf("UpsertDocument: %v", err)
+	}
+	if err := store.InsertChunk(docID, 0, "chunk 1", nil); err != nil {
+		t.Fatalf("InsertChunk 1: %v", err)
+	}
+	if err := store.InsertChunk(docID, 1, "chunk 2", nil); err != nil {
+		t.Fatalf("InsertChunk 2: %v", err)
+	}
+
+	chunks, err := store.GetChunksWithoutEmbedding(false)
+	if err != nil {
+		t.Fatalf("GetChunksWithoutEmbedding: %v", err)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("got %d chunks without embedding, want 2", len(chunks))
+	}
+
+	updates := []ChunkEmbeddingUpdate{
+		{ID: chunks[0].ID, Embedding: []float32{1, 0}},
+		{ID: chunks[1].ID, Embedding: []float32{0, 1}},
+	}
+	if err := store.UpdateChunkEmbeddingsBatch(updates); err != nil {
+		t.Fatalf("UpdateChunkEmbeddingsBatch: %v", err)
+	}
+
+	remaining, err := store.GetChunksWithoutEmbedding(false)
+	if err != nil {
+		t.Fatalf("GetChunksWithoutEmbedding remaining: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("got %d remaining chunks without embedding, want 0", len(remaining))
+	}
+
+	results, err := vIdx.Search([]float32{1, 0}, 2)
+	if err != nil {
+		t.Fatalf("vector search: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("vector search got %d results, want 2", len(results))
 	}
 }
