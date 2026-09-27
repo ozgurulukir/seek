@@ -301,8 +301,14 @@ func (s *Store) UpdateChunkEmbeddingsBatchContext(ctx context.Context, updates [
 
 	if len(replacedIDs) > 0 {
 		if err := s.SyncVectorIndexContext(ctx); err != nil {
+			var restoreErr error
 			for i, id := range replacedIDs {
-				_, _ = s.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`, previousEmbeddings[i], id)
+				if _, e := s.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`, previousEmbeddings[i], id); e != nil && restoreErr == nil {
+					restoreErr = e
+				}
+			}
+			if restoreErr != nil {
+				return fmt.Errorf("rebuild vector index after embedding update: %w (restore previous embeddings: %v)", err, restoreErr)
 			}
 			return fmt.Errorf("rebuild vector index after embedding update: %w", err)
 		}
