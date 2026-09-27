@@ -611,3 +611,92 @@ func BenchmarkDeleteOrphans(b *testing.B) {
 		})
 	}
 }
+
+func TestDeleteOrphansContext(t *testing.T) {
+	s := newTestStore(t)
+
+	col, err := s.CreateCollection("orphans-col", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	// Insert 5 documents with chunks, FTS rows, and fast fields.
+	paths := []string{"/tmp/doc1.md", "/tmp/doc2.md", "/tmp/doc3.md", "/tmp/doc4.md", "/tmp/doc5.md"}
+	docIDs := make(map[string]int64)
+	for _, p := range paths {
+		id, err := s.UpsertDocument(col.ID, p, "Title "+p, "hash_"+p, 1.0, 5)
+		if err != nil {
+			t.Fatalf("UpsertDocument %s: %v", p, err)
+		}
+		docIDs[p] = id
+		if err := s.InsertChunk(id, 0, "Chunk content for "+p, nil); err != nil {
+			t.Fatalf("InsertChunk %s: %v", p, err)
+		}
+		if err := s.UpsertFTS(id, "Title "+p, "Chunk content for "+p); err != nil {
+			t.Fatalf("UpsertFTS %s: %v", p, err)
+		}
+		if err := s.FastFields().Set(id, "tag", "orphan_test"); err != nil {
+			t.Fatalf("FastFields.Set %s: %v", p, err)
+		}
+	}
+
+	// Keep doc1 and doc2 live; the rest are orphans.
+	livePaths := map[string]bool{
+		"/tmp/doc1.md": true,
+		"/tmp/doc2.md": true,
+	}
+	removed, err := s.DeleteOrphansContext(context.Background(), col.ID, livePaths)
+	if err != nil {
+		t.Fatalf("DeleteOrphansContext: %v", err)
+	}
+	if removed != 3 {
+		t.Errorf("removed = %d, want 3", removed)
+	}
+
+	docMap, err := s.ListDocumentPaths(col.ID)
+	if err != nil {
+		t.Fatalf("ListDocumentPaths: %v", err)
+	}
+	if len(docMap) != 2 {
+		t.Errorf("remaining doc count = %d, want 2", len(docMap))
+	}
+	for _, p := range []string{"/tmp/doc1.md", "/tmp/doc2.md"} {
+		if _, ok := docMap[p]; !ok {
+			t.Errorf("%s should still exist", p)
+		}
+	}
+	// FTS rows for orphans must be gone.
+	var ftsCount int
+	if err := s.db.QueryRow(`SELECT count(*) FROM documents_fts`).Scan(&ftsCount); err != nil {
+		t.Fatalf("count documents_fts: %v", err)
+	}
+	if ftsCount != 2 {
+		t.Errorf("documents_fts rows = %d, want 2", ftsCount)
+	}
+	// Fast fields for deleted doc3 must be gone.
+	val, err := s.FastFields().Get(docIDs["/tmp/doc3.md"], "tag")
+	if err != nil {
+		t.Fatalf("FastFields.Get: %v", err)
+	}
+	if val != nil {
+		t.Errorf("expected fast field for deleted doc3 to be nil, got %v", val)
+	}
+
+	// nil livePaths purges the whole collection.
+	removedAll, err := s.DeleteOrphansContext(context.Background(), col.ID, nil)
+	if err != nil {
+		t.Fatalf("DeleteOrphansContext (all): %v", err)
+	}
+	if removedAll != 2 {
+		t.Errorf("removedAll = %d, want 2", removedAll)
+	}
+
+	// Repeating the purge on an empty collection returns 0.
+	removedNone, err := s.DeleteOrphansContext(context.Background(), col.ID, nil)
+	if err != nil {
+		t.Fatalf("DeleteOrphansContext (none): %v", err)
+	}
+	if removedNone != 0 {
+		t.Errorf("removedNone = %d, want 0", removedNone)
+	}
+}
