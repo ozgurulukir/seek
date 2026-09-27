@@ -173,20 +173,50 @@ func (s *Store) DeleteOrphansContext(ctx context.Context, collectionID int64, li
 		return 0, fmt.Errorf("close orphan documents rows: %w", err)
 	}
 
-	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM fast_fields WHERE doc_id = ?`, id); err != nil && !strings.Contains(err.Error(), "no such table") {
+	if len(ids) == 0 {
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+
+	const batchSize = 500
+	for i := 0; i < len(ids); i += batchSize {
+		end := i + batchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		batch := ids[i:end]
+
+		placeholders := make([]string, len(batch))
+		args := make([]interface{}, len(batch))
+		for j, id := range batch {
+			placeholders[j] = "?"
+			args[j] = id
+		}
+		inClause := strings.Join(placeholders, ",")
+
+		queryFF := fmt.Sprintf(`DELETE FROM fast_fields WHERE doc_id IN (%s)`, inClause)
+		if _, err := tx.ExecContext(ctx, queryFF, args...); err != nil && !strings.Contains(err.Error(), "no such table") {
 			return 0, fmt.Errorf("delete orphan fast_fields: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM documents_fts WHERE rowid = ?`, id); err != nil {
+
+		queryFTS := fmt.Sprintf(`DELETE FROM documents_fts WHERE rowid IN (%s)`, inClause)
+		if _, err := tx.ExecContext(ctx, queryFTS, args...); err != nil {
 			return 0, fmt.Errorf("delete orphan fts: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM chunks WHERE document_id = ?`, id); err != nil {
+
+		queryChunks := fmt.Sprintf(`DELETE FROM chunks WHERE document_id IN (%s)`, inClause)
+		if _, err := tx.ExecContext(ctx, queryChunks, args...); err != nil {
 			return 0, fmt.Errorf("delete orphan chunks: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM documents WHERE id = ?`, id); err != nil {
+
+		queryDocs := fmt.Sprintf(`DELETE FROM documents WHERE id IN (%s)`, inClause)
+		if _, err := tx.ExecContext(ctx, queryDocs, args...); err != nil {
 			return 0, fmt.Errorf("delete orphan document: %w", err)
 		}
 	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}

@@ -568,3 +568,89 @@ func TestFTSRebuildOnTokenizerChange(t *testing.T) {
 		t.Fatalf("expected autocomplete ['vocabulary'], got %v", terms)
 	}
 }
+
+func TestDeleteOrphansContext(t *testing.T) {
+	s := newTestStore(t)
+
+	col, err := s.CreateCollection("orphans-col", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	// Insert 5 documents with fast fields, FTS, and chunks.
+	paths := []string{"/tmp/doc1.md", "/tmp/doc2.md", "/tmp/doc3.md", "/tmp/doc4.md", "/tmp/doc5.md"}
+	docIDs := make(map[string]int64)
+	for _, p := range paths {
+		id, err := s.UpsertDocument(col.ID, p, "Title "+p, "hash_"+p, 1.0, 5)
+		if err != nil {
+			t.Fatalf("UpsertDocument %s: %v", p, err)
+		}
+		docIDs[p] = id
+
+		if err := s.InsertChunk(id, 0, "Chunk content for "+p, nil); err != nil {
+			t.Fatalf("InsertChunk %s: %v", p, err)
+		}
+		if err := s.UpsertFTS(id, "Title "+p, "Chunk content for "+p); err != nil {
+			t.Fatalf("UpsertFTS %s: %v", p, err)
+		}
+		if err := s.FastFields().Set(id, "tag", "orphan_test"); err != nil {
+			t.Fatalf("FastFields.Set %s: %v", p, err)
+		}
+	}
+
+	// Specify livePaths as only doc1 and doc2.
+	livePaths := map[string]bool{
+		"/tmp/doc1.md": true,
+		"/tmp/doc2.md": true,
+	}
+
+	removed, err := s.DeleteOrphansContext(t.Context(), col.ID, livePaths)
+	if err != nil {
+		t.Fatalf("DeleteOrphansContext: %v", err)
+	}
+	if removed != 3 {
+		t.Errorf("removed = %d, want 3", removed)
+	}
+
+	// Check remaining document count.
+	docMap, err := s.ListDocumentPaths(col.ID)
+	if err != nil {
+		t.Fatalf("ListDocumentPaths: %v", err)
+	}
+	if len(docMap) != 2 {
+		t.Errorf("remaining doc count = %d, want 2", len(docMap))
+	}
+	if _, ok := docMap["/tmp/doc1.md"]; !ok {
+		t.Error("doc1 should still exist")
+	}
+	if _, ok := docMap["/tmp/doc2.md"]; !ok {
+		t.Error("doc2 should still exist")
+	}
+
+	// Verify fast fields for deleted doc3 are gone.
+	val, err := s.FastFields().Get(docIDs["/tmp/doc3.md"], "tag")
+	if err != nil {
+		t.Fatalf("FastFields.Get: %v", err)
+	}
+	if val != nil {
+		t.Errorf("expected fast field for deleted doc3 to be nil, got %v", val)
+	}
+
+	// Delete remaining documents with empty livePaths.
+	removedAll, err := s.DeleteOrphansContext(t.Context(), col.ID, map[string]bool{})
+	if err != nil {
+		t.Fatalf("DeleteOrphansContext (all): %v", err)
+	}
+	if removedAll != 2 {
+		t.Errorf("removedAll = %d, want 2", removedAll)
+	}
+
+	// Calling again on empty collection should return 0.
+	removedNone, err := s.DeleteOrphansContext(t.Context(), col.ID, map[string]bool{})
+	if err != nil {
+		t.Fatalf("DeleteOrphansContext (none): %v", err)
+	}
+	if removedNone != 0 {
+		t.Errorf("removedNone = %d, want 0", removedNone)
+	}
+}
