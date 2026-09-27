@@ -245,3 +245,27 @@ func TestHistogramOnDynamicFastFieldErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestQuoteQualifiedIdentifier(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "name", want: `"name"`},
+		{input: "c.type", want: `"c"."type"`},
+		{input: "d.created_at", want: `"d"."created_at"`},
+		{input: "db.table.column", want: `"db"."table"."column"`},
+		{input: "foo\"bar", want: `"foo""bar"`},
+		{input: "c.\"name\"", want: `"c"."""name"""`},
+		{input: "", want: `""`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := quoteQualifiedIdentifier(tt.input)
+			if got != tt.want {
+				t.Errorf("quoteQualifiedIdentifier(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
