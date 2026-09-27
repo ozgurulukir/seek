@@ -207,49 +207,123 @@ func (s *Store) GetChunkContentContext(ctx context.Context, chunkID int64) (stri
 	return content, nil
 }
 
+// ChunkEmbeddingUpdate holds a chunk ID and its vector embedding for batch persistence.
+type ChunkEmbeddingUpdate struct {
+	ChunkID   int64
+	Embedding []float32
+}
+
 func (s *Store) UpdateChunkEmbedding(chunkID int64, embedding []float32) error {
 	return s.UpdateChunkEmbeddingContext(context.Background(), chunkID, embedding)
 }
 
 func (s *Store) UpdateChunkEmbeddingContext(ctx context.Context, chunkID int64, embedding []float32) error {
-	vector := s.vector()
-	replacing := vector != nil && vector.Contains(chunkID)
-	var previous []byte
-	if replacing {
-		if err := s.db.QueryRowContext(ctx, `SELECT embedding FROM chunks WHERE id = ?`, chunkID).Scan(&previous); err != nil {
-			return fmt.Errorf("read previous chunk embedding: %w", err)
-		}
-	}
-	if err := s.PersistChunkEmbeddingContext(ctx, chunkID, embedding); err != nil {
-		return err
-	}
-	if vector == nil {
-		return nil
-	}
-	// coder/hnsw cannot safely replace an existing key. Rebuild atomically
-	// from SQLite for replacements so readers keep the old complete graph until
-	// the updated graph is ready. New IDs retain the cheap incremental path.
-	if replacing {
-		if err := s.SyncVectorIndexContext(ctx); err != nil {
-			if _, restoreErr := s.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`, previous, chunkID); restoreErr != nil {
-				return fmt.Errorf("rebuild vector index after embedding update: %w (restore previous embedding: %v)", err, restoreErr)
-			}
-			return fmt.Errorf("rebuild vector index after embedding update: %w", err)
-		}
-		return nil
-	}
-	if err := vector.Add(chunkID, embedding); err != nil {
-		return fmt.Errorf("update vector index: %w", err)
-	}
-	return nil
+	return s.UpdateChunkEmbeddingsBatchContext(ctx, []ChunkEmbeddingUpdate{{ChunkID: chunkID, Embedding: embedding}}, false)
 }
 
 // PersistChunkEmbeddingContext updates SQLite without touching the live
 // vector index. Forced embedding passes use it and publish one complete graph
 // after all vectors have been persisted.
 func (s *Store) PersistChunkEmbeddingContext(ctx context.Context, chunkID int64, embedding []float32) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`, encodeEmbedding(embedding), chunkID)
-	return err
+	return s.PersistChunkEmbeddingsBatchContext(ctx, []ChunkEmbeddingUpdate{{ChunkID: chunkID, Embedding: embedding}})
+}
+
+// PersistChunkEmbeddingsBatchContext updates multiple chunk embeddings in SQLite within a single transaction
+// without touching the live vector index.
+func (s *Store) PersistChunkEmbeddingsBatchContext(ctx context.Context, updates []ChunkEmbeddingUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction for batch embedding update: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`)
+	if err != nil {
+		return fmt.Errorf("prepare statement for batch embedding update: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, u := range updates {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(u.Embedding) == 0 {
+			continue
+		}
+		if _, err := stmt.ExecContext(ctx, encodeEmbedding(u.Embedding), u.ChunkID); err != nil {
+			return fmt.Errorf("update chunk %d embedding: %w", u.ChunkID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit batch embedding update: %w", err)
+	}
+	return nil
+}
+
+// UpdateChunkEmbeddingsBatchContext updates chunk embeddings in SQLite in a single transaction
+// and updates or rebuilds the live vector index.
+func (s *Store) UpdateChunkEmbeddingsBatchContext(ctx context.Context, updates []ChunkEmbeddingUpdate, deferVectorUpdate bool) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	if deferVectorUpdate {
+		return s.PersistChunkEmbeddingsBatchContext(ctx, updates)
+	}
+
+	vector := s.vector()
+	var replacedIDs []int64
+	var previousEmbeddings [][]byte
+
+	if vector != nil {
+		for _, u := range updates {
+			if vector.Contains(u.ChunkID) {
+				var prev []byte
+				if err := s.db.QueryRowContext(ctx, `SELECT embedding FROM chunks WHERE id = ?`, u.ChunkID).Scan(&prev); err != nil {
+					return fmt.Errorf("read previous chunk embedding for %d: %w", u.ChunkID, err)
+				}
+				replacedIDs = append(replacedIDs, u.ChunkID)
+				previousEmbeddings = append(previousEmbeddings, prev)
+			}
+		}
+	}
+
+	if err := s.PersistChunkEmbeddingsBatchContext(ctx, updates); err != nil {
+		return err
+	}
+
+	if vector == nil {
+		return nil
+	}
+
+	if len(replacedIDs) > 0 {
+		if err := s.SyncVectorIndexContext(ctx); err != nil {
+			var restoreErr error
+			for i, id := range replacedIDs {
+				if _, e := s.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`, previousEmbeddings[i], id); e != nil && restoreErr == nil {
+					restoreErr = e
+				}
+			}
+			if restoreErr != nil {
+				return fmt.Errorf("rebuild vector index after embedding update: %w (restore previous embeddings: %v)", err, restoreErr)
+			}
+			return fmt.Errorf("rebuild vector index after embedding update: %w", err)
+		}
+		return nil
+	}
+
+	for _, u := range updates {
+		if len(u.Embedding) == 0 {
+			continue
+		}
+		if err := vector.Add(u.ChunkID, u.Embedding); err != nil {
+			return fmt.Errorf("update vector index for chunk %d: %w", u.ChunkID, err)
+		}
+	}
+	return nil
 }
 
 // GetChunksWithoutEmbedding returns chunks that don't have embeddings yet.
