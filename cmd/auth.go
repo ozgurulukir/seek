@@ -78,7 +78,7 @@ func inputErr(err error) error {
 	return fmt.Errorf("read input: %w", err)
 }
 
-func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
+func promptProviderSelection() (provider, int, error) {
 	fmt.Println("\nSelect embedding provider:")
 	for i, p := range providers {
 		fmt.Printf("  %d) %s\n", i+1, p.Name)
@@ -87,7 +87,7 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 
 	choiceStr, err := readLine()
 	if err != nil {
-		return inputErr(err)
+		return provider{}, 0, inputErr(err)
 	}
 	choice := 0
 	if choiceStr != "" {
@@ -97,81 +97,85 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 	if choice < 0 || choice >= len(providers) {
 		choice = 0
 	}
+	return providers[choice], choice, nil
+}
 
-	p := providers[choice]
-	baseURL := p.BaseURL
-	model := p.Model
-	dimensions := p.Dimensions
-
-	if p.BaseURL == "" {
-		fmt.Print("Base URL (e.g. http://localhost:11434/v1 or https://api.example.com/v1): ")
-		rawURL, err := readLine()
-		if err != nil {
-			return inputErr(err)
-		}
-		baseURL = strings.TrimSpace(rawURL)
-		if baseURL == "" {
-			return fmt.Errorf("base URL cannot be empty")
-		}
-		if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
-			if isLocalEndpoint(baseURL) {
-				baseURL = "http://" + baseURL
-			} else {
-				baseURL = "https://" + baseURL
-			}
-		}
-
-		fmt.Print("Model name (e.g. text-embedding-3-small, bge-m3): ")
-		model, err = readLine()
-		if err != nil {
-			return inputErr(err)
-		}
-		if model == "" {
-			return fmt.Errorf("model name cannot be empty")
-		}
-
-		fmt.Print("Dimensions [1024]: ")
-		dimStr, err := readLine()
-		if err != nil {
-			return inputErr(err)
-		}
-		if dimStr != "" {
-			fmt.Sscanf(dimStr, "%d", &dimensions)
-		}
-		if dimensions <= 0 {
-			dimensions = 1024
+func promptCustomProvider() (string, string, int, error) {
+	fmt.Print("Base URL (e.g. http://localhost:11434/v1 or https://api.example.com/v1): ")
+	rawURL, err := readLine()
+	if err != nil {
+		return "", "", 0, inputErr(err)
+	}
+	baseURL := strings.TrimSpace(rawURL)
+	if baseURL == "" {
+		return "", "", 0, fmt.Errorf("base URL cannot be empty")
+	}
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		if isLocalEndpoint(baseURL) {
+			baseURL = "http://" + baseURL
+		} else {
+			baseURL = "https://" + baseURL
 		}
 	}
 
-	var apiKey string
+	fmt.Print("Model name (e.g. text-embedding-3-small, bge-m3): ")
+	model, err := readLine()
+	if err != nil {
+		return "", "", 0, inputErr(err)
+	}
+	if model == "" {
+		return "", "", 0, fmt.Errorf("model name cannot be empty")
+	}
+
+	fmt.Print("Dimensions [1024]: ")
+	dimStr, err := readLine()
+	if err != nil {
+		return "", "", 0, inputErr(err)
+	}
+	dimensions := 0
+	if dimStr != "" {
+		fmt.Sscanf(dimStr, "%d", &dimensions)
+	}
+	if dimensions <= 0 {
+		dimensions = 1024
+	}
+
+	return baseURL, model, dimensions, nil
+}
+
+func promptAPIKey(baseURL string) (string, error) {
 	if isLocalEndpoint(baseURL) {
 		fmt.Print("\nAPI Key (leave blank for local 'ollama'): ")
 		keyStr, err := readLine()
 		if err != nil {
-			return inputErr(err)
+			return "", inputErr(err)
 		}
-		apiKey = strings.TrimSpace(keyStr)
+		apiKey := strings.TrimSpace(keyStr)
 		if apiKey == "" {
 			apiKey = "ollama"
 		}
-	} else {
-		fmt.Print("\nAPI Key (input hidden): ")
-		keyBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Println()
-		if err != nil {
-			return inputErr(err)
-		}
-		apiKey = strings.TrimSpace(string(keyBytes))
-		if apiKey == "" {
-			return fmt.Errorf("API key cannot be empty")
-		}
+		return apiKey, nil
 	}
 
+	fmt.Print("\nAPI Key (input hidden): ")
+	keyBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+	if err != nil {
+		return "", inputErr(err)
+	}
+	apiKey := strings.TrimSpace(string(keyBytes))
+	if apiKey == "" {
+		return "", fmt.Errorf("API key cannot be empty")
+	}
+	return apiKey, nil
+}
+
+func promptMultimodal(model string) (bool, string, error) {
 	multimodal := config.EmbeddingConfig{Model: model}.IsMultimodal()
 	fmt.Print("\nUse vision-language (image) embedding endpoint? [y/N]: ")
 	mmStr, err := readLine()
 	if err != nil {
-		return inputErr(err)
+		return false, "", inputErr(err)
 	}
 	if yes := strings.ToLower(strings.TrimSpace(mmStr)); yes == "y" || yes == "yes" {
 		multimodal = true
@@ -181,9 +185,38 @@ func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
 		fmt.Print("VL endpoint (blank for DashScope default): ")
 		vlStr, err := readLine()
 		if err != nil {
-			return inputErr(err)
+			return false, "", inputErr(err)
 		}
 		vlBaseURL = strings.TrimSpace(vlStr)
+	}
+	return multimodal, vlBaseURL, nil
+}
+
+func (c *AuthLoginCmd) Run(cfg *config.AppConfig) error {
+	p, choice, err := promptProviderSelection()
+	if err != nil {
+		return err
+	}
+
+	baseURL := p.BaseURL
+	model := p.Model
+	dimensions := p.Dimensions
+
+	if p.BaseURL == "" {
+		baseURL, model, dimensions, err = promptCustomProvider()
+		if err != nil {
+			return err
+		}
+	}
+
+	apiKey, err := promptAPIKey(baseURL)
+	if err != nil {
+		return err
+	}
+
+	multimodal, vlBaseURL, err := promptMultimodal(model)
+	if err != nil {
+		return err
 	}
 
 	// Start from the unexpanded on-disk config, not the resolved cfg: Load
