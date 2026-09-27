@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -566,5 +568,46 @@ func TestFTSRebuildOnTokenizerChange(t *testing.T) {
 	}
 	if len(terms) == 0 || terms[0] != "vocabulary" {
 		t.Fatalf("expected autocomplete ['vocabulary'], got %v", terms)
+	}
+}
+
+func BenchmarkDeleteOrphans(b *testing.B) {
+	ctx := context.Background()
+	for _, numDocs := range []int{100, 500} {
+		b.Run(fmt.Sprintf("Docs_%d", numDocs), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				s, err := Open(filepath.Join(b.TempDir(), "bench.db"))
+				if err != nil {
+					b.Fatalf("Open: %v", err)
+				}
+				col, err := s.CreateCollection("bench-col", CollectionTypeMarkdown, "/tmp", "*.md")
+				if err != nil {
+					b.Fatalf("CreateCollection: %v", err)
+				}
+				for d := 0; d < numDocs; d++ {
+					path := fmt.Sprintf("/tmp/doc_%d.md", d)
+					docID, err := s.UpsertDocument(col.ID, path, fmt.Sprintf("Title %d", d), fmt.Sprintf("hash_%d", d), 1.0, 10)
+					if err != nil {
+						b.Fatalf("UpsertDocument: %v", err)
+					}
+					_ = s.FastFields().Set(docID, "category", "bench")
+					_ = s.UpsertFTS(docID, fmt.Sprintf("Title %d", d), "Content for document with search keywords")
+					_ = s.InsertChunk(docID, 0, "Chunk text", nil)
+				}
+				livePaths := make(map[string]bool)
+				b.StartTimer()
+
+				removed, err := s.DeleteOrphansContext(ctx, col.ID, livePaths)
+				if err != nil {
+					b.Fatalf("DeleteOrphansContext: %v", err)
+				}
+				if removed != numDocs {
+					b.Fatalf("removed = %d, want %d", removed, numDocs)
+				}
+				b.StopTimer()
+				s.Close()
+			}
+		})
 	}
 }
