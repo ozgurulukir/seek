@@ -207,3 +207,75 @@ func TestCompareFastFieldValuesMixedTypes(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultSchema_ZeroValueRegistry(t *testing.T) {
+	var reg SchemaRegistry
+	schema := reg.DefaultSchema()
+	if schema != nil {
+		t.Errorf("expected nil schema from zero-value SchemaRegistry, got %v", schema)
+	}
+}
+
+func TestDefaultSchema_AllFieldDefinitions(t *testing.T) {
+	reg := NewSchemaRegistry()
+	schema := reg.DefaultSchema()
+
+	expectedFields := map[string]FieldDefinition{
+		"id":            {Type: FieldTypeInt, Options: FieldOptions{Stored: true, Fast: true}},
+		"collection_id": {Type: FieldTypeInt, Options: FieldOptions{Stored: true, Fast: true}},
+		"path":          {Type: FieldTypeText, Options: FieldOptions{Stored: true, Fast: true}},
+		"title":         {Type: FieldTypeText, Options: FieldOptions{Indexed: true, Stored: true}},
+		"content_hash":  {Type: FieldTypeText, Options: FieldOptions{Stored: true}},
+		"mtime":         {Type: FieldTypeInt, Options: FieldOptions{Stored: true, Fast: true}},
+		"line_count":    {Type: FieldTypeInt, Options: FieldOptions{Stored: true, Fast: true}},
+		"created_at":    {Type: FieldTypeDate, Options: FieldOptions{Stored: true, Fast: true}},
+		"updated_at":    {Type: FieldTypeDate, Options: FieldOptions{Stored: true, Fast: true}},
+		"metadata":      {Type: FieldTypeJSON, Options: FieldOptions{Stored: true}},
+	}
+
+	if len(schema) != len(expectedFields) {
+		t.Errorf("expected %d fields in default schema, got %d", len(expectedFields), len(schema))
+	}
+
+	for name, expectedDef := range expectedFields {
+		def, ok := schema[name]
+		if !ok {
+			t.Errorf("missing field %q in default schema", name)
+			continue
+		}
+
+		if def.Type != expectedDef.Type {
+			t.Errorf("field %q type = %s, want %s", name, def.Type, expectedDef.Type)
+		}
+		if def.Options.Indexed != expectedDef.Options.Indexed {
+			t.Errorf("field %q Indexed = %v, want %v", name, def.Options.Indexed, expectedDef.Options.Indexed)
+		}
+		if def.Options.Stored != expectedDef.Options.Stored {
+			t.Errorf("field %q Stored = %v, want %v", name, def.Options.Stored, expectedDef.Options.Stored)
+		}
+		if def.Options.Fast != expectedDef.Options.Fast {
+			t.Errorf("field %q Fast = %v, want %v", name, def.Options.Fast, expectedDef.Options.Fast)
+		}
+	}
+}
+
+func TestDefaultSchema_Consistency(t *testing.T) {
+	reg := NewSchemaRegistry()
+	s1 := reg.DefaultSchema()
+	s2 := reg.DefaultSchema()
+
+	if len(s1) != len(s2) {
+		t.Fatalf("mismatch in schema lengths across calls: %d vs %d", len(s1), len(s2))
+	}
+
+	for k, v1 := range s1 {
+		v2, ok := s2[k]
+		if !ok {
+			t.Errorf("key %q missing from second call to DefaultSchema", k)
+			continue
+		}
+		if v1 != v2 {
+			t.Errorf("field %q definition changed between calls: %v vs %v", k, v1, v2)
+		}
+	}
+}
