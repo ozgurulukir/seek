@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -567,4 +568,62 @@ func TestFTSRebuildOnTokenizerChange(t *testing.T) {
 	if len(terms) == 0 || terms[0] != "vocabulary" {
 		t.Fatalf("expected autocomplete ['vocabulary'], got %v", terms)
 	}
+}
+
+func BenchmarkUpdateChunkEmbedding(b *testing.B) {
+	s := newTestStore(&testing.T{})
+	col, err := s.CreateCollection("bench-col", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		b.Fatal(err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "/tmp/bench.md", "Bench", "hash", 1, 1)
+	if err != nil {
+		b.Fatal(err)
+	}
+	const count = 25
+	for i := 0; i < count; i++ {
+		if err := s.InsertChunk(docID, i, "chunk content", nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+	var ids []int64
+	rows, err := s.db.Query("SELECT id FROM chunks WHERE document_id = ? ORDER BY seq ASC", docID)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			b.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+
+	emb := []float32{0.1, 0.2, 0.3, 0.4}
+
+	b.Run("Individual_25", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			for _, id := range ids {
+				if err := s.PersistChunkEmbeddingContext(context.Background(), id, emb); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
+
+	b.Run("Batch_25", func(b *testing.B) {
+		updates := make([]ChunkEmbeddingUpdate, len(ids))
+		for i, id := range ids {
+			updates[i] = ChunkEmbeddingUpdate{ChunkID: id, Embedding: emb}
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := s.PersistChunkEmbeddingsBatchContext(context.Background(), updates); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
