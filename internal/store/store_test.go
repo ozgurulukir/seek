@@ -568,3 +568,107 @@ func TestFTSRebuildOnTokenizerChange(t *testing.T) {
 		t.Fatalf("expected autocomplete ['vocabulary'], got %v", terms)
 	}
 }
+
+func BenchmarkUpdateChunkEmbeddingsSequential(b *testing.B) {
+	s, err := Open(filepath.Join(b.TempDir(), "bench.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer s.Close()
+
+	col, err := s.CreateCollection("bench", "markdown", "/tmp", "*.md")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	docID, err := s.UpsertDocument(col.ID, "/tmp/bench.md", "bench", "hash1", 100, 10)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	const numChunks = 100
+	var chunkIDs []int64
+	for i := 0; i < numChunks; i++ {
+		if err := s.InsertChunk(docID, i, "content", nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	rows, err := s.db.Query(`SELECT id FROM chunks ORDER BY id ASC`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			b.Fatal(err)
+		}
+		chunkIDs = append(chunkIDs, id)
+	}
+	rows.Close()
+
+	emb := []float32{0.1, 0.2, 0.3, 0.4}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, id := range chunkIDs {
+			if err := s.UpdateChunkEmbedding(id, emb); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+func BenchmarkUpdateChunkEmbeddingsBatch(b *testing.B) {
+	s, err := Open(filepath.Join(b.TempDir(), "bench.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer s.Close()
+
+	col, err := s.CreateCollection("bench", "markdown", "/tmp", "*.md")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	docID, err := s.UpsertDocument(col.ID, "/tmp/bench.md", "bench", "hash1", 100, 10)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	const numChunks = 100
+	var chunkIDs []int64
+	for i := 0; i < numChunks; i++ {
+		if err := s.InsertChunk(docID, i, "content", nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	rows, err := s.db.Query(`SELECT id FROM chunks ORDER BY id ASC`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			b.Fatal(err)
+		}
+		chunkIDs = append(chunkIDs, id)
+	}
+	rows.Close()
+
+	emb := []float32{0.1, 0.2, 0.3, 0.4}
+	updates := make([]ChunkEmbeddingUpdate, len(chunkIDs))
+	for i, id := range chunkIDs {
+		updates[i] = ChunkEmbeddingUpdate{ChunkID: id, Embedding: emb}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := s.UpdateChunkEmbeddingsBatch(updates); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
