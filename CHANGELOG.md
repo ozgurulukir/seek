@@ -3,6 +3,21 @@
 All notable changes to `seek` are documented here. This follows
 [Keep a Changelog](https://keepachangelog.com/) conventions.
 
+## [0.5.11] - 2026-09-27
+
+### Changed
+
+- **Batched orphan-cleanup deletes:** `DeleteOrphansContext` no longer issues four DELETE statements per stale document. Deletes are grouped into `IN`-clause batches of 500, and a full-collection purge (`nil` livePaths, the reindex path) uses set-based subquery deletes against the collection ID directly. Behavior is pinned by a new unit test (partial purge keeps live documents and their FTS/fast-field projections; full purge empties the collection; repeat purges are no-ops) and covered by benchmarks.
+- **Batched chunk-embedding persistence:** embedding passes now persist each API batch of chunk embeddings in a single SQLite transaction instead of one transaction per chunk. The live vector index is updated incrementally for new chunk IDs and rebuilt atomically (off to the side, then published) when existing IDs are replaced — the restore-previous-embedding-on-rebuild-failure safety net from the per-chunk path is preserved, including reporting restore failures.
+
+### Refactored
+
+- **`seek auth login`:** the interactive prompts (provider selection, custom provider details, API key entry, multimodal opt-in) are extracted into standalone functions so `AuthLoginCmd.Run` reads as a short sequence. Behavior unchanged, including the 1024-dimension default for custom providers.
+
+### Tests
+
+- New coverage pinning: `TaskPrefixes` case-insensitive model matching and explicit document-prefix override, `quoteQualifiedIdentifier` quoting (embedded quotes, multi-part names, empty identifier), the default configuration constants, and `SchemaRegistry.DefaultSchema` (zero-value registry, full field definition set, call-to-call consistency).
+
 ## [0.5.10] - 2026-09-26
 
 ### Added
