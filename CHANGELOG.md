@@ -3,6 +3,22 @@
 All notable changes to `seek` are documented here. This follows
 [Keep a Changelog](https://keepachangelog.com/) conventions.
 
+## [0.5.12] - 2026-09-30
+
+### Fixed
+
+- **launchd service install (macOS):** `seek service start` no longer hands a possibly truncated plist to `launchctl bootstrap` — a failed flush on file close now surfaces as an error instead of silently installing a broken service definition. The unused `launchctl print` output variable in `seek service status` is also gone.
+- **Windows checkouts of the skill service scripts:** the mirrored `tools/` ↔ `skills/seek/scripts/services/` trees are pinned `eol=lf` in `.gitattributes`, so `core.autocrlf=true` checkouts can no longer rewrite `setup.sh` to CRLF and break it.
+
+### Refactored
+
+- **`syncConversation` decomposition (`internal/indexer`):** the ~200-line shared Claude/Codex sync path is split into named helpers — `conversationTitle`, `buildConversationChunks`, `pruneEmptyConversationBatch`, `conversationBaseSeq`, and `writeConversationDocument` — with identical WARN text, counters, and error returns. Contracts are pinned by unit tests against a real temp SQLite store.
+
+### Tests
+
+- **Package layering guard (`layering_test.go`):** builds the real import graph via `go list -json` and fails on import cycles, layer-direction violations (internal must not import cmd/root, cmd must not import root), and `third_party/renameio` reaching back into the main module — the architecture documented in AGENTS.md is now enforced on every test run.
+- **Skill-bundle SSOT guard (`TestSkillServiceBundleIsSynchronized`):** parses its file list from `scripts/sync-skill-services.py` (single curated list), byte-compares every canonical/bundled pair, and walks both trees so mirror hand-edits, unlisted files, and undeclared `tools/` directories fail with remediation hints. The sync script's `--check` compares CRLF-normalized bytes so its verdict agrees with the Go test on Windows checkouts.
+
 ## [0.5.11] - 2026-09-27
 
 ### Changed
