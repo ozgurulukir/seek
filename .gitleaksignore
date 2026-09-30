@@ -1,0 +1,44 @@
+# Test fixtures only: internal/config/profiles_test.go hardcodes the canonical
+# dummy API keys (sk-1234567890abcdef et al.) that TestGroupRedactsAPIKeys
+# proves are masked in rendered config. Not real credentials.
+02d3e612d060b20b97dd5c0b8f4ed41e7a78ca34:internal/config/profiles_test.go:generic-api-key:219
+0b4b9c24fa135fbb0ad51a45537e7f7166074b72:internal/config/profiles_test.go:generic-api-key:219
+0b9712af6ffb22e137210739ada19ffda5ecc1c1:internal/config/profiles_test.go:generic-api-key:219
+14e6ffe26a80a706b6a3a09dd2f753306bca190e:internal/config/profiles_test.go:generic-api-key:219
+15b5cdceb18f126de2ee031c127d6d499ca98aff:internal/config/profiles_test.go:generic-api-key:219
+19b0cb5945933e4c5e1dbcc8e3fe76bf4108e3d8:internal/config/profiles_test.go:generic-api-key:219
+211db11a2ee277019e558217ac1bb4677193569d:internal/config/profiles_test.go:generic-api-key:219
+2311666619b3e56c96b87a4fee2df017752b7b27:internal/config/profiles_test.go:generic-api-key:219
+266e2dc7a4809e5c8fc7c305be209856508e09db:internal/config/profiles_test.go:generic-api-key:219
+438ef7a03bd42249f5bcab3138d177889dbf707e:internal/config/profiles_test.go:generic-api-key:219
+46bb0ecd9fe46779b198f486b8ae49570e5f8833:internal/config/profiles_test.go:generic-api-key:219
+49d776c4cacc15580a90c82d011e9f07426f2af3:internal/config/profiles_test.go:generic-api-key:219
+53acdb611637028159ec0fb7a253150892331238:internal/config/profiles_test.go:generic-api-key:219
+6019742c15a7fd94bc337e228a38d7094164fa27:internal/config/profiles_test.go:generic-api-key:219
+6145c93d343a906d78b0b0d81c5e0ca6a643242f:internal/config/profiles_test.go:generic-api-key:219
+68ce2b47ca24187e0b7757124220fdd9427e3801:internal/config/profiles_test.go:generic-api-key:219
+6af79328a1d7f7b26fad64785d60f6d9be20cbc4:internal/config/profiles_test.go:generic-api-key:219
+6c415768eb63e80b25f4815ca30944b81e31d389:internal/config/profiles_test.go:generic-api-key:219
+7153072cc057e23cd91f16a9b8f8aed24206d635:internal/config/profiles_test.go:generic-api-key:219
+7acab569f59f8d123a70799b2f6abb961208f6f1:internal/config/profiles_test.go:generic-api-key:219
+7c44e76507994e6763a0545971604389e69b9365:internal/config/profiles_test.go:generic-api-key:219
+80ceba679cb4e96f52d10bb055fb710fc1b9257c:internal/config/profiles_test.go:generic-api-key:219
+87735cdb437f89740d5a1bc8a19d39bc9dd679bb:internal/config/profiles_test.go:generic-api-key:219
+8fbfe14fab334deed5be9c5a1f4bdaeaef999000:internal/config/profiles_test.go:generic-api-key:219
+9735a59da99b630bd5eb8ffc65b1526380a9ba7b:internal/config/profiles_test.go:generic-api-key:219
+9f0d8217e8b18f435e09541023e84532548e0f62:internal/config/profiles_test.go:generic-api-key:219
+a4ba3a85790a1325923cde50d832cd2340593488:internal/config/profiles_test.go:generic-api-key:219
+a89842f6a649fe1423d2df23f2737ed5362bff88:internal/config/profiles_test.go:generic-api-key:219
+aca8a8dd1cae275309d6ad4dfe28b9ba16a5072a:internal/config/profiles_test.go:generic-api-key:219
+b1dfad7c9b8394dc845442be2b8a672806494e89:internal/config/profiles_test.go:generic-api-key:219
+b8e99777ba0eabdadb2087bde0e5463d110b0f96:internal/config/profiles_test.go:generic-api-key:219
+bc7cf953b3676548427b5d0c8841d69258926208:internal/config/profiles_test.go:generic-api-key:219
+c7cf7e017843e3723426de17ae454b2f7829916d:internal/config/profiles_test.go:generic-api-key:219
+d5d0842ef7bb0b247a5c2a569fdc77c0284f8c00:internal/config/profiles_test.go:generic-api-key:219
+df5d9d8da3c7ed8c3194e9ae7964edd98176fe4f:internal/config/profiles_test.go:generic-api-key:219
+df68c9c5df5cbce2fcffcd4b3bdf223eac89afb6:internal/config/profiles_test.go:generic-api-key:219
+e049b14951680ba15aca2d655a014f7625a5c0bc:internal/config/profiles_test.go:generic-api-key:219
+e1293728c860ae198f998bd83eb5c98ed354e101:internal/config/profiles_test.go:generic-api-key:219
+e2aeede089f07dd08d305fb3cd7399e5c3e1f0b4:internal/config/profiles_test.go:generic-api-key:219
+e35311e394df77cd88071dcc23b1eabe3654a5f2:internal/config/profiles_test.go:generic-api-key:219
+f8e4bd17b04abc2684d6290f98090d3de70ea10e:internal/config/profiles_test.go:generic-api-key:219
