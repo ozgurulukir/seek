@@ -24,3 +24,8 @@ __pycache__/
 
 # Local server logs
 .tmp-review/
+
+# Working docs: plans, drafts, reviews (never committed)
+docs/plans/
+docs/*review*
+.commandcode/
