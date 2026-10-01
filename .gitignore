@@ -21,3 +21,6 @@ _plans/
 # Python virtual environments (tools/* services)
 .venv/
 __pycache__/
+
+# Local server logs
+.tmp-review/
