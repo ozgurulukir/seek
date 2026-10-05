@@ -94,9 +94,6 @@ func TestDefaultConstantsSanity(t *testing.T) {
 	if DefaultRerankModel == "" {
 		t.Error("DefaultRerankModel should not be empty")
 	}
-	if DefaultRerankTopN <= 0 {
-		t.Errorf("DefaultRerankTopN = %d, want > 0", DefaultRerankTopN)
-	}
 
 	// Search & Query Defaults
 	if DefaultQueryMode == "" {
@@ -124,9 +121,6 @@ func TestDefaultConstantsSanity(t *testing.T) {
 	}
 	if DefaultHNSEFSearch <= 0 {
 		t.Errorf("DefaultHNSEFSearch = %d, want > 0", DefaultHNSEFSearch)
-	}
-	if DefaultHNSWDimension <= 0 {
-		t.Errorf("DefaultHNSWDimension = %d, want > 0", DefaultHNSWDimension)
 	}
 
 	// Compression

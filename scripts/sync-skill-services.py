@@ -24,6 +24,15 @@ FILES = (
 )
 
 
+def normalize(data: bytes) -> bytes:
+    """Compare text ignoring line endings.
+
+    The mirrored trees are pinned to LF in .gitattributes, but a checkout
+    made before that rule (or an editor writing CRLF) must not raise a
+    false drift alarm."""
+    return data.replace(b"\r\n", b"\n")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="check for missing or stale bundled files")
@@ -40,7 +49,7 @@ def main() -> int:
         if args.check:
             if not target.is_file():
                 problems.append(f"missing bundled copy: {target_name}")
-            elif target.read_bytes() != contents:
+            elif normalize(target.read_bytes()) != normalize(contents):
                 problems.append(f"stale bundled copy: {target_name}")
         else:
             target.parent.mkdir(parents=True, exist_ok=True)

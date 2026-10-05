@@ -94,6 +94,7 @@ func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFil
 		idx.recordFailure(f.Path, "extraction", err)
 		return docStatusFailed
 	}
+	idx.warnExtraction(f.Path, res)
 	lineCount := strings.Count(res.Content, "\n") + 1
 	maxSize, overlap := idx.chunkSize()
 	docChunks := toIndexChunks(chunk.ChunkMarkdown(res.Content, maxSize, overlap), true)

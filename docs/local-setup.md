@@ -388,8 +388,8 @@ rerank:
   model: ms-marco-TinyBERT-L-2-v2
   top_n: 10
 
-# Query analysis/stemming language ("en" or "tr"). The --analyze-lang /
-# -l CLI flags override this per invocation. Turkish stemming guards ASCII
+# Query analysis/stemming language ("en" or "tr"). The --analyze-lang flag
+# overrides this per invocation. Turkish stemming guards ASCII
 # technical words (launchd, config, sqlite) from corruption.
 search:
   analyze_lang: tr

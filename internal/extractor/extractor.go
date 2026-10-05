@@ -35,6 +35,11 @@ type Result struct {
 	// cached PNG path and any extracted text. Empty for non-paged formats and
 	// for backends that only return text.
 	Pages []Page
+	// Warnings carries non-fatal extraction problems (e.g. OCR failing on a
+	// scanned page). The document is still indexed with whatever text was
+	// recovered; the indexer logs each warning so partial extraction is
+	// visible in the sync summary.
+	Warnings []string
 }
 
 // Page is one page of a page-oriented document (e.g. a rasterized PDF page).

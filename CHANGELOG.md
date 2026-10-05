@@ -3,6 +3,43 @@
 All notable changes to `seek` are documented here. This follows
 [Keep a Changelog](https://keepachangelog.com/) conventions.
 
+## [0.6.0] - 2026-10-05
+
+### Added
+
+- **Dormant config keys are now honored:** `search.default_limit` (default result limit for `seek search` and the MCP `seek_search` tool), `filters.enabled` + `filters.default_collection` (default collection filter when a request names no collection), `aggregations.enabled` (gates `--aggs` / MCP `aggs`), and `rerank.top_n` (caps the candidate pool sent to the cross-encoder). Previously every one of these was parsed from config.yaml but never consumed.
+- **`filters.default_collection` validates:** an unknown collection name errors with `seek collection list` guidance instead of silently returning zero results for every search.
+- **Extraction warnings:** per-page OCR failures, embedded-text extraction failures, and textless scanned pages without OCR enabled surface as counted `WARN` lines in the sync summary instead of silently indexing empty pages.
+
+### Changed
+
+- **`vector_index.hnsw.dimension` removed:** the HNSW index dimension always followed `embedding.dimensions`; the silent no-op key (and its default constant) is gone.
+- **`rerank.top_n` is uncapped when unset:** the loader no longer forces a default of 10; `0` means rerank the full candidate pool, and `seek auth status` prints `top_n: auto`.
+
+### Fixed
+
+- **Built-in xberg endpoint default:** `DefaultXbergBaseURL` pointed at port 8000 (flashrank_server); it now matches the xberg server's actual bind port 8001, so `extractor.backend: xberg` with default config no longer sends extract requests to the wrong local service.
+
+### Documentation
+
+- Fact-check pass across README, AGENTS.md, `docs/`, and the bundled skill: Go version and LOC counts, the background service description, `seek status`/`seek rm` described as standalone commands, the missing `hermes` parser schema row, codex's `archived_sessions` path, `lz4` in the compression list, and a stale `-l` reference in `docs/local-setup.md`. `plugin.json` now tracks the release version.
+
+## [0.5.12] - 2026-09-30
+
+### Fixed
+
+- **launchd service install (macOS):** `seek service start` no longer hands a possibly truncated plist to `launchctl bootstrap` — a failed flush on file close now surfaces as an error instead of silently installing a broken service definition. The unused `launchctl print` output variable in `seek service status` is also gone.
+- **Windows checkouts of the skill service scripts:** the mirrored `tools/` ↔ `skills/seek/scripts/services/` trees are pinned `eol=lf` in `.gitattributes`, so `core.autocrlf=true` checkouts can no longer rewrite `setup.sh` to CRLF and break it.
+
+### Refactored
+
+- **`syncConversation` decomposition (`internal/indexer`):** the ~200-line shared Claude/Codex sync path is split into named helpers — `conversationTitle`, `buildConversationChunks`, `pruneEmptyConversationBatch`, `conversationBaseSeq`, and `writeConversationDocument` — with identical WARN text, counters, and error returns. Contracts are pinned by unit tests against a real temp SQLite store.
+
+### Tests
+
+- **Package layering guard (`layering_test.go`):** builds the real import graph via `go list -json` and fails on import cycles, layer-direction violations (internal must not import cmd/root, cmd must not import root), and `third_party/renameio` reaching back into the main module — the architecture documented in AGENTS.md is now enforced on every test run.
+- **Skill-bundle SSOT guard (`TestSkillServiceBundleIsSynchronized`):** parses its file list from `scripts/sync-skill-services.py` (single curated list), byte-compares every canonical/bundled pair, and walks both trees so mirror hand-edits, unlisted files, and undeclared `tools/` directories fail with remediation hints. The sync script's `--check` compares CRLF-normalized bytes so its verdict agrees with the Go test on Windows checkouts.
+
 ## [0.5.11] - 2026-09-27
 
 ### Changed

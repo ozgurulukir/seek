@@ -133,6 +133,8 @@ func (e *Extractor) extractPDF(ctx context.Context, pdfPath string) (extractor.R
 
 	pages := make([]extractor.Page, 0, doc.NumPage())
 	var allText strings.Builder
+	var warnings []string
+	var warnedNoOCR bool
 	for i := 0; i < doc.NumPage(); i++ {
 		if err := ctx.Err(); err != nil {
 			return extractor.Result{}, err
@@ -146,10 +148,27 @@ func (e *Extractor) extractPDF(ctx context.Context, pdfPath string) (extractor.R
 			return extractor.Result{}, fmt.Errorf("builtin: write page png %s: %w", pagePath, err)
 		}
 
-		text, _ := doc.Text(i)
+		text, textErr := doc.Text(i)
+		if textErr != nil {
+			// Indistinguishable from an empty page if swallowed; surface it
+			// and let the OCR path try to recover the page below.
+			warnings = append(warnings, fmt.Sprintf("embedded text extraction failed on page %d: %v", i+1, textErr))
+			text = ""
+		}
 		text = strings.TrimSpace(text)
 		if text == "" && e.ocr != nil {
-			text, _ = e.ocr.ExtractText(dataURIFromFile(pagePath))
+			var ocrErr error
+			if text, ocrErr = e.ocr.ExtractText(dataURIFromFile(pagePath)); ocrErr != nil {
+				// A failed OCR page must not fail the whole document, but it
+				// must not vanish silently either — the page indexes with no
+				// text and the user otherwise never learns OCR is broken.
+				warnings = append(warnings, fmt.Sprintf("OCR failed on page %d: %v", i+1, ocrErr))
+			}
+		} else if text == "" && e.ocr == nil && !warnedNoOCR {
+			// One warning per document: a scanned PDF without OCR enabled is
+			// indexed image-only and never becomes keyword-searchable.
+			warnedNoOCR = true
+			warnings = append(warnings, "pages have no embedded text and OCR is not enabled (set ocr.enabled: true in config.yaml)")
 		}
 		if text != "" {
 			allText.WriteString(text)
@@ -163,6 +182,7 @@ func (e *Extractor) extractPDF(ctx context.Context, pdfPath string) (extractor.R
 		MimeType: "application/pdf",
 		Title:    titleFromPath(pdfPath),
 		Pages:    pages,
+		Warnings: warnings,
 	}, nil
 }
 

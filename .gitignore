@@ -21,3 +21,11 @@ _plans/
 # Python virtual environments (tools/* services)
 .venv/
 __pycache__/
+
+# Local server logs
+.tmp-review/
+
+# Working docs: plans, drafts, reviews (never committed)
+docs/plans/
+docs/*review*
+.commandcode/

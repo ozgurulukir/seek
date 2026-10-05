@@ -9,3 +9,13 @@ testdata/help/*.txt text eol=lf
 
 # Auto-detect text vs binary for everything else
 * text=auto
+# Mirrored optional-service scripts are compared byte-for-byte between tools/
+# (canonical) and skills/seek/scripts/services/ (bundled copy) by
+# TestSkillServiceBundleIsSynchronized and scripts/sync-skill-services.py.
+# Pin both trees to LF so core.autocrlf=true checkouts cannot make the two
+# sides differ on disk.
+tools/semantic/** text eol=lf
+tools/xberg_server/** text eol=lf
+tools/flashrank_server/** text eol=lf
+tools/embed_server/** text eol=lf
+skills/seek/scripts/services/** text eol=lf

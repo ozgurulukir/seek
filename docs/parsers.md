@@ -14,8 +14,9 @@ Run `seek advanced parsers list` to check automatic discovery status:
 | `copilot-cli` | SQLite | `~/.copilot/session-store.db` | GitHub Copilot CLI session history |
 | `zed` | SQLite | `~/.local/share/zed/threads/threads.db` | Zed editor AI assistant panel threads (zstd compressed) |
 | `claude` | JSONL | `~/.claude/projects/**/*.jsonl` | Claude Code conversations (text-only schema mode) |
-| `codex` | JSONL | `~/.codex/sessions/**/*.jsonl` | Codex conversations (text-only schema mode) |
+| `codex` | JSONL | `~/.codex/sessions/**/*.jsonl` (+ `~/.codex/archived_sessions`) | Codex conversations (text-only schema mode) |
 | `zcode` | JSONL | `~/.zcode/cli/rollout/*.jsonl` | ZCode sessions (model-I/O rollouts; sliding-window dedup) |
+| `hermes` | SQLite | `~/.hermes/state.db`, `~/.hermes/profiles/*/state.db` | Hermes Agent sessions (active profile + per-profile state.db) |
 
 The `zcode` schema demonstrates the JSONL driver's **sliding-window mode**: each
 rollout line carries a cumulative window of the conversation (`request.messages`

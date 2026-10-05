@@ -11,7 +11,8 @@ Flags:
 
       --lex                  BM25 full-text search only
       --vec                  Vector semantic search only
-  -l, --limit=10             Max results
+  -l, --limit=INT            Max results (default: search.default_limit in
+                             config, else 10)
       --collection=STRING    Filter by collection name
       --lang=STRING          Filter code documents by programming language (e.g.
                              go, python, typescript)

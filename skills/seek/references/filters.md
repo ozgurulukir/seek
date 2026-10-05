@@ -58,7 +58,7 @@ value is indexed, even outside the collections you filtered to.
 ## Semantic enrichment fields
 
 When `semantic.enabled: true`, the optional local semantic tag service (see
-[docs/semantic.md](docs/semantic.md)) adds three more fast fields alongside
+[semantic.md](semantic.md)) adds three more fast fields alongside
 `tags` for every text-bearing collection type (markdown, code, conversations,
 pdf, documents, parser). All are facetable with `--aggs <field>:terms` and
 filterable with `--field`:

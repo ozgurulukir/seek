@@ -256,6 +256,15 @@ func (idx *Indexer) warnf(format string, v ...interface{}) {
 	log.Printf(format, v...)
 }
 
+// warnExtraction logs the non-fatal warnings an extractor attached to a
+// successful Result (e.g. per-page OCR failures on scanned PDFs). Each one
+// counts toward the sync summary so partial extraction stays visible.
+func (idx *Indexer) warnExtraction(path string, res extractor.Result) {
+	for _, w := range res.Warnings {
+		idx.warnf("  WARN: extract %s: %s\n", path, w)
+	}
+}
+
 func (idx *Indexer) addReport(report SyncReport) {
 	idx.mu.Lock()
 	idx.report.add(report)
@@ -404,88 +413,29 @@ func (idx *Indexer) syncConversation(
 		}
 
 		if batch.Text == "" && len(batch.Images) == 0 {
-			if existing != nil {
-				if fromLine == 0 {
-					// A full re-parse that yields nothing means the file no
-					// longer contains parseable content (e.g. truncated to
-					// empty or to metadata-only lines). Remove the stale
-					// document so its FTS entry and chunks go with it,
-					// mirroring deleted files.
-					if err := idx.db.DeleteDocumentContext(idx.ctx(), existing.ID); err != nil {
-						return fmt.Errorf("delete empty document %s: %w", f.Path, err)
-					}
-				} else {
-					// Append that produced no new content: just record the
-					// mtime so subsequent syncs skip this file without
-					// re-parsing it.
-					if err := idx.db.UpdateDocumentMtimeContext(idx.ctx(), existing.ID, f.Mtime); err != nil {
-						return fmt.Errorf("update mtime %s: %w", f.Path, err)
-					}
-				}
+			if err := idx.pruneEmptyConversationBatch(existing, fromLine, f.Path, f.Mtime); err != nil {
+				return err
 			}
 			skipped++
 			continue
 		}
 
-		title := filepath.Base(f.Path)
-		if fromLine == 0 && batch.Title != "" {
-			title = batch.Title
-		}
-		if getTitle != nil {
-			title = getTitle(batch.SessionID, title)
-		}
+		title := conversationTitle(f.Path, batch, fromLine, getTitle)
 
 		// On an append, new chunks must continue after the seqs from the
 		// previous sync and their line spans must be offset into the full
 		// file — the parser only saw lines after fromLine, so both its
 		// chunk text and its line numbers are relative to the delta.
-		baseSeq := 0
-		if fromLine > 0 {
-			if existing == nil {
-				idx.warnf("  WARN: append %s: document state is missing\n", f.Path)
-				failed++
-				continue
-			}
-			if ms, err := idx.db.MaxChunkSeqContext(idx.ctx(), existing.ID); err != nil {
-				idx.warnf("  WARN: chunk seq %s: %v\n", f.Path, err)
-				failed++
-				continue
-			} else {
-				baseSeq = ms + 1
-			}
+		baseSeq, err := idx.conversationBaseSeq(existing, fromLine, f.Path)
+		if err != nil {
+			idx.warnf("  WARN: %v\n", err)
+			failed++
+			continue
 		}
-		nextSeq := baseSeq
-		var indexChunks []store.IndexChunk
+		maxSize, _ := idx.chunkSize()
 		text := batch.Text
-		if text != "" {
-			maxSize, _ := idx.chunkSize()
-			chunks := chunk.ChunkConversation(text, maxSize)
-			for i := range chunks {
-				chunks[i].Seq = baseSeq + i
-				if fromLine > 0 {
-					chunks[i].StartLine += fromLine
-					chunks[i].EndLine += fromLine
-				}
-				indexChunks = append(indexChunks, store.IndexChunk{
-					Seq:       chunks[i].Seq,
-					Content:   chunks[i].Content,
-					StartLine: chunks[i].StartLine,
-					EndLine:   chunks[i].EndLine,
-				})
-			}
-			nextSeq = baseSeq + len(chunks)
-		}
-
-		for _, img := range batch.Images {
-			indexChunks = append(indexChunks, store.IndexChunk{
-				Seq:       nextSeq,
-				Content:   img.Context,
-				ChunkType: store.ChunkTypeImage,
-				ImagePath: img.SavedPath,
-			})
-			nextSeq++
-			totalImages++
-		}
+		indexChunks, _ := buildConversationChunks(batch, baseSeq, fromLine, maxSize)
+		totalImages += len(batch.Images)
 
 		request := store.DocumentIndex{
 			CollectionID: col.ID,
@@ -504,12 +454,7 @@ func (idx *Indexer) syncConversation(
 		if fromLine == 0 && text != "" {
 			request.FastFields = idx.enricher.Enrich(idx.ctx(), col.Type, f.Path, nil, indexChunks)
 		}
-		var docID int64
-		if fromLine == 0 {
-			docID, err = idx.writer.UpsertAndReplaceIndex(idx.ctx(), request)
-		} else {
-			_, err = idx.writer.UpsertAndAppendIndex(idx.ctx(), request)
-		}
+		docID, err := idx.writeConversationDocument(request, fromLine)
 		if err != nil {
 			idx.warnf("  WARN: index %s: %v\n", f.Path, err)
 			failed++
@@ -538,6 +483,107 @@ func (idx *Indexer) syncConversation(
 	}
 	idx.log.Printf("\n")
 	return nil
+}
+
+// conversationTitle resolves the document title: the parser-provided title
+// wins on a full parse (append deltas carry no title), the file's base name
+// is the fallback, and the format-specific session-title lookup has the
+// final say when present.
+func conversationTitle(path string, batch ConversationBatch, fromLine int, getTitle func(sessionID, defaultTitle string) string) string {
+	title := filepath.Base(path)
+	if fromLine == 0 && batch.Title != "" {
+		title = batch.Title
+	}
+	if getTitle != nil {
+		title = getTitle(batch.SessionID, title)
+	}
+	return title
+}
+
+// pruneEmptyConversationBatch handles a parse that produced no content. A
+// full re-parse that yields nothing means the file no longer contains
+// parseable content (e.g. truncated to empty or to metadata-only lines):
+// remove the stale document so its FTS entry and chunks go with it,
+// mirroring deleted files. An append that produced no new content only
+// records the mtime so subsequent syncs skip the file without re-parsing.
+func (idx *Indexer) pruneEmptyConversationBatch(existing *store.Document, fromLine int, path string, mtime float64) error {
+	if existing == nil {
+		return nil
+	}
+	if fromLine == 0 {
+		if err := idx.db.DeleteDocumentContext(idx.ctx(), existing.ID); err != nil {
+			return fmt.Errorf("delete empty document %s: %w", path, err)
+		}
+		return nil
+	}
+	if err := idx.db.UpdateDocumentMtimeContext(idx.ctx(), existing.ID, mtime); err != nil {
+		return fmt.Errorf("update mtime %s: %w", path, err)
+	}
+	return nil
+}
+
+// conversationBaseSeq returns the sequence number append chunks continue
+// from. A missing prior document state (the row vanished since the mtime
+// check) is an error, not a silent full re-parse: the delta text must not
+// be written under a wrong sequence numbering.
+func (idx *Indexer) conversationBaseSeq(existing *store.Document, fromLine int, path string) (int, error) {
+	if fromLine == 0 {
+		return 0, nil
+	}
+	if existing == nil {
+		return 0, fmt.Errorf("append %s: document state is missing", path)
+	}
+	ms, err := idx.db.MaxChunkSeqContext(idx.ctx(), existing.ID)
+	if err != nil {
+		return 0, fmt.Errorf("chunk seq %s: %w", path, err)
+	}
+	return ms + 1, nil
+}
+
+// buildConversationChunks chunks the batch text and appends its saved images
+// as image chunks. On an append (fromLine > 0) the parser only saw lines
+// after fromLine, so chunk line spans are offset to index into the full
+// file. Returns the index chunks and the next free sequence number.
+func buildConversationChunks(batch ConversationBatch, baseSeq, fromLine, maxSize int) ([]store.IndexChunk, int) {
+	nextSeq := baseSeq
+	var indexChunks []store.IndexChunk
+	if batch.Text != "" {
+		chunks := chunk.ChunkConversation(batch.Text, maxSize)
+		for i := range chunks {
+			chunks[i].Seq = baseSeq + i
+			if fromLine > 0 {
+				chunks[i].StartLine += fromLine
+				chunks[i].EndLine += fromLine
+			}
+			indexChunks = append(indexChunks, store.IndexChunk{
+				Seq:       chunks[i].Seq,
+				Content:   chunks[i].Content,
+				StartLine: chunks[i].StartLine,
+				EndLine:   chunks[i].EndLine,
+			})
+		}
+		nextSeq = baseSeq + len(chunks)
+	}
+	for _, img := range batch.Images {
+		indexChunks = append(indexChunks, store.IndexChunk{
+			Seq:       nextSeq,
+			Content:   img.Context,
+			ChunkType: store.ChunkTypeImage,
+			ImagePath: img.SavedPath,
+		})
+		nextSeq++
+	}
+	return indexChunks, nextSeq
+}
+
+// writeConversationDocument persists a conversation document: a full parse
+// replaces the document wholesale (FTS, chunks, fast fields); an append
+// extends it without touching existing chunks.
+func (idx *Indexer) writeConversationDocument(request store.DocumentIndex, fromLine int) (int64, error) {
+	if fromLine == 0 {
+		return idx.writer.UpsertAndReplaceIndex(idx.ctx(), request)
+	}
+	return idx.writer.UpsertAndAppendIndex(idx.ctx(), request)
 }
 
 // cleanupOrphans deletes every document of colID whose path is not in

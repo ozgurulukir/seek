@@ -6,7 +6,7 @@ Guidance for AI coding agents working in this repository.
 
 `seek` is a personal hybrid search engine (BM25 full-text + vector semantic search) for markdown notes, Claude Code conversations, and Codex conversations. It stores data in SQLite (via `mattn/go-sqlite3` with FTS5) and generates embeddings through a configurable provider (default DashScope).
 
-Go 1.24 module `github.com/ozgurulukir/seek`. ~18,000 LOC across a root package plus `cmd/`, `internal/`, and `third_party/`.
+Go 1.25 module `github.com/ozgurulukir/seek`. ~25,000 LOC across a root package plus `cmd/`, `internal/`, and `third_party/`.
 
 ## Build / test / verify (always run these)
 
@@ -44,7 +44,7 @@ gofmt -l cmd internal main.go third_party   # must print nothing (fix with gofmt
 ## Architecture (layered, no cycles)
 
 ```
-root (main.go) ──> cmd ──> internal/{agenthooks,app,chunk,config,embed,extractor,indexer,pipeline,search,semantic,source,store}
+root (main.go) ──> cmd ──> internal/{agenthooks,app,buildinfo,chunk,config,embed,extractor,indexer,jsonl,pipeline,search,semantic,source,store}
 ```
 
 Keep the layering: `cmd/` orchestrates; `internal/` has no imports from `cmd/` or `root`. Do not introduce cross-boundary imports.
@@ -56,11 +56,11 @@ extractor) are served by an **external process that this repo does not fully own
 Treat every such integration the same way:
 
 - **Monorepo** — the service's code and setup live *inside this repo* (see the
-  existing `tools/xberg_server/` pattern; a planned `tools/semantic/` follows suit),
+  existing `tools/xberg_server/` and `tools/semantic/`),
   not in a separate repository. A capability's absence must never break `seek`; it is
   always **optional**.
 - **Contract-first** — `seek` talks to the service via a stable JSON envelope (see
-  `internal/extractor`; a planned `internal/semantic` will follow the same pattern),
+  `internal/extractor` and `internal/semantic`),
   never its internal model/runtime formats. Switch backend via config (`backend` +
   `base_url`), not code; producers may change without touching consumers.
 - **We do not host the model/LLM runtime.** `seek` does not embed or run the heavy
@@ -125,7 +125,7 @@ ocr:
 
 ## Testing conventions
 
-- Test files exist across all internal packages (`internal/{chunk,config,embed,extractor,indexer,search,source,store}` and `internal/source/parserdef`), including comprehensive tests for embedding clients and batching.
+- Test files exist across the internal packages (`internal/{agenthooks,app,chunk,config,embed,indexer,pipeline,search,semantic,source,store}` and `internal/source/parserdef`), including comprehensive tests for embedding clients and batching.
 - `internal/store` tests open a **real temp SQLite DB** via `t.TempDir()` and require the `fts5 sqlite_fts5` tags.
 - For new store tests, follow `internal/store/store_test.go` (uses `newTestStore(t)` helper + `t.Cleanup`).
 - Benchmarks live in `internal/store/store_test.go` — run with `go test -tags "fts5 sqlite_fts5" -bench . ./internal/store/`.
@@ -147,8 +147,9 @@ ocr:
 - **FTS5 bm25 weighting** — `store.FTSTitleWeight` (10.0) boosts the title column over content. If you add columns to `documents_fts`, update the weight list in `SearchFTS` (SELECT and ORDER BY) — column weights are positional.
 - **`expandEnv` uses `os.ExpandEnv`** — it substitutes `$VAR` and `${VAR}` anywhere in the value (e.g. `"Bearer ${TOKEN}"`), not just whole-value matches. Set undefined vars are left empty.
 - The indexer logs `WARN:` lines and counts `failed` files per sync; previously these errors were silently dropped. New sync code paths should follow this pattern (count failures, surface them in the summary line).
-- **Cross-platform background service (`cmd/service.go`)** — automatically routes to Windows Task Scheduler (`schtasks.exe`) on Windows, `systemd` user timer (`systemctl --user`) on Linux, and `launchd` plist on macOS. Both `sync` and `embed` commands are run by default.
+- **Cross-platform background service (`cmd/service.go`)** — automatically routes to Windows Task Scheduler (`schtasks.exe`) on Windows, `systemd` user timer (`systemctl --user`) on Linux, and `launchd` plist on macOS. It schedules a single `seek sync` invocation; embedding runs in-process as part of sync (no separate `embed` schedule).
 - **Agent hooks (`cmd/hooks.go`)** — Claude Code (`~/.claude/settings.json`) and Codex (`~/.codex/hooks.json`) share the *same* JSON hook schema; `hookTarget` is the single source of truth — add new agents to that list, not as parallel code paths. ZCode is not a registry target: its Stop hook is configured manually in `~/.zcode/cli/config.json` (`hooks.events.Stop`, `enabled: true`) and runs the same `seek hooks sync` subprocess entry without `--agent` (whole-index sync). Stop hooks run agent-scoped `seek sync` and can optionally run realtime `embed` when installed with `--embed`; the binary is resolved via `exec.LookPath` with a PATH-dependent fallback (`"seek"`), never `os.Executable()`.
+- **Optional service scripts have one canonical home** — `tools/{semantic,xberg_server,flashrank_server,embed_server}` own the sources; `skills/seek/scripts/services/` holds generated copies bundled into the standalone skill. Edit the `tools/` side, then run `make skill-services`; never hand-edit the mirror. `TestSkillServiceBundleIsSynchronized` (root package; parses its file list from `scripts/sync-skill-services.py`, so add new files there) fails on stale copies, mirror hand-edits, and unlisted files; CI runs it via `test.yml`, and `skill-services.yml` re-checks stale/missing copies without the Go toolchain. Both trees are pinned `eol=lf` in `.gitattributes` because the comparison is byte-based.
 
 ## Commands surface (for reference)
 
@@ -171,8 +172,8 @@ seek advanced parsers list   # list parser schemas + detection status
 seek config                  # show/edit config
 seek auth login|status       # configure/show embedding provider
 seek service|hooks           # periodic sync+embed service management
-seek status                  # compatibility alias for `seek collection list`
-seek rm <collection>         # compatibility alias (delete path; index only)
+seek status                  # standalone top-level listing (same data as `seek collection list`, its own implementation)
+seek rm <collection>         # standalone top-level remove (index only; source files untouched)
 ```
 
 **Source-file guarantee:** no `seek` management command — `add`, `sync` (incl.

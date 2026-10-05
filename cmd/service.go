@@ -245,7 +245,11 @@ func startDarwinService(bin string, interval int) error {
 		f.Close()
 		return fmt.Errorf("write plist: %w", err)
 	}
-	f.Close()
+	// A plist that fails to close (flush error) must not reach launchctl:
+	// bootstrap would install a silently broken service definition.
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close plist: %w", err)
+	}
 
 	runLaunchctl("bootout", fmt.Sprintf("gui/%d", os.Getuid()), path)
 	out, err := runLaunchctl("bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), path)
@@ -354,7 +358,7 @@ func (c *ServiceStatusCmd) Run(cfg *config.AppConfig) error {
 			return nil
 		}
 
-		out, err := runLaunchctl("print", fmt.Sprintf("gui/%d/%s", os.Getuid(), serviceLabel))
+		_, err := runLaunchctl("print", fmt.Sprintf("gui/%d/%s", os.Getuid(), serviceLabel))
 		if err != nil {
 			fmt.Println("Service installed but not running.")
 			fmt.Printf("  Plist: %s\n", path)
@@ -364,7 +368,6 @@ func (c *ServiceStatusCmd) Run(cfg *config.AppConfig) error {
 		fmt.Println("Service running.")
 		fmt.Printf("  Plist: %s\n", path)
 		fmt.Printf("  Log:   %s\n", logPath())
-		_ = out
 		return nil
 
 	default:
