@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "seek",
-  "version": "0.5.9",
+  "version": "0.5.12",
   "description": "Search local notes, source repositories, and coding agent conversations with hybrid keyword and semantic search.",
   "author": {
     "name": "Ozgur Ulukir",

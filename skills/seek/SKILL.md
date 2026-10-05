@@ -159,7 +159,7 @@ seek collection reindex mycollection --semantic-only  # semantic backfill: re-en
 seek sync mycollection --path <file-or-dir>      # validate path is inside the collection,
                                                   # then sync the WHOLE collection (path is a guard, not a filter)
 
-# Check index status (compatibility alias for `seek collection list`)
+# Check index status (standalone top-level listing; same data as `seek collection list`)
 seek status
 
 # Remove a collection from the index (deletes all indexed documents and chunks)

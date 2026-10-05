@@ -42,7 +42,7 @@ irm https://raw.githubusercontent.com/ozgurulukir/seek/main/install.ps1 | iex
 ```
 
 <details>
-<summary><b>Build from Source</b> (Requires Go 1.24+ and CGO)</summary>
+<summary><b>Build from Source</b> (Requires Go 1.25+ and CGO)</summary>
 
 **Linux / macOS:**
 ```bash
@@ -312,7 +312,7 @@ vector_index:
     dimension: 768          # must match embedding.dimensions
 
 compression:
-  algorithm: zstd           # "zstd" (default) or "none"
+  algorithm: zstd           # "zstd" (default), "lz4", or "none"
   level: 3
 
 semantic:
