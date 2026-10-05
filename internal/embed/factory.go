@@ -180,7 +180,13 @@ func configuredProvider(cfg *config.AppConfig) (Provider, error) {
 	}
 	if cfg.Config.Rerank.Enabled && cfg.Config.Rerank.APIKey != "" &&
 		(!cfg.Config.OfflineOnly() || config.IsNumericLoopbackURL(cfg.Config.Rerank.BaseURL)) {
-		p.Reranker = newRerankClient(cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.APIKey, cfg.Config.Rerank.Model, cfg.Config.OfflineOnly())
+		var reranker Reranker = newRerankClient(cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.APIKey, cfg.Config.Rerank.Model, cfg.Config.OfflineOnly())
+		// rerank.top_n caps the candidate pool sent to the endpoint
+		// (0 = uncapped: rerank everything the search stage fetched).
+		if cfg.Config.Rerank.TopN > 0 {
+			reranker = &cappedReranker{inner: reranker, topN: cfg.Config.Rerank.TopN}
+		}
+		p.Reranker = reranker
 	}
 	p.Capabilities = ProviderCapabilities(cfg)
 	return p, nil

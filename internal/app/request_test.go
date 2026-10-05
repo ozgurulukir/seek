@@ -13,10 +13,22 @@ import (
 
 func newRequestTestRuntime(t *testing.T) *Runtime {
 	t.Helper()
+	return newRequestTestRuntimeWithConfig(t, config.Config{})
+}
+
+// newRequestTestRuntimeWithConfig opens a runtime whose config carries the
+// given overrides on top of a linear vector index. Sections not overridden
+// stay zero-value, mirroring hand-built configs in tests; production configs
+// get their enabled flags defaulted by Load.
+func newRequestTestRuntimeWithConfig(t *testing.T, overrides config.Config) *Runtime {
+	t.Helper()
 	cfg := &config.AppConfig{
 		Config: config.Config{VectorIndex: config.VectorIndexConfig{Backend: "linear"}},
 		DBPath: filepath.Join(t.TempDir(), "seek.db"),
 	}
+	cfg.Config.Search = overrides.Search
+	cfg.Config.Filters = overrides.Filters
+	cfg.Config.Aggregations = overrides.Aggregations
 	runtime, err := Open(cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -183,7 +195,9 @@ func TestRunAggsEmptyIsNil(t *testing.T) {
 }
 
 func TestRunAggsRunsSpecs(t *testing.T) {
-	runtime := newRequestTestRuntime(t)
+	runtime := newRequestTestRuntimeWithConfig(t, config.Config{
+		Aggregations: config.AggregationConfig{Enabled: true},
+	})
 	ctx := context.Background()
 	col, err := runtime.Store.CreateCollection("notes", store.CollectionTypeMarkdown, "/tmp", "**/*.md")
 	if err != nil {
@@ -229,6 +243,100 @@ func TestValidateFastField(t *testing.T) {
 	}
 	if _, err := ValidateFastField(ctx, nil, "nope"); err == nil {
 		t.Error("nil-store unknown field must error")
+	}
+}
+
+// TestRunSearchUsesConfigDefaultLimit pins the search.default_limit wiring:
+// an unset limit (-l absent / MCP limit absent) resolves to the config value,
+// an explicit limit still wins, and no config means the engine default.
+func TestRunSearchUsesConfigDefaultLimit(t *testing.T) {
+	runtime := newRequestTestRuntimeWithConfig(t, config.Config{
+		Search: config.SearchConfig{DefaultLimit: 1},
+	})
+	ctx := context.Background()
+	col, err := runtime.Store.CreateCollection("notes", store.CollectionTypeMarkdown, "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.md", "b.md"} {
+		docID, err := runtime.Store.UpsertDocument(col.ID, "/tmp/"+name, name, "h", 1, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.Store.UpsertFTS(docID, name, "aggregation body text"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Unset limit → config default (1).
+	results, err := runtime.RunSearch(ctx, SearchRequest{Query: "aggregation", Mode: ModeLex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Errorf("unset limit returned %d results, want 1 (search.default_limit)", len(results))
+	}
+
+	// Explicit limit wins over the config default.
+	results, err = runtime.RunSearch(ctx, SearchRequest{Query: "aggregation", Mode: ModeLex, Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Errorf("explicit limit returned %d results, want 2", len(results))
+	}
+}
+
+// TestFiltersDefaultCollection pins the filters.default_collection wiring:
+// it applies only when the request carries no collection/repo filter, and
+// filters.enabled gates it.
+func TestFiltersDefaultCollection(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		filters config.FilterConfig
+		reqCol  string
+		want    int
+	}{
+		{"default collection applies", config.FilterConfig{Enabled: true, DefaultCollection: "notes"}, "", 1},
+		{"explicit collection wins", config.FilterConfig{Enabled: true, DefaultCollection: "notes"}, "other", 1},
+		{"disabled ignores default", config.FilterConfig{Enabled: false, DefaultCollection: "notes"}, "", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := newRequestTestRuntimeWithConfig(t, config.Config{Filters: tc.filters})
+			for _, colName := range []string{"notes", "other"} {
+				col, err := runtime.Store.CreateCollection(colName, store.CollectionTypeMarkdown, "/tmp", "**/*.md")
+				if err != nil {
+					t.Fatal(err)
+				}
+				docID, err := runtime.Store.UpsertDocument(col.ID, "/tmp/"+colName+".md", colName+".md", "h", 1, 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := runtime.Store.UpsertFTS(docID, colName+".md", "aggregation body text"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			results, err := runtime.RunSearch(ctx, SearchRequest{Query: "aggregation", Mode: ModeLex, Collection: tc.reqCol})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(results) != tc.want {
+				t.Errorf("got %d results, want %d", len(results), tc.want)
+			}
+		})
+	}
+}
+
+// TestRunAggsDisabledErrors pins the aggregations.enabled gate.
+func TestRunAggsDisabledErrors(t *testing.T) {
+	runtime := newRequestTestRuntimeWithConfig(t, config.Config{
+		Aggregations: config.AggregationConfig{Enabled: false},
+	})
+	_, err := runtime.RunAggs(context.Background(), SearchRequest{Aggs: []string{"type:terms"}})
+	if err == nil || !strings.Contains(err.Error(), "aggregations are disabled") {
+		t.Fatalf("RunAggs with aggregations disabled err = %v, want the disabled message", err)
 	}
 }
 

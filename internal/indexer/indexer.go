@@ -256,6 +256,15 @@ func (idx *Indexer) warnf(format string, v ...interface{}) {
 	log.Printf(format, v...)
 }
 
+// warnExtraction logs the non-fatal warnings an extractor attached to a
+// successful Result (e.g. per-page OCR failures on scanned PDFs). Each one
+// counts toward the sync summary so partial extraction stays visible.
+func (idx *Indexer) warnExtraction(path string, res extractor.Result) {
+	for _, w := range res.Warnings {
+		idx.warnf("  WARN: extract %s: %s\n", path, w)
+	}
+}
+
 func (idx *Indexer) addReport(report SyncReport) {
 	idx.mu.Lock()
 	idx.report.add(report)

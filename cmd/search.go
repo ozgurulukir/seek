@@ -17,7 +17,7 @@ type SearchCmd struct {
 	Query string `arg:"" help:"Search query"`
 	Lex   bool   `help:"BM25 full-text search only"`
 	Vec   bool   `help:"Vector semantic search only"`
-	Limit int    `short:"l" default:"10" help:"Max results"`
+	Limit int    `short:"l" help:"Max results (default: search.default_limit in config, else 10)"`
 
 	// Default surface: the primary query -> filter -> run flow shown directly
 	// in `search --help`. Everything below stays ungrouped so kong renders it

@@ -291,7 +291,7 @@ rerank:
   base_url: http://127.0.0.1:8000
   api_key: local
   model: ms-marco-TinyBERT-L-2-v2
-  top_n: 10
+  top_n: 10                 # cap candidates sent to the reranker (omit = all)
 
 extractor:
   backend: builtin          # "builtin" or "xberg"
@@ -300,7 +300,7 @@ extractor:
 
 search:
   query_mode: parsed        # "parsed" (AST) or "raw" (FTS5 passthrough)
-  default_limit: 20
+  default_limit: 10         # default max results (-l / MCP limit override this)
   rrf_k: 60
 
 vector_index:
@@ -309,7 +309,6 @@ vector_index:
     m: 16
     ef_search: 50
     persist_path: ~/.cache/seek/hnsw.index
-    dimension: 768          # must match embedding.dimensions
 
 compression:
   algorithm: zstd           # "zstd" (default), "lz4", or "none"

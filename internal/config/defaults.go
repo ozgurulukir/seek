@@ -72,13 +72,12 @@ const (
 
 	// DefaultRerankModel is the default model for cross-encoder reranking.
 	DefaultRerankModel = "bge-reranker-large"
-	// DefaultRerankTopN is the default number of candidate hits to rerank.
-	DefaultRerankTopN = 10
 
 	// DefaultQueryMode is the default query parsing mode.
 	DefaultQueryMode = "parsed"
-	// DefaultSearchLimit is the default search result limit.
-	DefaultSearchLimit = 20
+	// DefaultSearchLimit is the default search result limit when neither the
+	// CLI (-l) nor an MCP limit argument specifies one.
+	DefaultSearchLimit = 10
 	// DefaultAnalyzeLang is the default query analysis language (English).
 	DefaultAnalyzeLang = "en"
 	// DefaultRRFK is the default RRF constant.
@@ -92,8 +91,6 @@ const (
 	DefaultHNSEFConstruction = 100
 	// DefaultHNSEFSearch is the default HNSW efSearch.
 	DefaultHNSEFSearch = 50
-	// DefaultHNSWDimension is the default HNSW dimension.
-	DefaultHNSWDimension = 1024
 
 	// DefaultCompressionAlgorithm is the default compression algorithm.
 	DefaultCompressionAlgorithm = "zstd"
@@ -105,8 +102,9 @@ const (
 	// text read). "xberg" delegates to a remote xberg serve HTTP API that
 	// handles 100+ document formats.
 	DefaultExtractorBackend = "builtin"
-	// DefaultXbergBaseURL is the default xberg serve endpoint.
-	DefaultXbergBaseURL = "http://127.0.0.1:8000"
+	// DefaultXbergBaseURL is the default xberg serve endpoint. Must match the
+	// port tools/xberg_server/server.py binds (8001); 8000 is flashrank_server.
+	DefaultXbergBaseURL = "http://127.0.0.1:8001"
 	// DefaultXbergTimeout is the default timeout for xberg extraction requests.
 	// Document extraction (esp. OCR) can be slow, so this is generous.
 	DefaultXbergTimeout = 180 * time.Second

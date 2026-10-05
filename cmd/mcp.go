@@ -28,7 +28,7 @@ type McpCmd struct{}
 // app planner; this struct is transport-only.
 type mcpSearchArgs struct {
 	Query      string   `json:"query" jsonschema:"the search query (required)"`
-	Limit      int      `json:"limit,omitempty" jsonschema:"max results to return, capped at 100 (default 10)"`
+	Limit      int      `json:"limit,omitempty" jsonschema:"max results to return, capped at 100 (default: search.default_limit in config, else 10)"`
 	Lex        bool     `json:"lex,omitempty" jsonschema:"BM25 full-text search only"`
 	Vec        bool     `json:"vec,omitempty" jsonschema:"vector semantic search only (requires a configured embedding API key)"`
 	Collection string   `json:"collection,omitempty" jsonschema:"filter by collection name"`
@@ -114,11 +114,11 @@ func buildMCPServerWithServices(runtime *app.Runtime, cfg *config.AppConfig) (*m
 			"Fields match `seek search --json`. When aggs is passed, the response carries a second text block with aggregation buckets keyed by spec.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args mcpSearchArgs) (*mcp.CallToolResult, any, error) {
 		limit := args.Limit
-		if limit <= 0 {
-			limit = 10
-		} else if limit > maxMCPResults {
+		if limit > maxMCPResults {
 			limit = maxMCPResults
 		}
+		// limit <= 0 stays unset: the request planner resolves it from
+		// search.default_limit in config, then the engine default.
 		searchArgs := args
 		searchArgs.Limit = limit
 		results, err := runtime.RunSearch(ctx, searchArgs.searchRequest())

@@ -35,6 +35,21 @@ func NewRerankClient(baseURL, apiKey, model string) *RerankClient {
 	return newRerankClient(baseURL, apiKey, model, false)
 }
 
+// cappedReranker limits how many candidate documents reach the rerank
+// endpoint (rerank.top_n). Truncation is a prefix cut, so the indices the
+// endpoint returns still line up with the caller's full candidate slice.
+type cappedReranker struct {
+	inner Reranker
+	topN  int
+}
+
+func (c *cappedReranker) Rerank(ctx context.Context, query string, documents []string, topN int) ([]RerankResult, error) {
+	if c.topN > 0 && len(documents) > c.topN {
+		documents = documents[:c.topN]
+	}
+	return c.inner.Rerank(ctx, query, documents, topN)
+}
+
 func newRerankClient(baseURL, apiKey, model string, offline bool) *RerankClient {
 	return &RerankClient{
 		baseURL: strings.TrimRight(baseURL, "/"),

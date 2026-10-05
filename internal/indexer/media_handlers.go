@@ -115,6 +115,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 			failed++
 			continue
 		}
+		idx.warnExtraction(f.Path, res)
 
 		pageCount := len(res.Pages)
 		var pageText strings.Builder

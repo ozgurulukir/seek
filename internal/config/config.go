@@ -136,7 +136,9 @@ type RerankConfig struct {
 	BaseURL string `yaml:"base_url,omitempty"`
 	APIKey  string `yaml:"api_key,omitempty"`
 	Model   string `yaml:"model,omitempty"`
-	TopN    int    `yaml:"top_n,omitempty"`
+	// TopN caps how many candidate hits are sent to the reranker (0 = all
+	// candidates, i.e. follow the search limit's candidate pool).
+	TopN int `yaml:"top_n,omitempty"`
 	// Host and Port configure the optional local reranker service.
 	// They are consumed by tools/flashrank_server; seek itself uses BaseURL.
 	Host string `yaml:"host,omitempty"`
@@ -151,19 +153,23 @@ type SearchConfig struct {
 	// AnalyzeLang is the default analysis/stemming language ("en" or "tr"),
 	// applied when --analyze-lang is not passed on the CLI.
 	AnalyzeLang string `yaml:"analyze_lang,omitempty"`
-	// DefaultLimit is the default max results when not specified via CLI.
+	// DefaultLimit is the default max results when neither the CLI (-l) nor
+	// an MCP limit argument specifies one.
 	DefaultLimit int `yaml:"default_limit,omitempty"`
 	// RRFK is the RRF (Reciprocal Rank Fusion) constant.
 	RRFK int `yaml:"rrf_k,omitempty"`
 }
 
-// FilterConfig configures filter behavior.
+// FilterConfig configures filter behavior. Enabled gates the default
+// collection filter; DefaultCollection is applied when a search request
+// carries no explicit collection/repo filter.
 type FilterConfig struct {
 	Enabled           bool   `yaml:"enabled,omitempty"`
 	DefaultCollection string `yaml:"default_collection,omitempty"`
 }
 
-// AggregationConfig configures aggregation behavior.
+// AggregationConfig configures aggregation behavior. Enabled gates the
+// --aggs search flag and the MCP aggs argument.
 type AggregationConfig struct {
 	Enabled bool `yaml:"enabled,omitempty"`
 }
@@ -182,7 +188,9 @@ type HNSWConfig struct {
 	EFConstruction int    `yaml:"ef_construction,omitempty"` // reserved; coder/hnsw v0.6.1 has no public field for this
 	EFSearch       int    `yaml:"ef_search,omitempty"`
 	PersistPath    string `yaml:"persist_path,omitempty"`
-	Dimension      int    `yaml:"dimension,omitempty"`
+	// Dimension is deliberately absent: the index dimension always follows
+	// embedding.dimensions (fixed at index time), so a separate knob would
+	// only invite mismatches.
 }
 
 // CompressionConfig configures chunk content compression.
@@ -204,7 +212,7 @@ type ExtractorConfig struct {
 	// OutputFormat is the text format requested from xberg ("plain", "markdown",
 	// "djot", "html"). Ignored by the builtin backend.
 	OutputFormat string `yaml:"output_format,omitempty"`
-	// XbergBaseURL is the xberg serve endpoint (e.g. http://127.0.0.1:8000).
+	// XbergBaseURL is the xberg serve endpoint (e.g. http://127.0.0.1:8001).
 	XbergBaseURL string `yaml:"xberg_base_url,omitempty"`
 	// Timeout is the per-request timeout for xberg extraction. Defaults to
 	// DefaultXbergTimeout when zero.
@@ -374,7 +382,6 @@ func defaultAppConfig(cacheD string) *AppConfig {
 					EFConstruction: DefaultHNSEFConstruction,
 					EFSearch:       DefaultHNSEFSearch,
 					PersistPath:    filepath.Join(cacheD, "hnsw.index"),
-					Dimension:      DefaultHNSWDimension,
 				},
 			},
 			Compression: CompressionConfig{
@@ -421,9 +428,9 @@ func applyFallbacks(cfg *Config) {
 	if cfg.Rerank.Model == "" {
 		cfg.Rerank.Model = DefaultRerankModel
 	}
-	if cfg.Rerank.TopN == 0 {
-		cfg.Rerank.TopN = DefaultRerankTopN
-	}
+	// Rerank.TopN is intentionally NOT defaulted: 0 means "no cap" (rerank
+	// the full candidate pool). A forced default would silently truncate
+	// results for searches whose limit exceeds it.
 
 	// Extractor defaults: fill any unset field. BaseURL may embed env vars
 	// (e.g. ${XBERG_HOST}), so expand it like the API keys above.

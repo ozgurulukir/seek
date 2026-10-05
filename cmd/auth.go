@@ -279,8 +279,12 @@ func (c *AuthStatusCmd) Run(cfg *config.AppConfig) error {
 	}
 
 	if cfg.Config.Rerank.Enabled {
-		fmt.Printf("Re-ranking: enabled (model: %s, endpoint: %s, top_n: %d)\n",
-			cfg.Config.Rerank.Model, cfg.Config.Rerank.BaseURL, cfg.Config.Rerank.TopN)
+		topN := "auto"
+		if cfg.Config.Rerank.TopN > 0 {
+			topN = fmt.Sprintf("%d", cfg.Config.Rerank.TopN)
+		}
+		fmt.Printf("Re-ranking: enabled (model: %s, endpoint: %s, top_n: %s)\n",
+			cfg.Config.Rerank.Model, cfg.Config.Rerank.BaseURL, topN)
 	} else {
 		fmt.Printf("Re-ranking: disabled\n")
 	}

@@ -3,10 +3,13 @@ package embed_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
+	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/embed"
 )
 
@@ -61,5 +64,46 @@ func TestRerankClient(t *testing.T) {
 	}
 	if results[1].Index != 0 || results[1].RelevanceScore != 0.35 {
 		t.Errorf("unexpected second result: %+v", results[1])
+	}
+}
+
+// TestRerankTopNCapsCandidatePool pins the rerank.top_n wiring: the provider
+// wraps its reranker so only the first top_n candidates reach the endpoint,
+// while the returned indices stay aligned with the caller's full slice.
+func TestRerankTopNCapsCandidatePool(t *testing.T) {
+	var gotDocs atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Documents []string `json:"documents"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		gotDocs.Store(int32(len(req.Documents)))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"results":[{"index":1,"relevance_score":0.9}]}`)
+	}))
+	defer ts.Close()
+
+	cfg := &config.AppConfig{Config: config.Config{
+		Rerank: config.RerankConfig{Enabled: true, BaseURL: ts.URL, APIKey: "k", Model: "m", TopN: 2},
+	}}
+	provider, err := embed.NewProviderFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("NewProviderFromConfig: %v", err)
+	}
+	if provider.Reranker == nil {
+		t.Fatal("configured rerank provider has no reranker")
+	}
+
+	results, err := provider.Reranker.Rerank(context.Background(), "q", []string{"a", "b", "c", "d", "e"}, 10)
+	if err != nil {
+		t.Fatalf("Rerank: %v", err)
+	}
+	if got := gotDocs.Load(); got != 2 {
+		t.Errorf("endpoint received %d documents, want 2 (rerank.top_n cap)", got)
+	}
+	if len(results) != 1 || results[0].Index != 1 {
+		t.Errorf("unexpected results: %+v (index must map into the caller's full slice)", results)
 	}
 }

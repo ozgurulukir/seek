@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -20,7 +22,7 @@ import (
 // in the adapters.
 type SearchRequest struct {
 	Query string
-	Limit int // <=0 falls back to the engine default
+	Limit int // <=0 falls back to search.default_limit, then the engine default
 	Mode  SearchMode
 
 	// Filter slots. Collection and Repo: Repo is an alias that also filters
@@ -172,6 +174,23 @@ func (r *Runtime) buildRequestFilters(ctx context.Context, req SearchRequest) (*
 	if colName == "" {
 		colName = req.Repo
 	}
+	// filters.default_collection applies only when the request carries no
+	// explicit collection/repo filter, and only when filtering is enabled.
+	// An unknown name must error, not silently blind every search to zero
+	// results (the collection subquery would resolve to NULL).
+	if colName == "" {
+		if cfg := r.config(); cfg != nil && cfg.Config.Filters.Enabled {
+			colName = cfg.Config.Filters.DefaultCollection
+			if colName != "" && r.Store != nil {
+				if _, err := r.Store.GetCollectionByName(colName); err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						return nil, fmt.Errorf("filters.default_collection %q does not match any collection (see `seek collection list`)", colName)
+					}
+					return nil, fmt.Errorf("resolve filters.default_collection: %w", err)
+				}
+			}
+		}
+	}
 
 	filters := search.NewFilterSet()
 	if colName != "" {
@@ -243,6 +262,13 @@ func (r *Runtime) buildRequestFilters(ctx context.Context, req SearchRequest) (*
 
 // RunSearch plans and executes req against the engine owned by the runtime.
 func (r *Runtime) RunSearch(ctx context.Context, req SearchRequest) ([]search.Result, error) {
+	if req.Limit <= 0 {
+		// search.default_limit resolves the unset CLI -l flag / MCP limit
+		// argument; the engine's DefaultLimit is the final fallback.
+		if cfg := r.config(); cfg != nil && cfg.Config.Search.DefaultLimit > 0 {
+			req.Limit = cfg.Config.Search.DefaultLimit
+		}
+	}
 	opts, err := r.planSearch(ctx, req)
 	if err != nil {
 		return nil, err
@@ -267,6 +293,9 @@ func (r *Runtime) RunSearch(ctx context.Context, req SearchRequest) ([]search.Re
 func (r *Runtime) RunAggs(ctx context.Context, req SearchRequest) (map[string][]search.Bucket, error) {
 	if len(req.Aggs) == 0 {
 		return nil, nil
+	}
+	if cfg := r.config(); cfg != nil && !cfg.Config.Aggregations.Enabled {
+		return nil, fmt.Errorf("aggregations are disabled (set aggregations.enabled: true in config.yaml)")
 	}
 	opts, err := r.planSearch(ctx, req)
 	if err != nil {

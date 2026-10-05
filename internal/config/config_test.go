@@ -154,8 +154,10 @@ func TestApplyFallbacks(t *testing.T) {
 	if cfg.Rerank.Model != DefaultRerankModel {
 		t.Errorf("Rerank.Model = %q, want %q", cfg.Rerank.Model, DefaultRerankModel)
 	}
-	if cfg.Rerank.TopN != DefaultRerankTopN {
-		t.Errorf("Rerank.TopN = %d, want %d", cfg.Rerank.TopN, DefaultRerankTopN)
+	// TopN is intentionally left at 0 ("no cap") when unset — a forced
+	// default would silently truncate results for searches with limit > top_n.
+	if cfg.Rerank.TopN != 0 {
+		t.Errorf("Rerank.TopN = %d, want 0 (no cap when unset)", cfg.Rerank.TopN)
 	}
 
 	if cfg.Extractor.Backend != DefaultExtractorBackend {
@@ -240,8 +242,8 @@ func TestLoad_EnvVarPropagation(t *testing.T) {
 	if got := ac.Config.Rerank.Model; got != DefaultRerankModel {
 		t.Errorf("Rerank.Model = %q, want %q", got, DefaultRerankModel)
 	}
-	if got := ac.Config.Rerank.TopN; got != DefaultRerankTopN {
-		t.Errorf("Rerank.TopN = %d, want %d", got, DefaultRerankTopN)
+	if got := ac.Config.Rerank.TopN; got != 0 {
+		t.Errorf("Rerank.TopN = %d, want 0 (no cap when unset)", got)
 	}
 }
 
