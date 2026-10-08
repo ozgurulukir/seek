@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 // seekBinaryPath resolves the installed seek binary for hook command
@@ -185,6 +186,30 @@ func isSeekHookCommand(command string) bool {
 	return directSeekHookCommandPattern.MatchString(command) || isLegacyCodexWrapper(command)
 }
 
+var (
+	targetPatternCache = make(map[string]*regexp.Regexp)
+	targetPatternMu    sync.RWMutex
+)
+
+// PERF: memoize target regexes so regexp.MustCompile isn't called on every command check.
+func getTargetPattern(pattern string) *regexp.Regexp {
+	targetPatternMu.RLock()
+	re, ok := targetPatternCache[pattern]
+	targetPatternMu.RUnlock()
+	if ok {
+		return re
+	}
+
+	targetPatternMu.Lock()
+	defer targetPatternMu.Unlock()
+	if re, ok := targetPatternCache[pattern]; ok {
+		return re
+	}
+	re = regexp.MustCompile(pattern)
+	targetPatternCache[pattern] = re
+	return re
+}
+
 func isTargetSeekHookCommand(command string, target Target) bool {
 	if !isSeekHookCommand(command) {
 		return false
@@ -200,7 +225,8 @@ func isTargetSeekHookCommand(command string, target Target) bool {
 		}
 		pattern += `(?:\s+--embed)?`
 	}
-	return regexp.MustCompile(pattern + `\s*$`).MatchString(command)
+	pattern += `\s*$`
+	return getTargetPattern(pattern).MatchString(command)
 }
 
 var hookExecutablePattern = regexp.MustCompile(`^(?:'([^']+)'|"([^"]+)"|(\S+))\s+hooks\s+`)
