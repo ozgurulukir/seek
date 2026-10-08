@@ -49,7 +49,7 @@ func ScanClaudeFilesContext(ctx context.Context) ([]ConversationFile, error) {
 	projectsDir := filepath.Join(home, ".claude", "projects")
 
 	if _, err := os.Stat(projectsDir); os.IsNotExist(err) {
-		return nil, fmt.Errorf("claude projects directory not found: %s", projectsDir)
+		return nil, fmt.Errorf("%w: claude projects directory not found: %s", ErrUnavailable, projectsDir)
 	}
 
 	var files []ConversationFile

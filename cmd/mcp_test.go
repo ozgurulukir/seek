@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
 )
@@ -302,4 +304,73 @@ func TestMCPSearch_AgentArguments(t *testing.T) {
 		}
 	})
 
+}
+
+func TestMCPUnavailableVectorHasStructuredFallback(t *testing.T) {
+	server, client := newMCPTestServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st, ct := mcp.NewInMemoryTransports()
+	go server.Run(ctx, st)
+	session, err := client.Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	capabilities, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "seek_capabilities", Arguments: map[string]any{}})
+	if err != nil || capabilities.IsError {
+		t.Fatalf("capabilities=%v err=%v", capabilities, err)
+	}
+	var caps map[string]any
+	if err := json.Unmarshal([]byte(capabilities.Content[0].(*mcp.TextContent).Text), &caps); err != nil {
+		t.Fatal(err)
+	}
+	if caps["lexical"] != true || caps["vector"] != false || capabilities.StructuredContent == nil {
+		t.Fatalf("caps=%v", caps)
+	}
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "seek_search", Arguments: map[string]any{"query": "anything", "vec": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError || result.StructuredContent == nil {
+		t.Fatalf("result=%+v", result)
+	}
+	var detail struct {
+		Code     string `json:"code"`
+		Fallback struct {
+			Lex bool `json:"lex"`
+			Vec bool `json:"vec"`
+		} `json:"fallback"`
+	}
+	if err := json.Unmarshal([]byte(result.Content[0].(*mcp.TextContent).Text), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Code != "vector_unavailable" || !detail.Fallback.Lex || detail.Fallback.Vec {
+		t.Fatalf("detail=%+v", detail)
+	}
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "seek_search", Arguments: map[string]any{"query": "anything", "lex": true, "vec": false}})
+	if err != nil || result.IsError {
+		t.Fatalf("fallback=%v err=%v", result, err)
+	}
+}
+
+func TestMCPCapabilitiesHonorOfflineOnlyPolicy(t *testing.T) {
+	cfg := &config.AppConfig{Config: config.Config{
+		Privacy:   config.PrivacyConfig{OfflineOnly: true},
+		Embedding: config.EmbeddingConfig{BaseURL: "https://api.openai.com/v1", APIKey: "test-key"},
+	}}
+	// offline_only still hands back a client object, but it refuses every
+	// non-loopback endpoint — so capabilities must not promise vector search,
+	// matching what `seek sync --json` reports as embeddings=unavailable.
+	client := embed.NewClientFromConfig(cfg)
+	if client == nil {
+		t.Fatal("expected an offline client object for this fixture")
+	}
+	caps := mcpSearchCapabilities(&app.Runtime{EmbedClient: client}, cfg)
+	if caps["vector"] != false {
+		t.Fatalf("caps=%v", caps)
+	}
+	if reason, _ := caps["vector_reason"].(string); !strings.Contains(reason, "offline_only") {
+		t.Fatalf("vector_reason=%v", caps["vector_reason"])
+	}
 }

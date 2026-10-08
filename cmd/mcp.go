@@ -14,6 +14,7 @@ import (
 	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/buildinfo"
 	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
 )
@@ -151,6 +152,15 @@ func buildMCPServerWithServices(runtime *app.Runtime, cfg *config.AppConfig) (*m
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "seek", Version: buildinfo.Version}, nil)
 
+	mcp.AddTool(server, &mcp.Tool{Name: "seek_capabilities", Description: "Report lexical/vector search availability and the lexical fallback arguments."},
+		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+			capabilities := mcpSearchCapabilities(runtime, cfg)
+			payload, err := json.Marshal(capabilities)
+			if err != nil {
+				return nil, nil, err
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(payload)}}, StructuredContent: capabilities}, nil, nil
+		})
 	searchSchema, err := mcpSearchSchema()
 	if err != nil {
 		return nil, fmt.Errorf("search schema: %w", err)
@@ -177,6 +187,14 @@ func buildMCPServerWithServices(runtime *app.Runtime, cfg *config.AppConfig) (*m
 		searchArgs.Limit = limit
 		results, err := runtime.RunSearch(ctx, searchArgs.searchRequest())
 		if err != nil {
+			if errors.Is(err, app.ErrVectorUnavailable) {
+				detail := map[string]any{"code": "vector_unavailable", "error": err.Error(), "capabilities": mcpSearchCapabilities(runtime, cfg), "fallback": map[string]any{"lex": true, "vec": false}}
+				payload, marshalErr := json.Marshal(detail)
+				if marshalErr != nil {
+					return nil, nil, marshalErr
+				}
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: string(payload)}}, StructuredContent: detail}, nil, nil
+			}
 			return nil, nil, err
 		}
 		// Parity with `seek search --json`: chunk-level hits get full
@@ -342,4 +360,18 @@ func (mcpLogger) Printf(format string, v ...interface{}) {
 	// stdout carries the MCP protocol; diagnostics must go to stderr. The
 	// engine already prefixes messages with "  WARN:" — pass through as-is.
 	fmt.Fprintf(os.Stderr, format, v...)
+}
+
+func mcpSearchCapabilities(runtime *app.Runtime, cfg *config.AppConfig) map[string]any {
+	// Availability must describe what vector search can actually do, not just
+	// whether a client object exists: under offline_only a non-loopback
+	// endpoint yields a network-refusing client, so the pipeline embeds
+	// nothing and this must agree with the `embeddings` field of
+	// `seek sync --json`.
+	capable, reason := embed.EmbeddingCapability(cfg)
+	available := capable && (runtime.EmbedClient != nil || runtime.VLClient != nil)
+	if !available && reason == "" {
+		reason = "embedding client unavailable"
+	}
+	return map[string]any{"lexical": true, "vector": available, "vector_reason": reason, "fallback": map[string]any{"lex": true, "vec": false}}
 }

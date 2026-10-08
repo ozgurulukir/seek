@@ -176,7 +176,7 @@ Expose your entire seek index to AI agents via the [Model Context Protocol](http
 seek mcp          # MCP server on stdio (JSON-RPC 2.0)
 ```
 
-**Tools:** `seek_search` (hybrid search with the full filter/facet/sort surface, same fields as `seek search --json`), `seek_fields` (fast-field discovery and values), `seek_status` (collections + counts), `seek_autocomplete` (prefix suggestions).
+**Tools:** `seek_search` (hybrid search with the full filter/facet/sort surface, same fields as `seek search --json`), `seek_fields` (fast-field discovery and values), `seek_status` (collections + counts), `seek_capabilities` (search availability and lexical fallback), `seek_autocomplete` (prefix suggestions).
 
 **Claude Code** — add to `~/.claude.json` (or project `.mcp.json`):
 
@@ -212,6 +212,8 @@ seek add --copilot                 # GitHub Copilot CLI sessions
 seek add --hermes                  # Hermes Agent sessions
 seek add --parser zcode            # ZCode sessions (~/.zcode/cli/rollout)
 seek sync                          # incremental index update then embed new chunks
+seek sync --json                   # collection status/counts on stdout; progress on stderr
+seek sync --strict                 # also fail on unavailable sources or embeddings
 seek sync --no-embed               # index only (keyword-first: skip embedding entirely)
 seek sync --realtime               # force the realtime request batch (used by stop-hooks)
 seek sync <col> --path <p>         # validate <p> is inside <col>, then sync the whole collection
@@ -267,6 +269,8 @@ seek advanced parsers list        # view parser schemas and detection status
 > deletes, or renames your source files. Every command only reads your files
 > and manages the local index (SQLite database, FTS, fast fields, vector
 > index); your files remain the source of truth.
+
+During bulk sync, absent auto-discovered conversation sources are reported as `skipped` warnings. An explicitly selected missing source and any indexing failure return a nonzero exit status. `--strict` also fails on skipped sources or unavailable embeddings; `--no-embed` remains an intentional skip. `--json` emits an array of collection reports with `status`, counts, errors, and embedding availability.
 
 If no embedding provider is configured, `seek sync` still succeeds — it prints
 a single "skip embeddings … run `seek auth login`" hint, leaves chunks pending,

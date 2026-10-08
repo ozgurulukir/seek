@@ -10,15 +10,8 @@ on:
       - "skills/seek/scripts/services/**"
       - "scripts/sync-skill-services.py"
       - ".github/workflows/skill-services.yml"
+  # Required check-bundle must be emitted even when a PR changes other paths.
   pull_request:
-    paths:
-      - "tools/semantic/**"
-      - "tools/xberg_server/**"
-      - "tools/flashrank_server/**"
-      - "tools/embed_server/**"
-      - "skills/seek/scripts/services/**"
-      - "scripts/sync-skill-services.py"
-      - ".github/workflows/skill-services.yml"
   workflow_dispatch:
 
 permissions:

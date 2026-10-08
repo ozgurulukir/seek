@@ -232,6 +232,7 @@ func detectSQLiteSource(def *ParserDef) (*SourceSpec, *VersionSpec, []string, er
 }
 
 func detectSQLiteSourceContext(ctx context.Context, def *ParserDef) (*SourceSpec, *VersionSpec, []string, error) {
+	foundFiles := false
 	for si := range def.Sources {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, nil, err
@@ -252,6 +253,7 @@ func detectSQLiteSourceContext(ctx context.Context, def *ParserDef) (*SourceSpec
 		if len(files) == 0 {
 			continue
 		}
+		foundFiles = true
 		// Try version detection against the first openable DB.
 		// Per the plan: "version detect first DB'ye göre yapılır."
 		var matchedVer *VersionSpec
@@ -286,8 +288,11 @@ func detectSQLiteSourceContext(ctx context.Context, def *ParserDef) (*SourceSpec
 			}
 		}
 	}
-	return nil, nil, nil, fmt.Errorf("parser %q: no matching source/version found (checked %d sources)",
-		def.Name, len(def.Sources))
+	err := fmt.Errorf("parser %q: no matching source/version found (checked %d sources)", def.Name, len(def.Sources))
+	if !foundFiles {
+		err = fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return nil, nil, nil, err
 }
 
 var (

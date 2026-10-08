@@ -8,15 +8,18 @@
 |---|---|---|
 | `seek_search` | `query` (required); `limit` (≤100), `lex`, `vec`; filters `collection`, `repo`, `doc_type`, `lang`, `tag`, `after`/`before` (RFC3339), `chunk_type`, `path` (GLOB), `workspace`, `field` (`name:value` list); `sort_by`/`sort_order`; `context` (surrounding chunks); `aggs` | JSON array of results — **same field names as `seek search --json`** (shared wire contract). With `aggs`, a second text block carries `{spec: [{key, count}]}` buckets |
 | `seek_fields` | `field` (omit for summary), `collection`, `prefix`, `limit` | No field → summary of all fields (`total_docs`, `fields[]` with `field_name`, `match_mode`, `distinct_values`, `doc_count`, `coverage_percent`); with field → JSON array of `{value, count}`. Same shapes as `seek fields --json` |
+| `seek_capabilities` | — | Structured JSON: `lexical`, `vector`, `vector_reason`, and suggested `fallback` arguments |
 | `seek_status` | — | JSON array of `{name, type, documents, chunks}` |
 | `seek_autocomplete` | `prefix` (required), `max` | `{query, suggestions[]}` |
 
 `content_kind` tells the agent what `content` holds: `"full"` (whole chunk text, chunk-level vector hits) or `"snippet"` (40-token FTS excerpt, document-level BM25/hybrid hits). See the [JSON output](#) contract in the README for details.
 
+Explicit `vec: true` stays an error when no embedding client is available. The error includes `isError: true`, structured `code: "vector_unavailable"`, the reason, and `fallback: {"lex": true, "vec": false}`. Clients can inspect `seek_capabilities` before choosing a mode, then retry lexical search deliberately. Availability combines an initialized embedding client with a configuration that permits using it — the same state `seek sync --json` reports as `embeddings` — but it does not promise endpoint health or indexed vectors.
+
 ## Read-only surface
 
 Every `seek mcp` tool is **read-only**: `seek_search`, `seek_fields`,
-`seek_status`, and `seek_autocomplete` only query the local index. There are no
+`seek_status`, `seek_capabilities`, and `seek_autocomplete` only query the local index. There are no
 write tools — collection lifecycle commands (`seek collection
 rename`/`reindex`, `seek sync --path`, `seek rm`) intentionally stay on the
 CLI and are never exposed to agents. `seek_status` keeps its stable

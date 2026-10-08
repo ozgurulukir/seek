@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,7 +11,11 @@ import (
 	"github.com/ozgurulukir/seek/internal/agenthooks"
 	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/embed"
+	"github.com/ozgurulukir/seek/internal/indexer"
 	"github.com/ozgurulukir/seek/internal/pipeline"
+	"github.com/ozgurulukir/seek/internal/source"
+	"github.com/ozgurulukir/seek/internal/source/parserdef"
 )
 
 type SyncCmd struct {
@@ -19,6 +24,8 @@ type SyncCmd struct {
 	Path       string `help:"Validate that PATH is inside the named collection, then sync the whole collection (security guard: the sync is collection-scoped, not path-scoped)"`
 	NoEmbed    bool   `help:"Skip embedding newly synced chunks (keyword-only)"`
 	Realtime   bool   `help:"Force the realtime request batch for embedding"`
+	JSON       bool   `help:"Emit collection outcomes as JSON (progress goes to stderr)"`
+	Strict     bool   `help:"Fail on unavailable sources or skipped embeddings, as well as indexing errors"`
 	NoLock     bool   `hidden:""`
 }
 
@@ -71,13 +78,23 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 			VectorIndex: true,
 			SkipEmbed:   c.NoEmbed,
 		}, pipeline.NewStdoutLogger(os.Stderr))
-		if err != nil {
-			return fmt.Errorf("sync %q with path %q: %w", c.Collection, c.Path, err)
+		outcome, failed := c.syncOutcome(cfg, report, err)
+		if c.JSON {
+			if emitErr := c.emitSyncOutcomes([]syncOutcome{outcome}); emitErr != nil {
+				return emitErr
+			}
+		} else if err == nil {
+			// Only a run that reached the indexer may claim the path guard was
+			// honoured and report collection-wide counts; a validation or stage
+			// error goes to stderr without a false success line on stdout.
+			fmt.Printf("Synced %q: %d indexed, %d skipped, %d unsupported, %d failed (path %q validated inside collection; status=%s embeddings=%s)\n", c.Collection, outcome.Indexed, outcome.Skipped, outcome.Unsupported, outcome.Failed, c.Path, outcome.Status, outcome.Embeddings)
 		}
-		// The counts are collection-wide (the path is only a validated guard,
-		// not the scope), so the message must not attribute them to the path.
-		fmt.Printf("Synced %q: %d indexed, %d skipped, %d unsupported, %d failed (path %q validated inside collection)\n",
-			c.Collection, report.Indexed, report.Skipped, report.Unsupported, report.Failed, c.Path)
+		if failed {
+			if err != nil {
+				return fmt.Errorf("sync %q with path %q failed: %w", c.Collection, c.Path, err)
+			}
+			return fmt.Errorf("sync %q with path %q failed: %s", c.Collection, c.Path, outcome.Reason)
+		}
 		return nil
 	}
 
@@ -86,12 +103,8 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 		return err
 	}
 
-	if len(collections) == 0 {
-		fmt.Println("No collections. Use 'seek add' to add one.")
-		return nil
-	}
-
 	var failedNames []string
+	outcomes := make([]syncOutcome, 0, len(collections))
 
 	for i := range collections {
 		col := &collections[i]
@@ -104,21 +117,95 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 
 		fmt.Fprintf(os.Stderr, "Syncing %q (%s)...\n", col.Name, col.Type)
 
-		_, err := runtime.Pipeline.Sync(ctx, col, pipeline.Options{
+		report, err := runtime.Pipeline.Sync(ctx, col, pipeline.Options{
 			Type:        c.Type,
 			Realtime:    c.Realtime,
 			VectorIndex: true,
 			SkipEmbed:   c.NoEmbed,
 		}, pipeline.NewStdoutLogger(os.Stderr))
-		if err != nil {
+		outcome, failed := c.syncOutcome(cfg, report, err)
+		outcomes = append(outcomes, outcome)
+		if failed {
 			failedNames = append(failedNames, col.Name)
-			fmt.Fprintf(os.Stderr, "  ERROR [%s]: %v\n", col.Name, err)
+		}
+		if outcome.Reason != "" {
+			fmt.Fprintf(os.Stderr, "  %s [%s]: %s\n", outcome.Status, col.Name, outcome.Reason)
 		}
 	}
-
+	if emitErr := c.emitSyncOutcomes(outcomes); emitErr != nil {
+		return emitErr
+	}
+	if c.Collection != "" && len(outcomes) == 0 {
+		return fmt.Errorf("collection %q not found or excluded by --type", c.Collection)
+	}
 	if len(failedNames) > 0 {
 		return fmt.Errorf("%d collection(s) failed to sync: %v", len(failedNames), strings.Join(failedNames, ", "))
 	}
 
+	return nil
+}
+
+// syncOutcome retains the index report even when a subsequent stage fails.
+type syncOutcome struct {
+	indexer.SyncReport
+	Status          string `json:"status"`
+	Reason          string `json:"reason,omitempty"`
+	Embeddings      string `json:"embeddings"`
+	EmbeddingReason string `json:"embedding_reason,omitempty"`
+}
+
+func (c *SyncCmd) syncOutcome(cfg *config.AppConfig, report indexer.SyncReport, err error) (syncOutcome, bool) {
+	out := syncOutcome{SyncReport: report, Status: "success", Embeddings: "not_run"}
+	if err != nil {
+		out.Reason = err.Error()
+		if errors.Is(err, source.ErrUnavailable) || errors.Is(err, parserdef.ErrUnavailable) {
+			out.Status = "skipped"
+			out.Failed = 0
+			out.Errors = nil
+			out.Warnings++
+			return out, c.Strict || c.Collection != "" || c.Type != ""
+		}
+		out.Status = "failed"
+		return out, true
+	}
+	// The embedding stage only runs when the indexer returned no error, so a
+	// per-file failure (which does not fail the collection) still leaves a real
+	// embedding result to report.
+	switch {
+	case c.NoEmbed:
+		out.Embeddings = "skipped_requested"
+	default:
+		if ok, reason := embed.EmbeddingCapability(cfg); !ok {
+			out.Embeddings = "unavailable"
+			out.EmbeddingReason = reason
+		} else {
+			out.Embeddings = "completed"
+		}
+	}
+	if report.Failed > 0 {
+		out.Status = "failed"
+		out.Reason = fmt.Sprintf("%d indexing failures; see errors", report.Failed)
+		return out, true
+	}
+	if out.Embeddings == "unavailable" {
+		out.Status = "degraded"
+		if c.Strict {
+			out.Reason = out.EmbeddingReason
+		}
+		return out, c.Strict
+	}
+	return out, false
+}
+
+func (c *SyncCmd) emitSyncOutcomes(outcomes []syncOutcome) error {
+	if c.JSON {
+		return json.NewEncoder(os.Stdout).Encode(outcomes)
+	}
+	for _, out := range outcomes {
+		fmt.Printf("Synced %q: %s (%d indexed, %d skipped, %d unsupported, %d failed; embeddings=%s)\n", out.Collection, out.Status, out.Indexed, out.Skipped, out.Unsupported, out.Failed, out.Embeddings)
+	}
+	if len(outcomes) == 0 && c.Collection == "" && c.Type == "" {
+		fmt.Println("No collections. Use 'seek add' to add one.")
+	}
 	return nil
 }

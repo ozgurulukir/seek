@@ -50,6 +50,7 @@ func detectJSONLSource(def *ParserDef) (*SourceSpec, *VersionSpec, []string, err
 }
 
 func detectJSONLSourceContext(ctx context.Context, def *ParserDef) (*SourceSpec, *VersionSpec, []string, error) {
+	foundFiles := false
 	for si := range def.Sources {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, nil, err
@@ -70,14 +71,18 @@ func detectJSONLSourceContext(ctx context.Context, def *ParserDef) (*SourceSpec,
 		if len(files) == 0 {
 			continue
 		}
+		foundFiles = true
 		// Version detection: jsonl/jsonfiles has no DB to inspect, so pick
 		// the first version (there's usually only one).
 		for vi := range src.Versions {
 			return src, &src.Versions[vi], files, nil
 		}
 	}
-	return nil, nil, nil, fmt.Errorf("parser %q: no matching source/version found (checked %d sources)",
-		def.Name, len(def.Sources))
+	err := fmt.Errorf("parser %q: no matching source/version found (checked %d sources)", def.Name, len(def.Sources))
+	if !foundFiles {
+		err = fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return nil, nil, nil, err
 }
 
 // walkJSONLFiles recursively walks the given directories and returns all .jsonl files,

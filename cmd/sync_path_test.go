@@ -68,9 +68,17 @@ func TestSyncPath_OutsideCollectionRejected(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("# outside"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := (&cmd.SyncCmd{Collection: "notes", Path: outside, NoEmbed: true}).Run(cfg)
+	var err error
+	out := captureStdout(t, func() {
+		err = (&cmd.SyncCmd{Collection: "notes", Path: outside, NoEmbed: true}).Run(cfg)
+	})
 	if err == nil || !strings.Contains(err.Error(), "outside collection") {
 		t.Fatalf("sync --path outside = %v, want containment rejection", err)
+	}
+	// A rejected path never reached the indexer: the summary line must not
+	// claim the guard was validated.
+	if strings.Contains(out, "validated inside collection") {
+		t.Errorf("rejected path reported a validated guard:\n%s", out)
 	}
 }
 

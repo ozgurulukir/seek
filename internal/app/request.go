@@ -12,6 +12,9 @@ import (
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
+// ErrVectorUnavailable lets adapters report capability failures without parsing error text.
+var ErrVectorUnavailable = errors.New("vector search requires embedding API key")
+
 // SearchRequest is the surface-neutral description of one search call. The
 // CLI (flags) and MCP (tool arguments) adapters both build it, and Runtime
 // turns it into engine calls — request policy lives here once instead of
@@ -279,7 +282,7 @@ func (r *Runtime) RunSearch(ctx context.Context, req SearchRequest) ([]search.Re
 		return engine.SearchBM25(ctx, req.Query, req.Limit, opts)
 	case ModeVec:
 		if r.EmbedClient == nil && r.VLClient == nil {
-			return nil, fmt.Errorf("vector search requires embedding API key")
+			return nil, ErrVectorUnavailable
 		}
 		return engine.SearchVector(ctx, req.Query, req.Limit, opts)
 	default:

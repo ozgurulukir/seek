@@ -1,6 +1,7 @@
 package cmd_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,5 +169,63 @@ func TestSyncCmd_SyncAllCollections(t *testing.T) {
 	docs2, _ := db2.CountDocuments(col2.ID)
 	if docs1 != 1 || docs2 != 1 {
 		t.Errorf("expected 1 doc in each, got notes=%d, code=%d", docs1, docs2)
+	}
+}
+
+func TestSyncCmd_MissingOptionalSourceDoesNotHideCodeSuccess(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	// os.UserHomeDir reads %USERPROFILE% on Windows, so HOME alone would leave
+	// the claude scanner pointing at the developer's real ~/.claude/projects.
+	t.Setenv("USERPROFILE", tmp)
+	path := filepath.Join(tmp, "notes")
+	if err := os.Mkdir(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "note.md"), []byte("# Indexed\nThis document must survive an unavailable source."), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(tmp, "test.db")
+	db := openTestStore(t, dbPath)
+	col, err := db.CreateCollection("notes", "markdown", path, "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateCollection("claude", "claude", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	cfg := &config.AppConfig{DBPath: dbPath, CacheDir: filepath.Join(tmp, "cache")}
+	var syncErr error
+	output := captureStdout(t, func() { syncErr = (&cmd.SyncCmd{NoEmbed: true, JSON: true}).Run(cfg) })
+	if syncErr != nil {
+		t.Fatal(syncErr)
+	}
+	var outcomes []struct {
+		Collection string `json:"collection"`
+		Status     string `json:"status"`
+		Failed     int    `json:"failed"`
+	}
+	if err := json.Unmarshal([]byte(output), &outcomes); err != nil {
+		t.Fatalf("invalid JSON output: %v: %s", err, output)
+	}
+	if len(outcomes) != 2 {
+		t.Fatalf("outcomes=%v", outcomes)
+	}
+	for _, out := range outcomes {
+		if out.Collection == "claude" && (out.Status != "skipped" || out.Failed != 0) {
+			t.Fatalf("outcome=%v", out)
+		}
+	}
+	db = openTestStore(t, dbPath)
+	count, err := db.CountDocuments(col.ID)
+	db.Close()
+	if err != nil || count != 1 {
+		t.Fatalf("documents=%d err=%v", count, err)
+	}
+	for _, sync := range []cmd.SyncCmd{{NoEmbed: true, Strict: true}, {NoEmbed: true, Collection: "claude"}, {NoEmbed: true, Collection: "missing"}} {
+		if err := sync.Run(cfg); err == nil {
+			t.Fatalf("expected failure: %+v", sync)
+		}
 	}
 }
