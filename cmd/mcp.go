@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/buildinfo"
@@ -42,10 +44,51 @@ type mcpSearchArgs struct {
 	Path       string   `json:"path,omitempty" jsonschema:"filter by path GLOB pattern (e.g. notes/**/*.md)"`
 	Workspace  string   `json:"workspace,omitempty" jsonschema:"filter parser collections by workspace directory"`
 	Field      []string `json:"field,omitempty" jsonschema:"fast-field filters as name:value strings (e.g. topics:concurrency, entities:ORG:OpenAI); discover names and values with seek_fields"`
-	SortBy     string   `json:"sort_by,omitempty" jsonschema:"sort results by a field (e.g. created_at, line_count, title) instead of relevance"`
+	SortBy     string   `json:"sort_by,omitempty" jsonschema:"sort results by a field (e.g. created_at, line_count, title); omit or use _score for relevance (descending only)"`
 	SortOrder  string   `json:"sort_order,omitempty" jsonschema:"sort direction with sort_by: asc or desc (default desc)"`
 	Context    int      `json:"context,omitempty" jsonschema:"expand each hit with N surrounding chunks (0 = off; raises start_line/end_line spans)"`
-	Aggs       []string `json:"aggs,omitempty" jsonschema:"aggregations to compute alongside the search (for example doc_type terms, lang terms, created_at histogram month); terms work on any indexed fast field discoverable via seek_fields; returned as a second text block"`
+	Aggs       []string `json:"aggs,omitempty" jsonschema:"aggregations to compute alongside the search (for example doc_type:terms, lang:terms, created_at:histogram:month); terms work on any indexed fast field discoverable via seek_fields; returned as a second text block"`
+}
+
+// UnmarshalJSON accepts empty strings for optional list slots emitted by some
+// agents. Nonempty strings still require the documented array representation.
+func (a *mcpSearchArgs) UnmarshalJSON(data []byte) error {
+	type wireArgs mcpSearchArgs
+	var slots map[string]json.RawMessage
+	if err := json.Unmarshal(data, &slots); err != nil {
+		return err
+	}
+	for _, name := range []string{"field", "aggs"} {
+		var value string
+		if json.Unmarshal(slots[name], &value) == nil && value == "" {
+			delete(slots, name)
+		}
+	}
+	normalized, err := json.Marshal(slots)
+	if err != nil {
+		return err
+	}
+	var wire wireArgs
+	if err := json.Unmarshal(normalized, &wire); err != nil {
+		return err
+	}
+	*a = mcpSearchArgs(wire)
+	return nil
+}
+
+func mcpSearchSchema() (*jsonschema.Schema, error) {
+	schema, err := jsonschema.ForType(reflect.TypeFor[mcpSearchArgs](), nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range []string{"field", "aggs"} {
+		original := schema.Properties[name]
+		schema.Properties[name] = &jsonschema.Schema{
+			Description: original.Description + "; use an array, omit when unused (empty string is accepted for compatibility)",
+			AnyOf:       []*jsonschema.Schema{original, {Type: "string", Enum: []any{""}}},
+		}
+	}
+	return schema, nil
 }
 
 // mcpFieldsArgs drives seek_fields: no field → summary of all fields;
@@ -108,11 +151,22 @@ func buildMCPServerWithServices(runtime *app.Runtime, cfg *config.AppConfig) (*m
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "seek", Version: buildinfo.Version}, nil)
 
+	searchSchema, err := mcpSearchSchema()
+	if err != nil {
+		return nil, fmt.Errorf("search schema: %w", err)
+	}
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "seek_search",
+		Name:        "seek_search",
+		InputSchema: searchSchema,
 		Description: "Hybrid search over the seek index (BM25 + vector + RRF fusion). Returns ranked results with chunk content, scores, and line spans. " +
 			"Fields match `seek search --json`. When aggs is passed, the response carries a second text block with aggregation buckets keyed by spec.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args mcpSearchArgs) (*mcp.CallToolResult, any, error) {
+		if args.SortBy == "_score" {
+			if args.SortOrder != "" && args.SortOrder != "desc" {
+				return nil, nil, fmt.Errorf("sort_order with _score must be desc (or omitted)")
+			}
+			args.SortBy = ""
+		}
 		limit := args.Limit
 		if limit > maxMCPResults {
 			limit = maxMCPResults
