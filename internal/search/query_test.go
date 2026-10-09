@@ -229,6 +229,10 @@ func TestToFTS5WithAnalyzer(t *testing.T) {
 		{nil, "", false},
 		{&TermQuery{Value: "running"}, "run*", false},
 		{&TermQuery{Value: "the"}, "the", false},
+		// Unstemmed index: a non-prefix porter stem ("body"->"bodi") must not
+		// render as `bodi*`, which can never match — issue #98.
+		{&TermQuery{Value: "body"}, "body", false},
+		{&TermQuery{Value: "studies"}, "studi*", false},
 		{&PhraseQuery{Terms: []string{"running", "jumps"}}, `"run* jump*"`, false},
 		{&PhraseQuery{Terms: []string{"the", "running"}}, `"the run*"`, false},
 		{&PrefixQuery{Prefix: "running"}, "run*", false},

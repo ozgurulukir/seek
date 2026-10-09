@@ -152,6 +152,33 @@ func TestAnalyzerForQuery(t *testing.T) {
 	}
 }
 
+// TestAnalyzerEnglishNonPrefixStemFallsBackToSurface pins issue #98: the FTS5
+// index is unstemmed, so a porter rewrite that is not a prefix of the surface
+// token (body->bodi, city->citi, study->studi) must not become a `bodi*`
+// prefix query that can never match. Such terms fall back to the surface form;
+// genuine prefix stems still expand.
+func TestAnalyzerEnglishNonPrefixStemFallsBackToSurface(t *testing.T) {
+	a := NewAnalyzer("en", true, true)
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"body", "body"},   // stem "bodi" is not a prefix
+		{"city", "city"},   // stem "citi" is not a prefix
+		{"study", "study"}, // stem "studi" is not a prefix
+		{"happily", "happily"},
+		{"studies", "studi*"}, // prefix stem still expands
+		{"cities", "citi*"},
+		{"running", "run*"},
+	}
+	for _, tt := range tests {
+		got := a.AnalyzeForQuery(tt.input)
+		if len(got) != 1 || got[0] != tt.want {
+			t.Errorf("AnalyzeForQuery(%q) = %v, want [%q]", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestAnalyzerIsStopWord(t *testing.T) {
 	a := NewAnalyzer("en", true, true)
 	if !a.IsStopWord("the") {

@@ -143,6 +143,14 @@ const minFTS5PrefixLen = 3
 // AnalyzeForQuery is like Analyze but adds a `*` prefix expansion for stemmed terms.
 // This allows FTS5 to match both the stemmed form and its suffixes (e.g., "kitap*" matches "kitap" and "kitaplar").
 // Terms shorter than minFTS5PrefixLen skip the wildcard to avoid expensive FTS5 suffix scans.
+//
+// The FTS5 index is unstemmed (unicode61), so it stores the surface token. A
+// `stem*` query can only match when the stem is genuinely a prefix of that
+// surface form. Porter rewrites the endings of words like "body"->"bodi" and
+// "city"->"citi", producing a same-length stem that is not a prefix; `bodi*`
+// then matches nothing and silently drops the term. Such unusable stems fall
+// back to the surface token. Stems that are shorter than the token are still
+// honored for root reconstruction (the Turkish "kitabı"->"kitap" case).
 func (a *Analyzer) AnalyzeForQuery(text string) []string {
 	tokens := AnalyzeToken(text)
 	var result []string
@@ -156,9 +164,13 @@ func (a *Analyzer) AnalyzeForQuery(text string) []string {
 		}
 		if a.enableStemmer && a.stemmer != nil {
 			stemmed := a.stemmer(token)
-			if stemmed != token && len(stemmed) >= minFTS5PrefixLen {
+			usable := stemmed != token && (strings.HasPrefix(token, stemmed) || len(stemmed) < len(token))
+			switch {
+			case !usable:
+				result = append(result, token)
+			case len(stemmed) >= minFTS5PrefixLen:
 				result = append(result, stemmed+"*")
-			} else {
+			default:
 				result = append(result, stemmed)
 			}
 		} else {

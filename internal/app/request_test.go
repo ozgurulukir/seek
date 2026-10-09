@@ -340,6 +340,38 @@ func TestRunAggsDisabledErrors(t *testing.T) {
 	}
 }
 
+// TestRunSearchParsedModeMatchesNonPrefixStems pins issue #98 end-to-end: the
+// unstemmed FTS5 index stores surface tokens, so in the default (parsed) query
+// mode a term whose Porter stem is not a prefix of the surface form must still
+// match. `body` used to render as `bodi*` and silently return nothing.
+func TestRunSearchParsedModeMatchesNonPrefixStems(t *testing.T) {
+	runtime := newRequestTestRuntime(t)
+	ctx := context.Background()
+
+	const body = "# Doc\n\nbody of the study and the city\n"
+	col, err := runtime.Store.CreateCollection("notes", store.CollectionTypeMarkdown, "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := runtime.Store.UpsertDocument(col.ID, "/tmp/n.md", "Doc", "# Doc", 1, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Store.UpsertFTS(docID, "Doc", body); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, q := range []string{"body", "study", "city"} {
+		results, err := runtime.RunSearch(ctx, SearchRequest{Query: q, Mode: ModeLex})
+		if err != nil {
+			t.Fatalf("RunSearch(%q): %v", q, err)
+		}
+		if len(results) == 0 {
+			t.Errorf("RunSearch(%q) in default query mode returned no results, want the document", q)
+		}
+	}
+}
+
 func TestPlanSearchSortByValidation(t *testing.T) {
 	runtime := newRequestTestRuntime(t)
 	ctx := context.Background()
