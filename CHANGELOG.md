@@ -3,6 +3,25 @@
 All notable changes to `seek` are documented here. This follows
 [Keep a Changelog](https://keepachangelog.com/) conventions.
 
+## [0.6.1] - 2026-10-09
+
+### Fixed
+
+- **Keyword search dropped English words whose Porter stem is not a prefix** (issue #98): in the default (`parsed`) query mode the analyzer expanded every differing stem into a `stem*` FTS5 prefix. The index is unstemmed (`unicode61`), so a same-length rewrite such as `body`→`bodi` became the unmatchable `bodi*`, silently returning no results for `body`, `city`, `study`, and their inflections. `AnalyzeForQuery` now only expands when the stem is a genuine prefix of the surface token (or shorter, preserving Turkish root reconstruction like `kitabı`→`kitap`); otherwise it falls back to the surface token.
+- **`seek sync --json` embedding outcome**: the embedding stage is classified before the per-file-failure check, so a run that embedded (or deliberately skipped) chunks is no longer reported as `embeddings: "not_run"`.
+- **`seek_capabilities` agrees with the sync report**: a configured provider whose endpoint the `privacy.offline_only` policy refuses to reach is treated as unavailable.
+- **`seek sync <collection> --path`**: restored the `%w` error chain, stopped printing the "validated inside collection" summary when the path guard rejected the run, and kept the empty-index hint off filtered invocations.
+- **MCP `seek_search`**: tolerates empty-string list arguments (`collections`, `fields`, …) emitted by some clients instead of failing, and honors `sort_by`/`sort_order` — `_score` maps to relevance order and rejects a non-descending `sort_order`.
+- **Semantic service startup** (issue #95): `NUMBA_DISABLE_JIT=1` is exported (via `setdefault`, so a user-set value wins) before importing `sentence_transformers`, avoiding a 10+ minute numba JIT warm-up; the tagger uses PCA, not UMAP, at runtime, so no hot path regresses. `tools/` and the bundled skill mirror are updated together.
+
+### Performance
+
+- **Agent hook target matching** (`internal/agenthooks`) memoizes the compiled target-hook regexes instead of rebuilding them per invocation, with a benchmark guarding the cache.
+
+### Tests
+
+- New coverage: the issue #98 analyzer unit tests and parsed-mode end-to-end regression test, MCP argument-parsing tests, sync-outcome tests, and a schema-driven parser availability test.
+
 ## [0.6.0] - 2026-10-05
 
 ### Added

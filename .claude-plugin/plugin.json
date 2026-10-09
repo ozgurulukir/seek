@@ -1,6 +1,6 @@
 {
   "name": "seek",
-  "version": "0.5.9",
+  "version": "0.6.1",
   "description": "Search local notes, source repositories, and coding agent conversations with hybrid keyword and semantic search.",
   "author": {
     "name": "Ozgur Ulukir",
