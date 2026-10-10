@@ -186,15 +186,27 @@ func isSeekHookCommand(command string) bool {
 	return directSeekHookCommandPattern.MatchString(command) || isLegacyCodexWrapper(command)
 }
 
+type targetPatternKey struct {
+	agent      string
+	context    bool
+	background bool
+}
+
 var (
-	targetPatternCache = make(map[string]*regexp.Regexp)
+	targetPatternCache = make(map[targetPatternKey]*regexp.Regexp)
 	targetPatternMu    sync.RWMutex
 )
 
-// PERF: memoize target regexes so regexp.MustCompile isn't called on every command check.
-func getTargetPattern(pattern string) *regexp.Regexp {
+// PERF: memoize target regexes by target attributes so lookups are 0-alloc map accesses.
+func getTargetPattern(target Target) *regexp.Regexp {
+	key := targetPatternKey{
+		agent:      target.agent,
+		context:    target.context,
+		background: target.background,
+	}
+
 	targetPatternMu.RLock()
-	re, ok := targetPatternCache[pattern]
+	re, ok := targetPatternCache[key]
 	targetPatternMu.RUnlock()
 	if ok {
 		return re
@@ -202,18 +214,10 @@ func getTargetPattern(pattern string) *regexp.Regexp {
 
 	targetPatternMu.Lock()
 	defer targetPatternMu.Unlock()
-	if re, ok := targetPatternCache[pattern]; ok {
+	if re, ok := targetPatternCache[key]; ok {
 		return re
 	}
-	re = regexp.MustCompile(pattern)
-	targetPatternCache[pattern] = re
-	return re
-}
 
-func isTargetSeekHookCommand(command string, target Target) bool {
-	if !isSeekHookCommand(command) {
-		return false
-	}
 	commandName := "sync"
 	if target.context {
 		commandName = "context"
@@ -226,7 +230,17 @@ func isTargetSeekHookCommand(command string, target Target) bool {
 		pattern += `(?:\s+--embed)?`
 	}
 	pattern += `\s*$`
-	return getTargetPattern(pattern).MatchString(command)
+
+	re = regexp.MustCompile(pattern)
+	targetPatternCache[key] = re
+	return re
+}
+
+func isTargetSeekHookCommand(command string, target Target) bool {
+	if !isSeekHookCommand(command) {
+		return false
+	}
+	return getTargetPattern(target).MatchString(command)
 }
 
 var hookExecutablePattern = regexp.MustCompile(`^(?:'([^']+)'|"([^"]+)"|(\S+))\s+hooks\s+`)
