@@ -153,8 +153,18 @@ func splitCodeTopLevel(content, lang string) []string {
 	var current strings.Builder
 	seenDef := false
 
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
+	// PERF: scan lines using strings.IndexByte without allocating a []string slice for all lines.
+	remainder := content
+	for len(remainder) > 0 {
+		var line string
+		if idx := strings.IndexByte(remainder, '\n'); idx >= 0 {
+			line = remainder[:idx]
+			remainder = remainder[idx+1:]
+		} else {
+			line = remainder
+			remainder = ""
+		}
+
 		if pattern.MatchString(line) {
 			// Flush everything before this definition
 			if current.Len() > 0 {
