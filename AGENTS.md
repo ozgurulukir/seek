@@ -41,6 +41,37 @@ gofmt -l cmd internal main.go third_party   # must print nothing (fix with gofmt
   GitHub release workflow uses its separately provisioned MSYS2 MinGW compiler,
   which is also verified by the release smoke test.
 
+## Releasing
+
+Releases are cut from `main` with one command:
+
+```bash
+make release VERSION=X.Y.Z                          # or: scripts/release.sh X.Y.Z
+make release VERSION=X.Y.Z RELEASE_ARGS=--dry-run   # preview; changes nothing
+```
+
+`scripts/release.sh` validates the version, branch, clean tracked tree, and tag
+uniqueness; runs the same quality gate as `.github/workflows/release.yml`
+(build, vet, gofmt, tests); bumps `plugin.json`; promotes the top
+`## [Unreleased]` CHANGELOG heading to `## [<version>] - <date>` (reopening a
+fresh `[Unreleased]` above it); then commits, creates an annotated `v<version>`
+tag, and pushes the branch and tag. Pushing the tag triggers the Release
+workflow. Untracked files do not block a release; only staged/unstaged tracked
+changes do. The script is POSIX sh (macOS/Linux) and is not runnable from the
+Windows dev shell.
+
+**Version convention:** `plugin.json` and the CHANGELOG headings carry the bare
+version (`X.Y.Z`) — `make release` writes both. The git tag, release archive
+names, and the binary's `--version` string use the `vX.Y.Z` form;
+`scripts/release.sh` accepts either and strips a leading `v`.
+
+**CHANGELOG discipline:** add a bullet under the top `## [Unreleased]` section as
+each user-facing change lands; `make release` moves those bullets under the new
+version heading. `plugin.json` mirrors the released version. A root-package test
+(`TestReleaseVersionConsistency`) fails if `plugin.json` drifts from the newest
+released CHANGELOG heading, or if the CHANGELOG does not open with exactly one
+`[Unreleased]` section.
+
 ## Architecture (layered, no cycles)
 
 ```

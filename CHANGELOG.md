@@ -3,6 +3,27 @@
 All notable changes to `seek` are documented here. This follows
 [Keep a Changelog](https://keepachangelog.com/) conventions.
 
+## [Unreleased]
+
+### Performance
+
+- **Code chunker line scanning** (`internal/chunk`): `splitCodeTopLevel` scans
+  newlines with `strings.IndexByte` instead of `strings.Split`, dropping the
+  per-file `[]string` header slice (~10% fewer bytes allocated on
+  `BenchmarkChunkCode`). Chunk output is unchanged — trailing newlines are
+  already trimmed before any length decision.
+- **Agent hook target matching** (`internal/agenthooks`): the target-hook regex
+  cache is keyed by a comparable `(agent, context, background)` struct instead
+  of a formatted pattern string, so cache hits allocate nothing
+  (`BenchmarkIsTargetSeekHookCommand`: 513 B/op → 0 B/op). Follow-up to the
+  0.6.1 memoization.
+
+### Tests
+
+- A root-package guard (`TestReleaseVersionConsistency`) pins the version
+  surfaces together: `plugin.json` must equal the newest released CHANGELOG
+  heading, and the CHANGELOG must open with exactly one `[Unreleased]` section.
+
 ## [0.6.1] - 2026-10-09
 
 ### Fixed
@@ -202,18 +223,6 @@ Sources and parsers:
 
 ## [0.5.5] - 2026-09-14
 
-### Fixed
-
-- Rebuild the vector index with the new embedding dimension before re-embedding
-  during an explicitly allowed vector-space migration.
-- Preserve and restore the searchable index state when migration or reindexing
-  fails, including vector metadata, FTS entries, fast fields, and legacy NULL
-  document metadata.
-- Keep degraded embedding behavior intact for already-matching profiles and
-  intentionally skipped image chunks.
-
-## [Unreleased]
-
 ### Added
 
 - `seek add` gains the canonical `--type markdown|code|documents|pdf|images` and
@@ -239,3 +248,13 @@ Sources and parsers:
   Aliases of the **same** kind are not conflicts and are still accepted
   (`--documents` ≡ `--docs` ≡ `--type documents`; `--code` ≡ `--type code`;
   `--claude-schema` ≡ `--parser claude`).
+
+### Fixed
+
+- Rebuild the vector index with the new embedding dimension before re-embedding
+  during an explicitly allowed vector-space migration.
+- Preserve and restore the searchable index state when migration or reindexing
+  fails, including vector metadata, FTS entries, fast fields, and legacy NULL
+  document metadata.
+- Keep degraded embedding behavior intact for already-matching profiles and
+  intentionally skipped image chunks.
