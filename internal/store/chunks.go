@@ -279,14 +279,64 @@ func (s *Store) UpdateChunkEmbeddingsBatchContext(ctx context.Context, updates [
 	var previousEmbeddings [][]byte
 
 	if vector != nil {
+		seen := make(map[int64]bool, len(updates))
+		var candidateIDs []int64
 		for _, u := range updates {
-			if vector.Contains(u.ChunkID) {
-				var prev []byte
-				if err := s.db.QueryRowContext(ctx, `SELECT embedding FROM chunks WHERE id = ?`, u.ChunkID).Scan(&prev); err != nil {
-					return fmt.Errorf("read previous chunk embedding for %d: %w", u.ChunkID, err)
+			if vector.Contains(u.ChunkID) && !seen[u.ChunkID] {
+				seen[u.ChunkID] = true
+				candidateIDs = append(candidateIDs, u.ChunkID)
+			}
+		}
+
+		if len(candidateIDs) > 0 {
+			prevMap := make(map[int64][]byte, len(candidateIDs))
+			const batchSize = 500
+
+			for i := 0; i < len(candidateIDs); i += batchSize {
+				end := i + batchSize
+				if end > len(candidateIDs) {
+					end = len(candidateIDs)
 				}
-				replacedIDs = append(replacedIDs, u.ChunkID)
-				previousEmbeddings = append(previousEmbeddings, prev)
+				chunkIDs := candidateIDs[i:end]
+
+				placeholders := make([]string, len(chunkIDs))
+				args := make([]any, len(chunkIDs))
+				for j, id := range chunkIDs {
+					placeholders[j] = "?"
+					args[j] = id
+				}
+
+				query := fmt.Sprintf("SELECT id, embedding FROM chunks WHERE id IN (%s)", strings.Join(placeholders, ","))
+				rows, err := s.db.QueryContext(ctx, query, args...)
+				if err != nil {
+					return fmt.Errorf("read previous chunk embeddings batch: %w", err)
+				}
+
+				for rows.Next() {
+					var id int64
+					var prev []byte
+					if err := rows.Scan(&id, &prev); err != nil {
+						rows.Close()
+						return fmt.Errorf("scan previous chunk embedding: %w", err)
+					}
+					prevMap[id] = prev
+				}
+				if err := rows.Err(); err != nil {
+					rows.Close()
+					return fmt.Errorf("read previous chunk embeddings batch rows: %w", err)
+				}
+				rows.Close()
+			}
+
+			for _, u := range updates {
+				if vector.Contains(u.ChunkID) {
+					prev, ok := prevMap[u.ChunkID]
+					if !ok {
+						return fmt.Errorf("read previous chunk embedding for %d: %w", u.ChunkID, sql.ErrNoRows)
+					}
+					replacedIDs = append(replacedIDs, u.ChunkID)
+					previousEmbeddings = append(previousEmbeddings, prev)
+				}
 			}
 		}
 	}
