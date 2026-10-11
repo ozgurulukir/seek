@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -391,5 +392,22 @@ func TestDoctor_RunReportsServices(t *testing.T) {
 	cmd := &DoctorCmd{}
 	if err := cmd.Run(cfg); err != nil {
 		t.Fatalf("DoctorCmd.Run with xberg selected: %v", err)
+	}
+}
+
+func BenchmarkFixPermissions(b *testing.B) {
+	paths := make([]privatePath, 100)
+	for i := 0; i < 100; i++ {
+		paths[i] = privatePath{
+			path:    "/nonexistent/path/for/benchmarking",
+			dir:     false,
+			wantMod: fs.FileMode(0600),
+		}
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = fixPermissions(paths)
 	}
 }
