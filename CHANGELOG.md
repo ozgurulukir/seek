@@ -12,6 +12,11 @@ All notable changes to `seek` are documented here. This follows
   replaced with `strings.Join`, which sizes its output buffer once and avoids
   the repeated realloc-and-copy growth of `+=` in a loop. Output is unchanged —
   parts are still newline-joined verbatim.
+- **Chunk embedding batch updates** (`internal/store`): previous chunk
+  embeddings for a batch update are read with grouped `IN (...)` lookups capped
+  at 500 ids per query instead of one query per chunk, keeping SQLite's
+  variable limit well clear on large re-embedding runs. Embeddings land
+  unchanged — only the read path is batched.
 - **Code chunker line scanning** (`internal/chunk`): `splitCodeTopLevel` scans
   newlines with `strings.IndexByte` instead of `strings.Split`, dropping the
   per-file `[]string` header slice (~10% fewer bytes allocated on

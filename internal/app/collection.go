@@ -211,9 +211,7 @@ func (s *CollectionService) Reindex(ctx context.Context, name string, opts Reind
 	}, log)
 	if err != nil {
 		if vectorSpaceChanged {
-			if restoreErr := s.store.RestoreEmbeddingSpace(ctx, backup); restoreErr != nil {
-				return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, fmt.Errorf("%w; restore embedding space: %v", err, restoreErr)
-			}
+			err = s.restoreEmbeddingSpace(ctx, backup, err)
 		}
 		return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, err
 	}
@@ -224,10 +222,8 @@ func (s *CollectionService) Reindex(ctx context.Context, name string, opts Reind
 			if pendingErr == nil {
 				pendingErr = fmt.Errorf("%d supported chunks remain without embeddings", required)
 			}
-			if restoreErr := s.store.RestoreEmbeddingSpace(ctx, backup); restoreErr != nil {
-				return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, fmt.Errorf("embedding rebuild incomplete: %w; restore embedding space: %v", pendingErr, restoreErr)
-			}
-			return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, fmt.Errorf("embedding rebuild incomplete: %w", pendingErr)
+			rebuildErr := fmt.Errorf("embedding rebuild incomplete: %w", pendingErr)
+			return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, s.restoreEmbeddingSpace(ctx, backup, rebuildErr)
 		}
 	}
 	return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, nil
@@ -275,9 +271,7 @@ func (s *CollectionService) ReindexAll(ctx context.Context, opts ReindexOptions,
 			c, err := s.clearProfileOnMismatch(ctx, col.ID, col.Name, opts.AllowVectorSpaceChange, false)
 			if err != nil {
 				if len(results) > 0 {
-					if restoreErr := s.store.RestoreEmbeddingSpace(ctx, backup); restoreErr != nil {
-						return results, fmt.Errorf("%w; restore embedding space: %v", err, restoreErr)
-					}
+					err = s.restoreEmbeddingSpace(ctx, backup, err)
 				}
 				return results, err
 			}
@@ -286,10 +280,7 @@ func (s *CollectionService) ReindexAll(ctx context.Context, opts ReindexOptions,
 		}
 		syncReport, err := s.pipeline.Sync(ctx, &col, pipeline.Options{Force: true, VectorIndex: true}, log)
 		if err != nil {
-			if restoreErr := s.store.RestoreEmbeddingSpace(ctx, backup); restoreErr != nil {
-				return results, fmt.Errorf("%w; restore embedding space: %v", err, restoreErr)
-			}
-			return results, err
+			return results, s.restoreEmbeddingSpace(ctx, backup, err)
 		}
 		results = append(results, ReindexResult{Report: syncReport, VectorSpaceChanged: changed})
 	}
@@ -300,13 +291,18 @@ func (s *CollectionService) ReindexAll(ctx context.Context, opts ReindexOptions,
 			if err == nil {
 				err = fmt.Errorf("%d supported chunks remain without embeddings", required)
 			}
-			if restoreErr := s.store.RestoreEmbeddingSpace(ctx, backup); restoreErr != nil {
-				return results, fmt.Errorf("embedding rebuild incomplete: %w; restore embedding space: %v", err, restoreErr)
-			}
-			return results, fmt.Errorf("embedding rebuild incomplete: %w", err)
+			rebuildErr := fmt.Errorf("embedding rebuild incomplete: %w", err)
+			return results, s.restoreEmbeddingSpace(ctx, backup, rebuildErr)
 		}
 	}
 	return results, nil
+}
+
+func (s *CollectionService) restoreEmbeddingSpace(ctx context.Context, backup *store.EmbeddingSpaceBackup, err error) error {
+	if restoreErr := s.store.RestoreEmbeddingSpace(ctx, backup); restoreErr != nil {
+		return fmt.Errorf("%w; restore embedding space: %v", err, restoreErr)
+	}
+	return err
 }
 
 func (s *CollectionService) requiredPendingEmbeddings(pending []store.Chunk) int {

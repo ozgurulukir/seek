@@ -627,3 +627,154 @@ func BenchmarkUpdateChunkEmbedding(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkUpdateChunkEmbeddingsBatchWithVectorIndex(b *testing.B) {
+	s := newTestStore(&testing.T{})
+	vIdx := newLinearIndex(4)
+	s.SetVectorIndex(vIdx)
+
+	col, err := s.CreateCollection("bench-vec-col", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		b.Fatal(err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "/tmp/bench-vec.md", "BenchVec", "hash", 1, 1)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	const count = 100
+	emb := []float32{0.1, 0.2, 0.3, 0.4}
+	for i := 0; i < count; i++ {
+		if err := s.InsertChunk(docID, i, "chunk content", emb); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	if _, err := s.SyncVectorIndexIncremental(); err != nil {
+		b.Fatal(err)
+	}
+
+	var ids []int64
+	rows, err := s.db.Query("SELECT id FROM chunks WHERE document_id = ? ORDER BY seq ASC", docID)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			b.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+
+	updates := make([]ChunkEmbeddingUpdate, len(ids))
+	newEmb := []float32{0.4, 0.3, 0.2, 0.1}
+	for i, id := range ids {
+		updates[i] = ChunkEmbeddingUpdate{ChunkID: id, Embedding: newEmb}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := s.UpdateChunkEmbeddingsBatchContext(context.Background(), updates, false); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// TestUpdateChunkEmbeddingsBatchCrossesINGroups proves the previous-embedding
+// read (and the restore-on-sync-failure bookkeeping it feeds) works across
+// MULTIPLE IN groups of ≤500 ids, including the exact batch-boundary edges
+// (500 == one full group, 501 == one full group + one spill id).
+func TestUpdateChunkEmbeddingsBatchCrossesINGroups(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		n    int
+	}{
+		{"500_exact_single_group", 500},
+		{"501_spills_to_second_group", 501},
+		{"1001_spills_to_third_group", 1001},
+		{"1200_three_groups", 1200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestStore(t)
+			s.SetVectorIndex(newLinearIndex(4))
+
+			col, err := s.CreateCollection("batching-"+tc.name, CollectionTypeMarkdown, t.TempDir(), "*.md")
+			if err != nil {
+				t.Fatalf("CreateCollection: %v", err)
+			}
+			docID, err := s.UpsertDocument(col.ID, "batch.md", "Batch", "hash", 1, 1)
+			if err != nil {
+				t.Fatalf("UpsertDocument: %v", err)
+			}
+
+			emb := []float32{0.1, 0.2, 0.3, 0.4}
+			for i := 0; i < tc.n; i++ {
+				if err := s.InsertChunk(docID, i, "chunk content", emb); err != nil {
+					t.Fatalf("InsertChunk %d: %v", i, err)
+				}
+			}
+			if _, err := s.SyncVectorIndexIncremental(); err != nil {
+				t.Fatalf("SyncVectorIndexIncremental: %v", err)
+			}
+
+			ids := make([]int64, 0, tc.n)
+			rows, err := s.db.Query(`SELECT id FROM chunks WHERE document_id = ? ORDER BY seq ASC`, docID)
+			if err != nil {
+				t.Fatalf("list chunk ids: %v", err)
+			}
+			for rows.Next() {
+				var id int64
+				if err := rows.Scan(&id); err != nil {
+					t.Fatalf("scan chunk id: %v", err)
+				}
+				ids = append(ids, id)
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatalf("rows: %v", err)
+			}
+			rows.Close()
+			if len(ids) != tc.n {
+				t.Fatalf("chunked %d ids, want %d", len(ids), tc.n)
+			}
+
+			newEmb := []float32{0.4, 0.3, 0.2, 0.1}
+			updates := make([]ChunkEmbeddingUpdate, len(ids))
+			for i, id := range ids {
+				updates[i] = ChunkEmbeddingUpdate{ChunkID: id, Embedding: newEmb}
+			}
+
+			groups := (len(ids) + 499) / 500
+			if err := s.UpdateChunkEmbeddingsBatchContext(context.Background(), updates, false); err != nil {
+				t.Fatalf("UpdateChunkEmbeddingsBatchContext (%d ids across %d IN groups): %v", len(ids), groups, err)
+			}
+
+			// Every persisted embedding must equal the new vector — including
+			// ids served by the second/third IN group, which is exactly where
+			// a batch-boundary bug (dropped or misaligned ids) would surface.
+			for _, id := range ids {
+				var blob []byte
+				if err := s.db.QueryRow(`SELECT embedding FROM chunks WHERE id = ?`, id).Scan(&blob); err != nil {
+					t.Fatalf("read embedding for chunk %d: %v", id, err)
+				}
+				got := decodeEmbedding(blob)
+				if len(got) != len(newEmb) {
+					t.Fatalf("chunk %d: embedding dim %d, want %d", id, len(got), len(newEmb))
+				}
+				for j := range newEmb {
+					if got[j] != newEmb[j] {
+						t.Fatalf("chunk %d: embedding[%d] = %v, want %v (id spans IN-group boundary at multiples of 500)", id, j, got[j], newEmb[j])
+					}
+				}
+			}
+
+			// The previous-embedding read must have covered every group, so the
+			// live index still knows all ids after the post-update resync.
+			if got := s.vector().Len(); got != tc.n {
+				t.Fatalf("vector index len = %d, want %d", got, tc.n)
+			}
+		})
+	}
+}
