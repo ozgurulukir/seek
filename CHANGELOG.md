@@ -7,6 +7,11 @@ All notable changes to `seek` are documented here. This follows
 
 ### Performance
 
+- **Parserdef variant text assembly** (`internal/source/parserdef`): the custom
+  string-concatenation helper (`joinStrings`) in `extractVariantText` was
+  replaced with `strings.Join`, which sizes its output buffer once and avoids
+  the repeated realloc-and-copy growth of `+=` in a loop. Output is unchanged —
+  parts are still newline-joined verbatim.
 - **Code chunker line scanning** (`internal/chunk`): `splitCodeTopLevel` scans
   newlines with `strings.IndexByte` instead of `strings.Split`, dropping the
   per-file `[]string` header slice (~10% fewer bytes allocated on
