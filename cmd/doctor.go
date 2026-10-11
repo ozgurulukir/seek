@@ -79,8 +79,8 @@ func checkPermissions(cfg *config.AppConfig) ([]privatePath, error) {
 // fixPermissions tightens the listed paths to their expected mode. It only
 // ever removes group/other access — never widens anything.
 func fixPermissions(paths []privatePath) ([]string, []error) {
-	var fixed []string
-	var errs []error
+	fixed := make([]string, 0, len(paths))
+	errs := make([]error, 0, len(paths))
 	for _, p := range paths {
 		if err := os.Chmod(p.path, p.wantMod); err != nil {
 			errs = append(errs, fmt.Errorf("chmod %s: %w", p.path, err))
