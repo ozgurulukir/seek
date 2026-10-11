@@ -109,7 +109,11 @@ func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 	if len(chunks) == 0 {
 		return chunks
 	}
-	normContent := strings.ReplaceAll(fullContent, "\r\n", "\n")
+	// PERF: avoid allocating a new string if there are no CRLF newlines.
+	normContent := fullContent
+	if strings.IndexByte(fullContent, '\r') >= 0 {
+		normContent = strings.ReplaceAll(fullContent, "\r\n", "\n")
+	}
 	lines := strings.Split(normContent, "\n")
 	totalLines := len(lines)
 	if totalLines == 0 {
@@ -123,6 +127,10 @@ func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 	// searchPos never advancing, collapsed consecutive fallback spans onto
 	// the same lines (review 2026-09-17 M14).
 	const lookaheadSlack = 64
+
+	// PERF: reuse a single slice buffer across chunks to avoid per-chunk strings.Split allocations.
+	var chunkLines []string
+
 	for i := range chunks {
 		cText := strings.TrimSpace(chunks[i].Content)
 		if cText == "" {
@@ -130,7 +138,18 @@ func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 			chunks[i].EndLine = 1
 			continue
 		}
-		chunkLines := strings.Split(cText, "\n")
+
+		chunkLines = chunkLines[:0]
+		remainder := cText
+		for len(remainder) > 0 {
+			if idx := strings.IndexByte(remainder, '\n'); idx >= 0 {
+				chunkLines = append(chunkLines, remainder[:idx])
+				remainder = remainder[idx+1:]
+			} else {
+				chunkLines = append(chunkLines, remainder)
+				remainder = ""
+			}
+		}
 		chunkLineCount := len(chunkLines)
 
 		startLine := searchPos + 1
