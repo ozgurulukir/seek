@@ -9,7 +9,7 @@ import (
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
-type mockIndexWriter struct {
+type fakeIndexWriter struct {
 	upsertAndReplaceFunc func(ctx context.Context, doc store.DocumentIndex) (int64, error)
 	upsertAndAppendFunc  func(ctx context.Context, doc store.DocumentIndex) (int64, error)
 
@@ -19,7 +19,7 @@ type mockIndexWriter struct {
 	lastCtx       context.Context
 }
 
-func (m *mockIndexWriter) UpsertAndReplaceIndex(ctx context.Context, doc store.DocumentIndex) (int64, error) {
+func (m *fakeIndexWriter) UpsertAndReplaceIndex(ctx context.Context, doc store.DocumentIndex) (int64, error) {
 	m.replaceCalled = true
 	m.lastCtx = ctx
 	m.lastDoc = doc
@@ -29,7 +29,7 @@ func (m *mockIndexWriter) UpsertAndReplaceIndex(ctx context.Context, doc store.D
 	return 42, nil
 }
 
-func (m *mockIndexWriter) UpsertAndAppendIndex(ctx context.Context, doc store.DocumentIndex) (int64, error) {
+func (m *fakeIndexWriter) UpsertAndAppendIndex(ctx context.Context, doc store.DocumentIndex) (int64, error) {
 	m.appendCalled = true
 	m.lastCtx = ctx
 	m.lastDoc = doc
@@ -41,8 +41,8 @@ func (m *mockIndexWriter) UpsertAndAppendIndex(ctx context.Context, doc store.Do
 
 func TestWithIndexWriter(t *testing.T) {
 	cfg := &config.AppConfig{}
-	writer1 := &mockIndexWriter{}
-	writer2 := &mockIndexWriter{}
+	writer1 := &fakeIndexWriter{}
+	writer2 := &fakeIndexWriter{}
 
 	idx := NewWithDependencies(cfg, nil, nil, writer1)
 	if idx.writer != writer1 {
@@ -60,7 +60,7 @@ func TestWithIndexWriter(t *testing.T) {
 
 func TestWriteConversationDocument_ReplaceAndAppend(t *testing.T) {
 	cfg := &config.AppConfig{}
-	mock := &mockIndexWriter{}
+	mock := &fakeIndexWriter{}
 	idx := NewWithDependencies(cfg, nil, nil, mock)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -108,7 +108,7 @@ func TestWriteConversationDocument_ReplaceAndAppend(t *testing.T) {
 func TestWriteConversationDocument_ErrorPropagation(t *testing.T) {
 	cfg := &config.AppConfig{}
 	wantErr := errors.New("database disk image is malformed")
-	mock := &mockIndexWriter{
+	mock := &fakeIndexWriter{
 		upsertAndReplaceFunc: func(ctx context.Context, doc store.DocumentIndex) (int64, error) {
 			return 0, wantErr
 		},
