@@ -87,7 +87,11 @@ func changelogHeadings(t *testing.T) []string {
 		t.Fatalf("read CHANGELOG.md: %v", err)
 	}
 	var headings []string
-	for _, line := range strings.Split(string(data), "\n") {
+	// Windows checkouts (* text=auto + core.autocrlf=true) materialize
+	// CHANGELOG.md with CRLF endings; normalize them so a trailing \r cannot
+	// leak into the exact-string heading comparisons below.
+	content := strings.ReplaceAll(string(data), "\r\n", "\n")
+	for _, line := range strings.Split(content, "\n") {
 		if strings.HasPrefix(line, "## ") {
 			headings = append(headings, line)
 		}
