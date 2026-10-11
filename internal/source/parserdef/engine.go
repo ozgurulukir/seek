@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -351,7 +352,7 @@ func extractVariantText(element interface{}, v VariantSpec) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return joinStrings(parts, "\n")
+	return strings.Join(parts, "\n")
 }
 
 // getStringFromPath gets a string value at a dot-path from a JSON object map.
@@ -371,15 +372,4 @@ func getStringFromPath(obj map[string]interface{}, path string) string {
 		return ""
 	}
 	return s
-}
-
-func joinStrings(parts []string, sep string) string {
-	if len(parts) == 0 {
-		return ""
-	}
-	result := parts[0]
-	for i := 1; i < len(parts); i++ {
-		result += sep + parts[i]
-	}
-	return result
 }

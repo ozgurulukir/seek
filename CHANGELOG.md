@@ -7,6 +7,11 @@ All notable changes to `seek` are documented here. This follows
 
 ### Performance
 
+- **Parserdef variant text assembly** (`internal/source/parserdef`): the custom
+  string-concatenation helper (`joinStrings`) in `extractVariantText` was
+  replaced with `strings.Join`, which sizes its output buffer once and avoids
+  the repeated realloc-and-copy growth of `+=` in a loop. Output is unchanged —
+  parts are still newline-joined verbatim.
 - **Chunk embedding batch updates** (`internal/store`): previous chunk
   embeddings for a batch update are read with grouped `IN (...)` lookups capped
   at 500 ids per query instead of one query per chunk, keeping SQLite's
