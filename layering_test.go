@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"sort"
 	"strings"
@@ -129,11 +130,7 @@ func TestImportGraphRemainsAcyclicAndLayered(t *testing.T) {
 			visiting[from] = false
 			visited[from] = true
 		}
-		var roots []string
-		for p := range edges {
-			roots = append(roots, p)
-		}
-		sort.Strings(roots)
+		roots := collectRoots(edges)
 		for _, p := range roots {
 			reportCycle(p)
 		}
@@ -169,4 +166,24 @@ func TestImportGraphRemainsAcyclicAndLayered(t *testing.T) {
 			}
 		}
 	})
+}
+
+func collectRoots(edges map[string][]string) []string {
+	roots := make([]string, 0, len(edges))
+	for p := range edges {
+		roots = append(roots, p)
+	}
+	sort.Strings(roots)
+	return roots
+}
+
+func BenchmarkImportGraphRoots(b *testing.B) {
+	edges := make(map[string][]string, 100)
+	for i := 0; i < 100; i++ {
+		edges[fmt.Sprintf("pkg/path/package_%d", i)] = []string{"dep1", "dep2"}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = collectRoots(edges)
+	}
 }
