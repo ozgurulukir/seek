@@ -627,3 +627,58 @@ func BenchmarkUpdateChunkEmbedding(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkUpdateChunkEmbeddingsBatchWithVectorIndex(b *testing.B) {
+	s := newTestStore(&testing.T{})
+	vIdx := newLinearIndex(4)
+	s.SetVectorIndex(vIdx)
+
+	col, err := s.CreateCollection("bench-vec-col", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		b.Fatal(err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "/tmp/bench-vec.md", "BenchVec", "hash", 1, 1)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	const count = 100
+	emb := []float32{0.1, 0.2, 0.3, 0.4}
+	for i := 0; i < count; i++ {
+		if err := s.InsertChunk(docID, i, "chunk content", emb); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	if _, err := s.SyncVectorIndexIncremental(); err != nil {
+		b.Fatal(err)
+	}
+
+	var ids []int64
+	rows, err := s.db.Query("SELECT id FROM chunks WHERE document_id = ? ORDER BY seq ASC", docID)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			b.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+
+	updates := make([]ChunkEmbeddingUpdate, len(ids))
+	newEmb := []float32{0.4, 0.3, 0.2, 0.1}
+	for i, id := range ids {
+		updates[i] = ChunkEmbeddingUpdate{ChunkID: id, Embedding: newEmb}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := s.UpdateChunkEmbeddingsBatchContext(context.Background(), updates, false); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
