@@ -27,6 +27,10 @@ All notable changes to `seek` are documented here. This follows
   of a formatted pattern string, so cache hits allocate nothing
   (`BenchmarkIsTargetSeekHookCommand`: 513 B/op → 0 B/op). Follow-up to the
   0.6.1 memoization.
+- **Fast-field membership token splitting** (`internal/store`):
+  `splitMembershipTokens` scans comma-joined values with `strings.IndexByte`
+  instead of `strings.Split`, skipping the intermediate `[]string` allocation
+  for every decoded multi-value field (with a benchmark). Tokens land unchanged.
 
 ### Tests
 
