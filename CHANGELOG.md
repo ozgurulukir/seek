@@ -22,6 +22,13 @@ All notable changes to `seek` are documented here. This follows
   per-file `[]string` header slice (~10% fewer bytes allocated on
   `BenchmarkChunkCode`). Chunk output is unchanged — trailing newlines are
   already trimmed before any length decision.
+- **Code chunker top-level split** (`internal/chunk`): `splitCodeTopLevel` now
+  slices `content[blockStart:lineStart]` in place instead of accumulating
+  per-line `strings.Builder` writes, and `ChunkCode` pre-sizes its result with
+  `make([]Chunk, 0, len(rawBlocks))`; the shared `tailOverlap` helper replaces
+  the double-reverse line shuffling (and drops the parallel `currentLines`
+  slice) when carrying overlap tails between chunks. Chunk output is unchanged,
+  guarded by the existing chunker tests and benchmarks.
 - **Agent hook target matching** (`internal/agenthooks`): the target-hook regex
   cache is keyed by a comparable `(agent, context, background)` struct instead
   of a formatted pattern string, so cache hits allocate nothing

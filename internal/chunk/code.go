@@ -40,7 +40,7 @@ func ChunkCode(content string, lang string, maxSize, overlap int) []Chunk {
 	// then by blank-line blocks inside each definition.
 	rawBlocks := splitCodeTopLevel(content, lang)
 
-	var chunks []Chunk
+	chunks := make([]Chunk, 0, len(rawBlocks))
 	seq := 0
 	var current strings.Builder
 
@@ -71,36 +71,20 @@ func ChunkCode(content string, lang string, maxSize, overlap int) []Chunk {
 			chunks = append(chunks, Chunk{Seq: seq, Content: strings.TrimSpace(current.String()), Type: ChunkText})
 			seq++
 
-			// Overlap: keep tail of current buffer if overlap is configured
+			// Overlap: keep tail lines of current buffer if overlap is configured
 			tail := current.String()
 			current.Reset()
-			if overlap > 0 && len(tail) > overlap {
-				// Take last N lines or characters
-				lines := strings.Split(tail, "\n")
-				var ovBuilder strings.Builder
-				for i := len(lines) - 1; i >= 0; i-- {
-					line := lines[i]
-					if ovBuilder.Len()+len(line)+1 > overlap && ovBuilder.Len() > 0 {
-						break
-					}
-					ovBuilder.WriteString(line)
-					ovBuilder.WriteString("\n")
-				}
-				if ovBuilder.Len() > 0 {
-					// The backward walk collected lines in reverse; write them
-					// back in forward order so the overlap reads like the
-					// source (same double-reverse as splitCodeLines).
-					ovLines := strings.Split(strings.TrimSpace(ovBuilder.String()), "\n")
-					for i := len(ovLines) - 1; i >= 0; i-- {
-						current.WriteString(ovLines[i])
-						current.WriteString("\n")
-					}
+			if overlap > 0 {
+				if ov := tailOverlap(tail, overlap); ov != "" {
+					current.WriteString(ov)
 					current.WriteString("\n")
 				}
 			}
 		}
 
-		if current.Len() > 0 {
+		if current.Len() == 0 {
+			current.Grow(maxSize)
+		} else {
 			current.WriteString("\n\n")
 		}
 		current.WriteString(block)
@@ -149,35 +133,36 @@ func splitCodeTopLevel(content, lang string) []string {
 		return splitCodeBlocks(content)
 	}
 
-	var blocks []string
-	var current strings.Builder
+	blocks := make([]string, 0, max(8, len(content)/250))
+	blockStart := 0
+	currOffset := 0
 	seenDef := false
 
-	// PERF: scan lines using strings.IndexByte without allocating a []string slice for all lines.
+	// PERF: scan lines using strings.IndexByte and slice content directly, avoiding string builder allocations.
 	remainder := content
 	for len(remainder) > 0 {
+		lineStart := currOffset
 		var line string
 		if idx := strings.IndexByte(remainder, '\n'); idx >= 0 {
 			line = remainder[:idx]
+			currOffset += idx + 1
 			remainder = remainder[idx+1:]
 		} else {
 			line = remainder
+			currOffset += len(remainder)
 			remainder = ""
 		}
 
 		if pattern.MatchString(line) {
-			// Flush everything before this definition
-			if current.Len() > 0 {
-				blocks = append(blocks, current.String())
-				current.Reset()
+			if lineStart > blockStart {
+				blocks = append(blocks, content[blockStart:lineStart])
+				blockStart = lineStart
 			}
 			seenDef = true
 		}
-		current.WriteString(line)
-		current.WriteString("\n")
 	}
-	if current.Len() > 0 {
-		blocks = append(blocks, current.String())
+	if blockStart < len(content) {
+		blocks = append(blocks, content[blockStart:])
 	}
 
 	// If no definitions matched, fall back to blank-line blocks so the
@@ -188,11 +173,51 @@ func splitCodeTopLevel(content, lang string) []string {
 	return blocks
 }
 
+// tailOverlap returns trailing lines of tail fitting within maxBytes, formatted for overlap.
+func tailOverlap(tail string, maxBytes int) string {
+	if maxBytes <= 0 || len(tail) == 0 {
+		return ""
+	}
+	trimmed := strings.TrimRight(tail, "\r\n\t ")
+	if trimmed == "" {
+		return ""
+	}
+
+	end := len(trimmed)
+	start := end
+	accum := 0
+
+	for end > 0 {
+		idx := strings.LastIndexByte(trimmed[:end], '\n')
+		lineStart := 0
+		if idx >= 0 {
+			lineStart = idx + 1
+		}
+		line := trimmed[lineStart:end]
+		lineLen := len(line) + 1
+
+		if accum+lineLen > maxBytes && accum > 0 {
+			break
+		}
+		accum += lineLen
+		start = lineStart
+		if idx < 0 {
+			break
+		}
+		end = idx
+	}
+
+	if start >= len(trimmed) {
+		return ""
+	}
+	return trimmed[start:] + "\n"
+}
+
 // splitCodeBlocks breaks code on double newlines while normalizing line breaks.
 func splitCodeBlocks(content string) []string {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	blocks := strings.Split(content, "\n\n")
-	var result []string
+	result := make([]string, 0, len(blocks))
 	for _, b := range blocks {
 		t := strings.TrimSpace(b)
 		if t != "" {
@@ -218,7 +243,6 @@ func splitCodeLines(block string, maxSize, overlap int) []string {
 	lines := strings.Split(block, "\n")
 	var chunks []string
 	var current strings.Builder
-	var currentLines []string
 
 	for _, line := range lines {
 		lineLen := len(line) + 1
@@ -231,7 +255,6 @@ func splitCodeLines(block string, maxSize, overlap int) []string {
 			if current.Len() > 0 {
 				chunks = append(chunks, strings.TrimSpace(current.String()))
 				current.Reset()
-				currentLines = nil
 			}
 			step := maxSize - overlap
 			if step <= 0 {
@@ -281,36 +304,21 @@ func splitCodeLines(block string, maxSize, overlap int) []string {
 		if current.Len()+lineLen > maxSize && current.Len() > 0 {
 			chunks = append(chunks, strings.TrimSpace(current.String()))
 
-			// Calculate line overlap from end of currentLines
-			var overlapBuilder strings.Builder
-			overlapLinesCount := 0
-			for i := len(currentLines) - 1; i >= 0; i-- {
-				l := currentLines[i]
-				if overlapBuilder.Len()+len(l)+1 > overlap && overlapLinesCount > 0 {
-					break
-				}
-				overlapBuilder.WriteString(l)
-				overlapBuilder.WriteString("\n")
-				overlapLinesCount++
-			}
-
+			tail := current.String()
 			current.Reset()
-			currentLines = nil
-
-			// Write overlap content in forward order into the new chunk buffer
-			if overlapBuilder.Len() > 0 {
-				ovLines := strings.Split(strings.TrimSpace(overlapBuilder.String()), "\n")
-				for i := len(ovLines) - 1; i >= 0; i-- {
-					current.WriteString(ovLines[i])
-					current.WriteString("\n")
-					currentLines = append(currentLines, ovLines[i])
+			if overlap > 0 {
+				if ov := tailOverlap(tail, overlap); ov != "" {
+					current.Grow(maxSize)
+					current.WriteString(ov)
 				}
 			}
 		}
 
+		if current.Len() == 0 {
+			current.Grow(maxSize)
+		}
 		current.WriteString(line)
 		current.WriteString("\n")
-		currentLines = append(currentLines, line)
 	}
 
 	if current.Len() > 0 {
