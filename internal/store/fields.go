@@ -327,8 +327,21 @@ func (s *Store) ListFastFieldValuesContext(ctx context.Context, field string, op
 // splitMembershipTokens splits a decoded comma-joined multi-value into its
 // trimmed, non-empty tokens, preserving first-seen order.
 func splitMembershipTokens(decoded string) []string {
+	if decoded == "" {
+		return nil
+	}
+	// PERF: scan tokens using strings.IndexByte without allocating a []string slice for splits.
 	var tokens []string
-	for _, part := range strings.Split(decoded, ",") {
+	s := decoded
+	for len(s) > 0 {
+		var part string
+		if idx := strings.IndexByte(s, ','); idx >= 0 {
+			part = s[:idx]
+			s = s[idx+1:]
+		} else {
+			part = s
+			s = ""
+		}
 		token := strings.TrimSpace(part)
 		if token != "" {
 			tokens = append(tokens, token)
