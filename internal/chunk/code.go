@@ -149,35 +149,36 @@ func splitCodeTopLevel(content, lang string) []string {
 		return splitCodeBlocks(content)
 	}
 
-	var blocks []string
-	var current strings.Builder
+	// PERF: pre-allocate result slice and slice content directly to avoid strings.Builder allocations.
+	blocks := make([]string, 0, 16)
 	seenDef := false
+	blockStart := 0
+	lineStart := 0
 
-	// PERF: scan lines using strings.IndexByte without allocating a []string slice for all lines.
-	remainder := content
-	for len(remainder) > 0 {
+	for lineStart < len(content) {
+		remainder := content[lineStart:]
 		var line string
+		var nextStart int
 		if idx := strings.IndexByte(remainder, '\n'); idx >= 0 {
 			line = remainder[:idx]
-			remainder = remainder[idx+1:]
+			nextStart = lineStart + idx + 1
 		} else {
 			line = remainder
-			remainder = ""
+			nextStart = len(content)
 		}
 
 		if pattern.MatchString(line) {
-			// Flush everything before this definition
-			if current.Len() > 0 {
-				blocks = append(blocks, current.String())
-				current.Reset()
+			if lineStart > blockStart {
+				blocks = append(blocks, content[blockStart:lineStart])
+				blockStart = lineStart
 			}
 			seenDef = true
 		}
-		current.WriteString(line)
-		current.WriteString("\n")
+		lineStart = nextStart
 	}
-	if current.Len() > 0 {
-		blocks = append(blocks, current.String())
+
+	if len(content) > blockStart {
+		blocks = append(blocks, content[blockStart:])
 	}
 
 	// If no definitions matched, fall back to blank-line blocks so the
