@@ -5,6 +5,8 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-15
+
 ### Performance
 
 - **Line number assignment line scanning** (`internal/chunk`): `AssignLineNumbers`
