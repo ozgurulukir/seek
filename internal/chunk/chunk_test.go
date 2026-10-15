@@ -181,6 +181,21 @@ func TestChunkConversationEmpty(t *testing.T) {
 	}
 }
 
+func TestAssignLineNumbersTrailingNewline(t *testing.T) {
+	content := "line one\nline two\nline three\n"
+	chunks := []Chunk{
+		{Content: "line two"},
+		{Content: "line three"},
+	}
+	out := AssignLineNumbers(content, chunks)
+	if out[0].StartLine != 2 || out[0].EndLine != 2 {
+		t.Errorf("chunk 0 line span = %d-%d, want 2-2", out[0].StartLine, out[0].EndLine)
+	}
+	if out[1].StartLine != 3 || out[1].EndLine != 3 {
+		t.Errorf("chunk 1 line span = %d-%d, want 3-3", out[1].StartLine, out[1].EndLine)
+	}
+}
+
 func TestAssignLineNumbersMatchesWholeChunk(t *testing.T) {
 	tests := []struct {
 		name    string
