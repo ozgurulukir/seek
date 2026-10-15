@@ -7,6 +7,12 @@ All notable changes to `seek` are documented here. This follows
 
 ### Performance
 
+- **Line number assignment line scanning** (`internal/chunk`): `AssignLineNumbers`
+  scans newlines with pre-allocated `lineSpan` byte offsets and `strings.IndexByte`
+  instead of `strings.Split`, avoiding slice-of-strings allocations during line-span
+  calculation on multi-chunk documents (~19% faster on `BenchmarkAssignLineNumbers`).
+  Output spans are unchanged.
+
 - **Parserdef variant text assembly** (`internal/source/parserdef`): the custom
   string-concatenation helper (`joinStrings`) in `extractVariantText` was
   replaced with `strings.Join`, which sizes its output buffer once and avoids

@@ -105,6 +105,11 @@ func ChunkConversation(content string, maxSize int) []Chunk {
 // make an exact source match impossible; callers must not treat these spans as
 // parser-grade source locations. Exact spans require future chunker APIs to
 // carry source offsets while constructing chunks.
+type lineSpan struct {
+	start int
+	end   int
+}
+
 func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 	if len(chunks) == 0 {
 		return chunks
@@ -114,7 +119,21 @@ func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 	if strings.IndexByte(fullContent, '\r') >= 0 {
 		normContent = strings.ReplaceAll(fullContent, "\r\n", "\n")
 	}
-	lines := strings.Split(normContent, "\n")
+
+	// PERF: pre-allocate line span byte offsets instead of strings.Split to eliminate slice-of-strings allocations.
+	numLines := strings.Count(normContent, "\n") + 1
+	lines := make([]lineSpan, 0, numLines)
+
+	offset := 0
+	for {
+		idx := strings.IndexByte(normContent[offset:], '\n')
+		if idx < 0 {
+			lines = append(lines, lineSpan{start: offset, end: len(normContent)})
+			break
+		}
+		lines = append(lines, lineSpan{start: offset, end: offset + idx})
+		offset += idx + 1
+	}
 	totalLines := len(lines)
 	if totalLines == 0 {
 		totalLines = 1
@@ -158,7 +177,8 @@ func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 		for j := searchPos; j+chunkLineCount <= len(lines) && j < windowEnd; j++ {
 			matches := true
 			for k := range chunkLines {
-				if strings.TrimSpace(lines[j+k]) != strings.TrimSpace(chunkLines[k]) {
+				lineStr := normContent[lines[j+k].start:lines[j+k].end]
+				if strings.TrimSpace(lineStr) != strings.TrimSpace(chunkLines[k]) {
 					matches = false
 					break
 				}
