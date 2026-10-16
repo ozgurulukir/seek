@@ -105,11 +105,6 @@ func ChunkConversation(content string, maxSize int) []Chunk {
 // make an exact source match impossible; callers must not treat these spans as
 // parser-grade source locations. Exact spans require future chunker APIs to
 // carry source offsets while constructing chunks.
-type lineSpan struct {
-	start int
-	end   int
-}
-
 func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 	if len(chunks) == 0 {
 		return chunks
@@ -120,18 +115,18 @@ func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 		normContent = strings.ReplaceAll(fullContent, "\r\n", "\n")
 	}
 
-	// PERF: pre-allocate line span byte offsets instead of strings.Split to eliminate slice-of-strings allocations.
+	// PERF: pre-trim document lines once when scanning line breaks, eliminating redundant strings.TrimSpace calls during chunk matching.
 	numLines := strings.Count(normContent, "\n") + 1
-	lines := make([]lineSpan, 0, numLines)
+	lines := make([]string, 0, numLines)
 
 	offset := 0
 	for {
 		idx := strings.IndexByte(normContent[offset:], '\n')
 		if idx < 0 {
-			lines = append(lines, lineSpan{start: offset, end: len(normContent)})
+			lines = append(lines, strings.TrimSpace(normContent[offset:]))
 			break
 		}
-		lines = append(lines, lineSpan{start: offset, end: offset + idx})
+		lines = append(lines, strings.TrimSpace(normContent[offset:offset+idx]))
 		offset += idx + 1
 	}
 	totalLines := len(lines)
@@ -162,10 +157,10 @@ func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 		remainder := cText
 		for len(remainder) > 0 {
 			if idx := strings.IndexByte(remainder, '\n'); idx >= 0 {
-				chunkLines = append(chunkLines, remainder[:idx])
+				chunkLines = append(chunkLines, strings.TrimSpace(remainder[:idx]))
 				remainder = remainder[idx+1:]
 			} else {
-				chunkLines = append(chunkLines, remainder)
+				chunkLines = append(chunkLines, strings.TrimSpace(remainder))
 				remainder = ""
 			}
 		}
@@ -177,8 +172,7 @@ func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 		for j := searchPos; j+chunkLineCount <= len(lines) && j < windowEnd; j++ {
 			matches := true
 			for k := range chunkLines {
-				lineStr := normContent[lines[j+k].start:lines[j+k].end]
-				if strings.TrimSpace(lineStr) != strings.TrimSpace(chunkLines[k]) {
+				if lines[j+k] != chunkLines[k] {
 					matches = false
 					break
 				}
