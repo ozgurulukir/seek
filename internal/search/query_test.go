@@ -145,6 +145,15 @@ func TestToFTS5(t *testing.T) {
 	}
 }
 
+func BenchmarkAnalyzeToken(b *testing.B) {
+	text := "the quick brown fox jumps over the lazy dog 12345 _test_ string with multi-byte unicode characters yön bulma öğretmen"
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = AnalyzeToken(text)
+	}
+}
+
 func TestAnalyzeToken(t *testing.T) {
 	tests := []struct {
 		input string
