@@ -31,8 +31,9 @@ func rrfFusionWithK(bm25, vec []Result, limit int, k int) []Result {
 	if k <= 0 {
 		k = DefaultRRFK
 	}
-	scores := make(map[int64]float64)
-	resultMap := make(map[int64]Result)
+	capacity := len(bm25) + len(vec)
+	scores := make(map[int64]float64, capacity)
+	resultMap := make(map[int64]Result, capacity)
 	for rank, r := range bm25 {
 		scores[r.DocumentID] += 1.0 / float64(k+rank+1)
 		resultMap[r.DocumentID] = r
