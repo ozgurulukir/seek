@@ -5,6 +5,22 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+### Performance
+
+- **Query tokenization and analyzer allocations** (`internal/search`): `TokenizeQuery`
+  pre-sizes its result slice, `analyzeText` avoids a redundant append when the
+  analyzer leaves the token unchanged, and `rrfFusion` pre-allocates its
+  contribution slice. Query results are unchanged.
+- **Line number assignment pre-trimming** (`internal/chunk`): `AssignLineNumbers`
+  trims each line once up front and reuses the trimmed value for both span
+  calculation and chunk content, instead of trimming repeatedly. Output spans
+  are unchanged.
+
+### Documentation
+
+- **Docs audit and restructure** (`docs/`): documentation reorganized and
+  improved across the wiki.
+
 ## [0.6.2] - 2026-10-15
 
 ### Performance
