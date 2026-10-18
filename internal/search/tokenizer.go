@@ -118,7 +118,7 @@ func guardedTurkishStem(token, stem string) string {
 // It returns the analyzed tokens (without FTS5 prefix expansion).
 func (a *Analyzer) Analyze(text string) []string {
 	tokens := AnalyzeToken(text)
-	var result []string
+	result := make([]string, 0, len(tokens))
 	for _, token := range tokens {
 		token = LowerToken(token)
 		if token == "" {
@@ -153,7 +153,7 @@ const minFTS5PrefixLen = 3
 // honored for root reconstruction (the Turkish "kitabı"->"kitap" case).
 func (a *Analyzer) AnalyzeForQuery(text string) []string {
 	tokens := AnalyzeToken(text)
-	var result []string
+	result := make([]string, 0, len(tokens))
 	for _, token := range tokens {
 		token = LowerToken(token)
 		if token == "" {
