@@ -1,21 +1,102 @@
 # seek
 
+[![Build](https://img.shields.io/github/actions/workflow/status/ozgurulukir/seek/test.yml?branch=main)](https://github.com/ozgurulukir/seek/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Version](https://img.shields.io/github/v/release/ozgurulukir/seek)](https://github.com/ozgurulukir/seek/releases)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)](go.mod)
+
 > **Personal hybrid search engine (BM25 + Vector + Re-ranking) for source code, markdown notes, and AI agent conversations — with a 100% local/offline mode.**
 
-`seek` gives humans and AI agents instant, unified recall across your entire workspace:
-- 🔍 **Hybrid Fusion Search:** SQLite FTS5 (BM25) + HNSW Vector Search + RRF (Reciprocal Rank Fusion)
-- 💻 **Source Code & Notes:** 35+ programming languages (`.gitignore`-aware), Markdown, PDFs, and rich documents
-- 🤖 **AI Agent Memory:** Claude Code, Codex, ZCode, Opencode, Copilot CLI, and Hermes Agent sessions (including multimodal screenshots)
-- 🎯 **Precision Source Addressing:** Precise 1-based line ranges (`file.go:L25-L68`) with surrounding context expansion (`-C 1`)
-- ⚡ **Full Local/Offline Mode:** Zero cloud keys required for keyword search; local Ollama (`nomic-embed-text`) + FlashRank (`ms-marco-TinyBERT`) cover semantic search and reranking on your machine
-- 🧠 **Cross-Encoder Re-ranking:** Config-driven reranking via FlashRank, BGE-Reranker, Cohere, or Jina
-- 🔒 **Honest privacy model:** keyword search and all index data are local (index DB `0600`, dirs `0700`); if you configure cloud embedding/rerank/OCR, those providers receive your text/images — `seek doctor` shows exactly what goes where, and `privacy.offline_only: true` blocks every external call
+## About
 
----
+`seek` gives humans and AI agents instant, unified recall across an entire
+workspace. It indexes markdown notes, source code, PDFs, rich documents, and
+AI agent conversations into a local SQLite database (FTS5) and combines
+keyword (BM25) search with optional vector semantic search and cross-encoder
+re-ranking. Everything stays on your machine: keyword search and all index data
+are local, and a fully offline mode needs no API keys at all.
 
-## 📦 Install
+Who it's for: developers and knowledge workers who want fast, private search
+over their notes, codebases, and agent chat history, plus AI coding agents
+that need a single `seek search` instead of repeated grep/glob sweeps.
 
-### Fast Install (Recommended)
+See [SECURITY.md](SECURITY.md) for the privacy/data-flow model and
+[LICENSE](LICENSE) for terms.
+
+## Quickstart
+
+### Option A — Offline & Keyword Only (No API Key, No Network)
+
+```bash
+# Add collections
+seek add ~/notes --name mynotes            # markdown
+seek add ~/projects/myrepo --code          # source code (Go, Rust, Python, TS, etc.)
+seek add --claude                          # Claude Code conversations
+seek sync                                  # fast incremental index
+
+# Instant BM25 search (with Turkish/Unicode diacritics normalization)
+seek search "ECONNREFUSED port 3000" --lex
+```
+
+This option performs zero external network calls: indexing, keyword search, and
+all data stay on your machine. Scanned-PDF OCR is available as an opt-in when
+you point it at a local loopback vision server; remote OCR remains blocked by
+`privacy.offline_only: true`.
+
+### Option B — Hybrid Search (Cloud OpenAI / DashScope)
+
+⚠️ **External data flow:** in this mode chunk text, queries, and (if enabled)
+images are sent to the configured embedding/rerank/OCR endpoints. Nothing is
+sent to seek's authors — there is no telemetry — but the providers you
+configure do receive your data. `seek doctor` lists every active endpoint and
+data type; `privacy.offline_only: true` in config.yaml refuses all of it.
+
+```bash
+seek auth login                            # configure base_url / api_key / model
+seek embed                                 # generate vectors for indexed chunks
+seek search "functional programming architecture"   # hybrid: BM25 + vector + RRF
+```
+
+### Option C — 100% Local Semantic Search (Ollama + FlashRank)
+
+```bash
+ollama pull nomic-embed-text               # local embedding
+uv run tools/flashrank_server/server.py    # local cross-encoder reranker
+seek auth login                            # choose option 3 (ollama)
+seek embed --force                         # auto mode → realtime for local providers
+seek search "how does vector search work" -C 1
+```
+
+Optional full local metadata enrichment (language, entities, keyphrases, and
+topics) is provided by the semantic tag service. Install it once using the
+platform-specific instructions in [the semantic service guide](docs/semantic.md),
+then enable it in `config.yaml`:
+
+```yaml
+semantic:
+  enabled: true
+  base_url: http://127.0.0.1:8003
+```
+
+After starting the service, enrich existing collections with:
+
+```bash
+seek collection reindex <collection> --semantic-only
+```
+
+`uv run tools/semantic/server.py` is intentionally degraded mode (YAKE
+keyphrases only). Full mode must be started with the Python interpreter under
+`tools/semantic/.venv`; the guide includes Linux/macOS and Windows commands.
+
+Ollama implements the OpenAI-compatible realtime `/v1/embeddings` endpoint,
+but not the Files and Batch endpoints that `seek`'s async mode uses. `seek`
+detects this automatically: with `embedding.mode: auto` (the default) a local
+provider resolves to the realtime request batch, so no `--realtime` flag is
+needed. Async batch is an optional throughput/cost optimization for hosted
+providers that expose the Files + Batch API; it is never inferred from a
+loopback address. Both paths produce the same stored vectors.
+
+### Install
 
 **Linux & macOS:**
 ```bash
@@ -60,117 +141,50 @@ go build -tags "fts5 sqlite_fts5" -o seek.exe .
 ```
 </details>
 
-### Install Agent Skill
-
-Install the `seek` skill directly into your AI coding agent (Claude Code, Codex, Antigravity, Cursor):
-
+**Install Agent Skill** (Claude Code, Codex, Antigravity, Cursor):
 ```bash
 mkdir -p ~/.agents/skills/seek
 cp -r skills/seek/* ~/.agents/skills/seek/
 ```
 
----
+## Features
 
-## ⚡ Quickstart
+Core:
+1. Hybrid fusion search — SQLite FTS5 (BM25) + HNSW vector search + RRF (Reciprocal Rank Fusion).
+2. Source code & notes indexing — 35+ programming languages (`.gitignore`-aware), Markdown, PDFs, and rich documents.
+3. AI agent memory — Claude Code, Codex, ZCode, Opencode, Copilot CLI, and Hermes Agent sessions, including multimodal screenshots.
+4. Precision source addressing — 1-based line ranges (`file.go:L25-L68`) with surrounding context expansion (`-C 1`).
+5. Honest privacy model — keyword search and all index data are local (index DB `0600`, dirs `0700`); cloud providers receive data only if configured; `seek doctor` shows exactly what goes where; `privacy.offline_only: true` blocks every external call.
 
-### Option A — Offline & Keyword Only (No API Key, No Network)
-```bash
-# Add collections
-seek add ~/notes --name mynotes            # markdown
-seek add ~/projects/myrepo --code          # source code (Go, Rust, Python, TS, etc.)
-seek add --claude                          # Claude Code conversations
-seek sync                                  # fast incremental index
+Advanced:
+6. Full local/offline mode — zero cloud keys required for keyword search; local Ollama (`nomic-embed-text`) + FlashRank (`ms-marco-TinyBERT`) cover semantic search and reranking on your machine.
+7. Cross-encoder re-ranking — config-driven reranking via FlashRank, BGE-Reranker, Cohere, or Jina.
+8. Multimodal embeddings — image+text VL embeddings (DashScope qwen3-vl-embedding) with configurable endpoint.
+9. OCR for scanned PDFs — vision/OCR models extract text from scanned pages (local loopback only under offline mode).
+10. Schema-driven parsers — opencode, Copilot CLI, Zed, Hermes, ZCode, and schema-mode Claude/Codex.
+11. MCP server — expose the index to AI agents via Model Context Protocol (`seek mcp`).
+12. Background service & hooks — periodic sync+embed via Task Scheduler / systemd / launchd; Claude Code & Codex hooks.
+13. Semantic tag enrichment — optional local NLP service generating tags/topics/entities/language fast fields.
+14. Compression — Zstd/LZ4 chunk content compression with transparent decompression.
+15. Aggregations & autocomplete — faceted aggregations and prefix suggestions.
 
-# Instant BM25 search (with Turkish/Unicode diacritics normalization)
-seek search "ECONNREFUSED port 3000" --lex
-```
+## Documentation
 
-This option performs zero external network calls: indexing, keyword search, and
-all data stay on your machine. Scanned-PDF OCR is available as an opt-in when
-you point it at a local loopback vision server; remote OCR remains blocked by
-`privacy.offline_only: true`.
-
-### Option B — Hybrid Search (Cloud OpenAI / DashScope)
-
-⚠️ **External data flow:** in this mode chunk text, queries, and (if enabled)
-images are sent to the configured embedding/rerank/OCR endpoints. Nothing is
-sent to seek's authors — there is no telemetry — but the providers you
-configure do receive your data. `seek doctor` lists every active endpoint and
-data type; `privacy.offline_only: true` in config.yaml refuses all of it.
-
-```bash
-seek auth login                            # configure base_url / api_key / model
-seek embed                                 # generate vectors for indexed chunks
-seek search "functional programming architecture"   # hybrid: BM25 + vector + RRF
-```
-
-### Option C — 100% Local Semantic Search (Ollama + FlashRank)
-
-> **🤖 AI coding agents:** point your agent at the bundled skill
-> (`skills/seek/SKILL.md`) and it will route codebase, notes, and conversation
-> questions through seek — preferring the default hybrid mode (semantic-weighted)
-> for conceptual queries and `--lex` only for exact symbols and error strings.
-> One `seek search` beats repeated Grep/Glob sweeps across every indexed
-> workspace.
-
-```bash
-ollama pull nomic-embed-text               # local embedding
-uv run tools/flashrank_server/server.py    # local cross-encoder reranker
-seek auth login                            # choose option 3 (ollama)
-seek embed --force                         # auto mode → realtime for local providers
-seek search "how does vector search work" -C 1
-```
-
-Optional full local metadata enrichment (language, entities, keyphrases, and
-topics) is provided by the semantic tag service. Install it once using the
-platform-specific instructions in [the semantic service guide](docs/semantic.md),
-then enable it in `config.yaml`:
-
-```yaml
-semantic:
-  enabled: true
-  base_url: http://127.0.0.1:8003
-```
-
-After starting the service, enrich existing collections with:
-
-```bash
-seek collection reindex <collection> --semantic-only
-```
-
-`uv run tools/semantic/server.py` is intentionally degraded mode (YAKE
-keyphrases only). Full mode must be started with the Python interpreter under
-`tools/semantic/.venv`; the guide includes Linux/macOS and Windows commands.
-
-Ollama implements the OpenAI-compatible realtime `/v1/embeddings` endpoint,
-but not the Files and Batch endpoints that `seek`'s async mode uses. `seek`
-detects this automatically: with `embedding.mode: auto` (the default) a local
-provider resolves to the realtime request batch, so no `--realtime` flag is
-needed. Async batch is an optional throughput/cost optimization for hosted
-providers that expose the Files + Batch API; it is never inferred from a
-loopback address. Both paths produce the same stored vectors.
-
----
-
-## 📚 Documentation Wiki
-
-Deep-dive documentation and specialized guides:
+Deep-dive documentation and specialized guides (full index: [docs/index.md](docs/index.md)):
 
 | Guide | Description |
 |---|---|
-| 📖 [**100% Local & Offline Setup**](docs/local-setup.md) | Ollama, FlashRank, semantic tagging & xberg setup, ASCII flow diagram, tool scripts. |
-| 📊 [**Models & Re-ranking Guide**](docs/models.md) | Embedding & Cross-Encoder comparisons, dimension rules, CPU latency benchmarks. |
-| ⚙️ [**Background Service & Concurrency**](docs/service.md) | Scheduled tasks (Windows Task Scheduler / systemd / launchd), hooks, SQLite WAL. |
-| 📑 [**Document Extractors & OCR**](docs/extractors.md) | Builtin vs xberg extraction (100+ formats: docx, xlsx, pdf, html, csv) and OCR vision. |
-| 🔍 [**Query Syntax & Filters Guide**](docs/query-guide.md) | Structured AST syntax (AND/OR/NOT), filters (`--repo`, `--lang`), line spans (`:L10-L45`), and `-C`. |
-| 🤖 [**Schema-Driven Parsers**](docs/parsers.md) | Opencode, Copilot CLI, Zed threads, and `--workspace` filtering. |
-| 🛠️ [**AI Agent Skill Reference**](skills/seek/SKILL.md) | Agent prompt instructions, query strategies, and CLI reference. |
-| 🏷️ [**Semantic Tag Service**](docs/semantic.md) | Optional local NLP service (NER, keyphrases, topics, LID) that generates `tags`/`topics`/`entities`/`language` fast fields for all text-bearing collections (markdown, code, conversations, PDF, documents, parser). |
-| 🔌 [**MCP Server**](docs/mcp.md) | `seek mcp` — Model Context Protocol tools (`seek_search`, `seek_fields`, `seek_status`, `seek_autocomplete`) for Claude Code and other agents. |
+| [100% Local & Offline Setup](docs/local-setup.md) | Ollama, FlashRank, semantic tagging & xberg setup, ASCII flow diagram, tool scripts. |
+| [Models & Re-ranking Guide](docs/models.md) | Embedding & Cross-Encoder comparisons, dimension rules, CPU latency benchmarks. |
+| [Background Service & Concurrency](docs/service.md) | Scheduled tasks (Windows Task Scheduler / systemd / launchd), hooks, SQLite WAL. |
+| [Document Extractors & OCR](docs/extractors.md) | Builtin vs xberg extraction (100+ formats: docx, xlsx, pdf, html, csv) and OCR vision. |
+| [Query Syntax & Filters Guide](docs/query-guide.md) | Structured AST syntax (AND/OR/NOT), filters (`--repo`, `--lang`), line spans (`:L10-L45`), and `-C`. |
+| [Schema-Driven Parsers](docs/parsers.md) | Opencode, Copilot CLI, Zed threads, and `--workspace` filtering. |
+| [AI Agent Skill Reference](skills/seek/SKILL.md) | Agent prompt instructions, query strategies, and CLI reference. |
+| [Semantic Tag Service](docs/semantic.md) | Optional local NLP service (NER, keyphrases, topics, LID) generating `tags`/`topics`/`entities`/`language` fast fields. |
+| [MCP Server](docs/mcp.md) | `seek mcp` — Model Context Protocol tools for Claude Code and other agents. |
 
----
-
-## 🔌 MCP Server
+## MCP Server
 
 Expose your entire seek index to AI agents via the [Model Context Protocol](https://modelcontextprotocol.io):
 
@@ -178,10 +192,9 @@ Expose your entire seek index to AI agents via the [Model Context Protocol](http
 seek mcp          # MCP server on stdio (JSON-RPC 2.0)
 ```
 
-**Tools:** `seek_search` (hybrid search with the full filter/facet/sort surface, same fields as `seek search --json`), `seek_fields` (fast-field discovery and values), `seek_status` (collections + counts), `seek_capabilities` (search availability and lexical fallback), `seek_autocomplete` (prefix suggestions).
+**Tools:** `seek_search` (hybrid search with the full filter/facet/sort surface), `seek_fields` (fast-field discovery and values), `seek_status` (collections + counts), `seek_capabilities` (search availability and lexical fallback), `seek_autocomplete` (prefix suggestions).
 
 **Claude Code** — add to `~/.claude.json` (or project `.mcp.json`):
-
 ```json
 {
   "mcpServers": {
@@ -190,25 +203,21 @@ seek mcp          # MCP server on stdio (JSON-RPC 2.0)
 }
 ```
 
-**Other agents** (Codex CLI, Cursor, Zed, VS Code, Cline, etc.) use the same
+Other agents (Codex CLI, Cursor, Zed, VS Code, Cline, etc.) use the same
 stdio server with their own config path/section — see
-[**docs/mcp.md**](docs/mcp.md) for ready-made snippets for each.
+[docs/mcp.md](docs/mcp.md) for ready-made snippets for each.
 
-Reads only the local SQLite index; the `privacy.offline_only` setting applies unchanged (no network egress beyond your configured embedding provider, same as `seek search`).
+Reads only the local SQLite index; the `privacy.offline_only` setting applies unchanged.
 
----
-
-## 🕹️ CLI Commands Cheat Sheet
+## CLI Commands Cheat Sheet
 
 ```bash
 # Indexing & Collections
 seek add <path> --name <name>      # add markdown collection
 seek add <path> --code             # add source code collection (35+ languages)
-seek add <path> --docs             # add rich documents (docx/xlsx/pdf/html/csv via xberg)
-# Choose one conversation source:
+seek add <path> --documents        # add rich documents (docx/xlsx/pdf/html/csv via xberg)
 seek add --claude                  # Claude Code sessions (+images)
 seek add --codex                   # Codex sessions (+images)
-# Choose one schema-driven agent source:
 seek add --opencode                # opencode sessions
 seek add --copilot                 # GitHub Copilot CLI sessions
 seek add --hermes                  # Hermes Agent sessions
@@ -234,45 +243,44 @@ seek status                        # view collections & counts (compatibility al
 
 # Search & Navigation
 seek search "<query>"              # hybrid search (BM25 + Vector + Re-ranking)
-seek search "<query>" --json       # machine-readable JSON (agent/scripting surface);
-                                   # content_kind: full=whole chunk, snippet=FTS excerpt
-seek mcp                           # MCP server on stdio (AI agent tools)
+seek search "<query>" --json       # machine-readable JSON
 seek search "<query>" --lex        # BM25 keyword search only
 seek search "<query>" --vec        # Vector semantic search only
 seek search "<query>" -C 1         # expand surrounding chunk context
 seek search "<query>" --repo <r>   # filter by repository/collection
-seek search "<query>" --lang <l>   # filter by code language (go, rust, python, ts, etc.)
-seek search "<query>" --field tags:<t>  # filter by fast field tags (comma-list membership; frontmatter or semantic)
+seek search "<query>" --lang <l>   # filter by code language
+seek search "<query>" --field tags:<t>  # filter by fast field tags
 seek search "<query>" --path <p>   # filter by file path pattern (GLOB)
-seek search "<query>" --aggs "type:terms"  # faceted aggregations (also lang:terms, repo:terms, tags:terms, topics:terms, entities:terms, language:terms)
-seek fields [name] [--json]        # discover fast-field values & taxonomy (tags, topics, entities, etc.)
+seek search "<query>" --aggs "type:terms"  # faceted aggregations
+seek fields [name] [--json]        # discover fast-field values & taxonomy
+seek mcp                           # MCP server on stdio
 
 # System & Management
-# Authentication and provider status:
 seek auth login                    # configure embedding/rerank providers
 seek auth status                   # inspect provider status
-# Background service: choose start, stop, or status:
 seek service start                 # start periodic sync+embed service
 seek service stop                  # stop the service
 seek service status                # inspect the service
-# Hooks: choose install or uninstall:
 seek hooks install                 # install automatic conversation sync hooks
 seek hooks uninstall               # remove automatic conversation sync hooks
 seek doctor [--fix-permissions]    # audit & repair private data permissions (0700/0600)
 seek uninstall --dry-run           # remove service/hooks/cache/config (preview first!)
-seek advanced analyze "<text>" --lang en # tokenize and stem (English)
-seek advanced analyze "<text>" --lang tr # tokenize and stem (Turkish)
+seek advanced analyze "<text>" --lang en  # tokenize and stem
 seek advanced parsers list        # view parser schemas and detection status
 ```
 
-> **🔒 Source files are never modified.** No `seek` management command — `add`,
+> **Source files are never modified.** No `seek` management command — `add`,
 > `sync` (incl. `sync <collection> --path`), `embed`, `collection
 > rename`/`reindex`, the `--semantic-only` backfill, or `rm` — ever modifies,
 > deletes, or renames your source files. Every command only reads your files
-> and manages the local index (SQLite database, FTS, fast fields, vector
-> index); your files remain the source of truth.
+> and manages the local index; your files remain the source of truth.
 
-During bulk sync, absent auto-discovered conversation sources are reported as `skipped` warnings. An explicitly selected missing source and any indexing failure return a nonzero exit status. `--strict` also fails on skipped sources or unavailable embeddings; `--no-embed` remains an intentional skip. `--json` emits an array of collection reports with `status`, counts, errors, and embedding availability.
+During bulk sync, absent auto-discovered conversation sources are reported as
+`skipped` warnings. An explicitly selected missing source and any indexing
+failure return a nonzero exit status. `--strict` also fails on skipped sources
+or unavailable embeddings; `--no-embed` remains an intentional skip. `--json`
+emits an array of collection reports with `status`, counts, errors, and
+embedding availability.
 
 If no embedding provider is configured, `seek sync` still succeeds — it prints
 a single "skip embeddings … run `seek auth login`" hint, leaves chunks pending,
@@ -281,9 +289,11 @@ and keyword (BM25) search keeps working fully. `seek embed` and `seek search
 disables embeddings outright. Use `seek sync --no-embed` for an intentional
 keyword-first workflow.
 
----
+## Configuration
 
-## ⚙️ Configuration (`~/.config/seek/config.yaml`)
+Config lives at `~/.config/seek/config.yaml` (see [CONTRIBUTING.md](CONTRIBUTING.md)
+for development). `seek config` prints it grouped into three profiles (schema
+and file layout unchanged):
 
 ```yaml
 embedding:
@@ -297,7 +307,7 @@ rerank:
   base_url: http://127.0.0.1:8000
   api_key: local
   model: ms-marco-TinyBERT-L-2-v2
-  top_n: 10                 # cap candidates sent to the reranker (omit = all)
+  top_n: 10
 
 extractor:
   backend: builtin          # "builtin" or "xberg"
@@ -306,7 +316,7 @@ extractor:
 
 search:
   query_mode: parsed        # "parsed" (AST) or "raw" (FTS5 passthrough)
-  default_limit: 10         # default max results (-l / MCP limit override this)
+  default_limit: 10
   rrf_k: 60
 
 vector_index:
@@ -321,40 +331,23 @@ compression:
   level: 3
 
 semantic:
-  enabled: false            # optional local tag enrichment; all text-bearing
-                            # collections gain generated tags/topics/entities/language
-                            # (conversations/PDF/documents during sync, markdown/
-                            # code via `seek collection reindex --semantic-only`)
+  enabled: false            # optional local tag enrichment
   base_url: http://127.0.0.1:8003
-  max_tags: 5               # 1..20
-  # timeout: 60s
+  max_tags: 5
 
 privacy:
-  offline_only: true        # refuse external embedding/rerank/OCR/xberg calls;
-                            # allow only numeric loopback OCR for local models;
-                            # keyword search stays fully local either way
-                            # (see: seek doctor → privacy / data egress)
+  offline_only: true        # refuse external embedding/rerank/OCR/xberg calls
 ```
 
-`seek config` prints the same file grouped into three profiles (the schema and
-file layout are unchanged — nothing is renamed or dropped):
+Profiles printed by `seek config`: **core** (`search`, `filters`, `aggregations`,
+`privacy`, `chunk`, `db_path`, `cache_dir`); **local-semantic** (`embedding`
+incl. `vl_base_url`/`multimodal`, `rerank`, `semantic`); **document-extras**
+(`ocr`, `extractor`). Advanced-only knobs (`vector_index`, `compression`) are
+shown only via `seek config --advanced`; `seek doctor --verbose` prints the
+fully resolved config. `seek config` / `seek doctor` never rewrite your config
+file.
 
-- **core** — `search`, `filters`, `aggregations`, `privacy`, `chunk`, plus the
-  runtime `db_path` / `cache_dir`.
-- **local-semantic** — `embedding` (incl. `vl_base_url` / `multimodal`),
-  `rerank`, `semantic`.
-- **document-extras** — `ocr`, `extractor` (`backend` / `xberg_base_url`).
-
-Advanced-only knobs — `vector_index` (backend + HNSW tuning) and `compression`
-—are **not** written into a freshly-created default config. Show them with
-`seek config --advanced`; the plain view prints a hint when any are present.
-`seek doctor --verbose` additionally prints the fully resolved config (advanced
-knobs + every applied default) as part of the health check. The plain `seek
-config` / `seek doctor` output never rewrites or drops your config file.
-
----
-
-## 🏛️ Built With & Attributions
+## Built With & Attributions
 
 - [mattn/go-sqlite3](https://github.com/mattn/go-sqlite3) — SQLite with FTS5
 - [coder/hnsw](https://github.com/coder/hnsw) — HNSW vector indexing
@@ -363,10 +356,9 @@ config` / `seek doctor` output never rewrites or drops your config file.
 - [klauspost/compress](https://github.com/klauspost/compress) — Zstd chunk compression
 - See [ATTRIBUTION.md](ATTRIBUTION.md) for full upstream licenses and credits.
 
-## 📄 License
+## License
 
 MIT — see [LICENSE](LICENSE). This project is a fork of
 [ethan-huo/seek](https://github.com/ethan-huo/seek), which licenses its code
-under MIT (upstream README, "License" section); its copyright notice is
-retained in our LICENSE. Security policy and reporting:
-[SECURITY.md](SECURITY.md).
+under MIT; its copyright notice is retained in our LICENSE. Security policy and
+reporting: [SECURITY.md](SECURITY.md). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
