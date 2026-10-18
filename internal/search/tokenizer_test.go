@@ -4,6 +4,26 @@ import (
 	"testing"
 )
 
+func BenchmarkAnalyze(b *testing.B) {
+	a := NewAnalyzer("en", true, true)
+	text := "the quick brown fox jumps over the lazy dog running studies happily"
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = a.Analyze(text)
+	}
+}
+
+func BenchmarkAnalyzeForQuery(b *testing.B) {
+	a := NewAnalyzer("en", true, true)
+	text := "the quick brown fox jumps over the lazy dog running studies happily"
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = a.AnalyzeForQuery(text)
+	}
+}
+
 func TestAnalyzerEnglishStemming(t *testing.T) {
 	a := NewAnalyzer("en", true, true)
 	tests := []struct {

@@ -622,8 +622,6 @@ func toFTS5(q Query, a *Analyzer) (string, bool) {
 // --- Query Analysis ---
 
 // AnalyzeToken splits text into tokens compatible with unicode61.
-// PERF: slice tokens directly using byte index offsets instead of strings.Builder
-// to eliminate intermediate string allocations and builder overhead.
 func AnalyzeToken(s string) []string {
 	var tokens []string
 	start := -1
