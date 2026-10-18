@@ -622,21 +622,27 @@ func toFTS5(q Query, a *Analyzer) (string, bool) {
 // --- Query Analysis ---
 
 // AnalyzeToken splits text into tokens compatible with unicode61.
+// PERF: slice tokens directly using byte index offsets instead of strings.Builder
+// to eliminate intermediate string allocations and builder overhead.
 func AnalyzeToken(s string) []string {
 	var tokens []string
-	var cur strings.Builder
-	for _, r := range s {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
-			cur.WriteRune(r)
+	start := -1
+	for i, r := range s {
+		isWord := (r < utf8.RuneSelf && (('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') || r == '_')) ||
+			(r >= utf8.RuneSelf && (unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'))
+		if isWord {
+			if start < 0 {
+				start = i
+			}
 		} else {
-			if cur.Len() > 0 {
-				tokens = append(tokens, cur.String())
-				cur.Reset()
+			if start >= 0 {
+				tokens = append(tokens, s[start:i])
+				start = -1
 			}
 		}
 	}
-	if cur.Len() > 0 {
-		tokens = append(tokens, cur.String())
+	if start >= 0 {
+		tokens = append(tokens, s[start:])
 	}
 	return tokens
 }
