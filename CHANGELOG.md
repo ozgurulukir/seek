@@ -5,6 +5,8 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-18
+
 ### Performance
 
 - **Query tokenization and analyzer allocations** (`internal/search`): `TokenizeQuery`
