@@ -93,7 +93,7 @@ func TestRRFFusionOverlapBoost(t *testing.T) {
 	}
 
 	// Verify doc1's score is the sum of both contributions.
-	want := 1.0/float64(RRFk+1) + 1.0/float64(RRFk+1)
+	want := 1.0/float64(DefaultRRFK+1) + 1.0/float64(DefaultRRFK+1)
 	got := result[0].Score
 	if math.Abs(got-want) > 1e-9 {
 		t.Errorf("expected doc1 score=%f, got %f", want, got)
@@ -118,7 +118,7 @@ func TestRRFFusionDedupByDocumentID(t *testing.T) {
 		t.Errorf("expected BM25 version to win, got %q", result[0].Title)
 	}
 	// But the score should include both contributions.
-	want := 1.0/float64(RRFk+1) + 1.0/float64(RRFk+1)
+	want := 1.0/float64(DefaultRRFK+1) + 1.0/float64(DefaultRRFK+1)
 	if math.Abs(result[0].Score-want) > 1e-9 {
 		t.Errorf("expected combined score=%f, got %f", want, result[0].Score)
 	}
@@ -163,8 +163,8 @@ func TestRRFFusionScoringFormula(t *testing.T) {
 	if len(result) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(result))
 	}
-	wantDoc1 := 1.0 / float64(RRFk+1) // 1/61
-	wantDoc2 := 1.0 / float64(RRFk+2) // 1/62
+	wantDoc1 := 1.0 / float64(DefaultRRFK+1) // 1/61
+	wantDoc2 := 1.0 / float64(DefaultRRFK+2) // 1/62
 	if math.Abs(result[0].Score-wantDoc1) > 1e-9 {
 		t.Errorf("doc1 score=%f, want %f", result[0].Score, wantDoc1)
 	}
@@ -229,13 +229,13 @@ func TestRRFFusionDistinctDocsRanking(t *testing.T) {
 
 	// Verify each doc has the expected score.
 	expected := map[int64]float64{
-		1: 1.0 / float64(RRFk+1), // BM25 rank 0
-		2: 1.0 / float64(RRFk+2), // BM25 rank 1
-		3: 1.0 / float64(RRFk+3), // BM25 rank 2
-		4: 1.0 / float64(RRFk+4), // BM25 rank 3
-		5: 1.0 / float64(RRFk+5), // BM25 rank 4
-		6: 1.0 / float64(RRFk+1), // vec rank 0
-		7: 1.0 / float64(RRFk+2), // vec rank 1
+		1: 1.0 / float64(DefaultRRFK+1), // BM25 rank 0
+		2: 1.0 / float64(DefaultRRFK+2), // BM25 rank 1
+		3: 1.0 / float64(DefaultRRFK+3), // BM25 rank 2
+		4: 1.0 / float64(DefaultRRFK+4), // BM25 rank 3
+		5: 1.0 / float64(DefaultRRFK+5), // BM25 rank 4
+		6: 1.0 / float64(DefaultRRFK+1), // vec rank 0
+		7: 1.0 / float64(DefaultRRFK+2), // vec rank 1
 	}
 	for docID, want := range expected {
 		got, ok := scoreMap[docID]
