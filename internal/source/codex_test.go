@@ -349,3 +349,79 @@ func TestParseCodexFileWithImages_EmptyTextWithImages(t *testing.T) {
 		t.Errorf("expected saved image at %q: %v", img.SavedPath, err)
 	}
 }
+
+func TestConversationToText(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []CodexMessage
+		want     string
+	}{
+		{
+			name:     "empty messages",
+			messages: []CodexMessage{},
+			want:     "",
+		},
+		{
+			name: "single message",
+			messages: []CodexMessage{
+				{Role: "user", Content: "Hello world"},
+			},
+			want: "[user]: Hello world\n\n",
+		},
+		{
+			name: "multiple messages",
+			messages: []CodexMessage{
+				{Role: "user", Content: "What is 2+2?"},
+				{Role: "assistant", Content: "4"},
+			},
+			want: "[user]: What is 2+2?\n\n[assistant]: 4\n\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ConversationToText(tt.messages)
+			if got != tt.want {
+				t.Errorf("ConversationToText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClaudeConversationToText(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []ClaudeMessage
+		want     string
+	}{
+		{
+			name:     "empty messages",
+			messages: []ClaudeMessage{},
+			want:     "",
+		},
+		{
+			name: "single message",
+			messages: []ClaudeMessage{
+				{Role: "user", Content: "Explain Go interfaces"},
+			},
+			want: "[user]: Explain Go interfaces\n\n",
+		},
+		{
+			name: "multiple messages",
+			messages: []ClaudeMessage{
+				{Role: "user", Content: "Hi Claude"},
+				{Role: "assistant", Content: "Hello! How can I help?"},
+			},
+			want: "[user]: Hi Claude\n\n[assistant]: Hello! How can I help?\n\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ClaudeConversationToText(tt.messages)
+			if got != tt.want {
+				t.Errorf("ClaudeConversationToText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
