@@ -1,6 +1,7 @@
 package source
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -424,4 +425,73 @@ func TestClaudeConversationToText(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseCodexFileWithImagesContext(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	const pngDataURI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+	lines := []string{
+		`{"type":"session_meta","payload":{"id":"sess-ctx-123"}}`,
+		`{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"Line 1 User text"},{"type":"input_image","image_url":"` + pngDataURI + `"}]}}`,
+		`{"type":"response_item","payload":{"role":"assistant","content":[{"type":"output_text","text":"Line 2 Assistant text"}]}}`,
+	}
+	path := writeTempFile(t, strings.Join(lines, "\n"))
+
+	t.Run("success background context", func(t *testing.T) {
+		msgs, sessionID, imgs, err := ParseCodexFileWithImagesContext(context.Background(), path, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if sessionID != "sess-ctx-123" {
+			t.Errorf("sessionID = %q, want %q", sessionID, "sess-ctx-123")
+		}
+		if len(msgs) != 2 {
+			t.Fatalf("expected 2 messages, got %d", len(msgs))
+		}
+		if len(imgs) != 1 {
+			t.Fatalf("expected 1 image, got %d", len(imgs))
+		}
+	})
+
+	t.Run("canceled context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // pre-cancel context
+
+		_, _, _, err := ParseCodexFileWithImagesContext(ctx, path, 0)
+		if err == nil {
+			t.Fatal("expected error for canceled context, got nil")
+		}
+	})
+
+	t.Run("fromLine offset", func(t *testing.T) {
+		// skip session_meta and first line, start from line 2
+		msgs, sessionID, imgs, err := ParseCodexFileWithImagesContext(context.Background(), path, 2)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// sessionID should be empty since session_meta was at line 1
+		if sessionID != "" {
+			t.Errorf("expected empty sessionID when line 1 skipped, got %q", sessionID)
+		}
+		if len(msgs) != 1 {
+			t.Fatalf("expected 1 message when skipping line 1 & 2, got %d", len(msgs))
+		}
+		if msgs[0].Role != "assistant" || msgs[0].Content != "Line 2 Assistant text" {
+			t.Errorf("unexpected message: %#v", msgs[0])
+		}
+		if len(imgs) != 0 {
+			t.Errorf("expected 0 images when skipping image line, got %d", len(imgs))
+		}
+	})
+
+	t.Run("missing file", func(t *testing.T) {
+		_, _, _, err := ParseCodexFileWithImagesContext(context.Background(), filepath.Join(t.TempDir(), "nonexistent.jsonl"), 0)
+		if err == nil {
+			t.Fatal("expected error for missing file, got nil")
+		}
+	})
 }
