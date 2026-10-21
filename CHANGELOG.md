@@ -5,6 +5,8 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-10-21
+
 ### Performance
 
 - **Token analysis slice pre-allocation and ASCII fast-path** (`internal/search`): `AnalyzeToken`
