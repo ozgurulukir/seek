@@ -622,12 +622,31 @@ func toFTS5(q Query, a *Analyzer) (string, bool) {
 // --- Query Analysis ---
 
 // AnalyzeToken splits text into tokens compatible with unicode61.
+// PERF: pre-allocate slice capacity and fast-path ASCII character checks to avoid slice reallocations and rune decoding overhead.
 func AnalyzeToken(s string) []string {
-	var tokens []string
+	if len(s) == 0 {
+		return nil
+	}
+	capEst := len(s)/5 + 1
+	if capEst > 64 {
+		capEst = 64
+	}
+	tokens := make([]string, 0, capEst)
 	start := -1
-	for i, r := range s {
-		isWord := (r < utf8.RuneSelf && (('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') || r == '_')) ||
-			(r >= utf8.RuneSelf && (unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'))
+	i := 0
+	for i < len(s) {
+		b := s[i]
+		var isWord bool
+		var width int
+		if b < utf8.RuneSelf {
+			isWord = ('a' <= b && b <= 'z') || ('A' <= b && b <= 'Z') || ('0' <= b && b <= '9') || b == '_'
+			width = 1
+		} else {
+			r, w := utf8.DecodeRuneInString(s[i:])
+			isWord = unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+			width = w
+		}
+
 		if isWord {
 			if start < 0 {
 				start = i
@@ -638,6 +657,7 @@ func AnalyzeToken(s string) []string {
 				start = -1
 			}
 		}
+		i += width
 	}
 	if start >= 0 {
 		tokens = append(tokens, s[start:])
