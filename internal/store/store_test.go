@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func newTestStore(t *testing.T) *Store {
+func newTestStore(t testing.TB) *Store {
 	t.Helper()
 	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -571,7 +571,7 @@ func TestFTSRebuildOnTokenizerChange(t *testing.T) {
 }
 
 func BenchmarkUpdateChunkEmbedding(b *testing.B) {
-	s := newTestStore(&testing.T{})
+	s := newTestStore(b)
 	col, err := s.CreateCollection("bench-col", "markdown", "/tmp", "**/*.md")
 	if err != nil {
 		b.Fatal(err)
@@ -629,7 +629,7 @@ func BenchmarkUpdateChunkEmbedding(b *testing.B) {
 }
 
 func BenchmarkUpdateChunkEmbeddingsBatchWithVectorIndex(b *testing.B) {
-	s := newTestStore(&testing.T{})
+	s := newTestStore(b)
 	vIdx := newLinearIndex(4)
 	s.SetVectorIndex(vIdx)
 
@@ -776,5 +776,17 @@ func TestUpdateChunkEmbeddingsBatchCrossesINGroups(t *testing.T) {
 				t.Fatalf("vector index len = %d, want %d", got, tc.n)
 			}
 		})
+	}
+}
+
+func BenchmarkInitCoreSchema(b *testing.B) {
+	b.ReportAllocs()
+	s := newTestStore(b)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Re-run initCoreSchema on the opened store
+		if err := s.initCoreSchema(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
