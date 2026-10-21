@@ -303,3 +303,94 @@ func TestSafeCleanupOrphansFileRootPreserves(t *testing.T) {
 		t.Fatalf("file root did not warn: %q", logBuf)
 	}
 }
+
+type mockWriter struct{}
+
+func (mockWriter) UpsertAndReplaceIndex(ctx context.Context, doc store.DocumentIndex) (int64, error) {
+	return 0, nil
+}
+
+func (mockWriter) UpsertAndAppendIndex(ctx context.Context, doc store.DocumentIndex) (int64, error) {
+	return 0, nil
+}
+
+type mockResolver struct{}
+
+func (mockResolver) Resolve(col *store.Collection) (extractor.Extractor, error) {
+	return nil, nil
+}
+
+func TestNewWithDependencies(t *testing.T) {
+	cfg := &config.AppConfig{}
+	tmp := t.TempDir()
+	db, err := store.Open(filepath.Join(tmp, "test.db"))
+	if err != nil {
+		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
+			t.Skip("SQLite FTS5 not enabled")
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	resolver := &mockResolver{}
+	writer := &mockWriter{}
+
+	idx := NewWithDependencies(cfg, db, resolver, writer)
+	if idx == nil {
+		t.Fatal("NewWithDependencies returned nil")
+	}
+	if idx.cfg != cfg {
+		t.Errorf("expected cfg %v, got %v", cfg, idx.cfg)
+	}
+	if idx.db != db {
+		t.Errorf("expected db %v, got %v", db, idx.db)
+	}
+	if idx.resolver != resolver {
+		t.Errorf("expected resolver %v, got %v", resolver, idx.resolver)
+	}
+	if idx.writer != writer {
+		t.Errorf("expected writer %v, got %v", writer, idx.writer)
+	}
+	if idx.log == nil {
+		t.Error("expected non-nil default log")
+	}
+	if idx.ctxValue == nil {
+		t.Error("expected non-nil default ctxValue")
+	}
+	if idx.enricher == nil {
+		t.Error("expected non-nil default enricher")
+	}
+}
+
+func TestNew(t *testing.T) {
+	cfg := &config.AppConfig{}
+	tmp := t.TempDir()
+	db, err := store.Open(filepath.Join(tmp, "test.db"))
+	if err != nil {
+		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
+			t.Skip("SQLite FTS5 not enabled")
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	idx := New(cfg, db)
+	if idx == nil {
+		t.Fatal("New returned nil")
+	}
+	if idx.cfg != cfg {
+		t.Errorf("expected cfg %v, got %v", cfg, idx.cfg)
+	}
+	if idx.db != db {
+		t.Errorf("expected db %v, got %v", db, idx.db)
+	}
+	if idx.writer != db {
+		t.Errorf("expected default writer to be db (%v), got %v", db, idx.writer)
+	}
+	if idx.resolver == nil {
+		t.Error("expected non-nil default resolver")
+	}
+	if idx.enricher == nil {
+		t.Error("expected non-nil default enricher")
+	}
+}
