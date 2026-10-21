@@ -15,7 +15,7 @@ clean:
 test:
 	go test -tags "fts5 sqlite_fts5" ./...
 
-# Cut a release: bump plugin.json, promote CHANGELOG [Unreleased], tag, push.
+# Cut a release: bump plugin manifests, promote CHANGELOG [Unreleased], tag, push.
 # Usage: make release VERSION=X.Y.Z  (add RELEASE_ARGS=--dry-run to preview)
 release:
 	@./scripts/release.sh $(VERSION) $(RELEASE_ARGS)

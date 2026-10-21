@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -19,18 +20,18 @@ var bareSemverRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]
 var releasedHeadingRE = regexp.MustCompile(`^## \[([0-9]+\.[0-9]+\.[0-9]+[^\]]*)\]`)
 
 // TestReleaseVersionConsistency guards against version drift (see AGENTS.md
-// "Releasing"). Two surfaces must always agree:
+// "Releasing"). The plugin manifests must always agree with the CHANGELOG:
 //
-//   - plugin.json's "version" is the bare x.y.z and must equal the newest
-//     released CHANGELOG heading; `make release` writes both together, so a
-//     mismatch means one was hand-edited without the other.
+//   - plugin.json's and .claude-plugin/plugin.json's "version" are bare x.y.z
+//     and must equal the newest released CHANGELOG heading; `make release` writes
+//     all together, so a mismatch means one was hand-edited without the others.
 //   - the CHANGELOG must open with exactly one "## [Unreleased]" section. A
 //     second/stray section (or a missing reopen after a release) is the exact
 //     drift the release script prevents and this guard catches.
 func TestReleaseVersionConsistency(t *testing.T) {
-	pluginVersion := readPluginVersion(t)
-	if !bareSemverRE.MatchString(pluginVersion) {
-		t.Errorf("plugin.json version %q is not a bare x.y.z semver (the v-prefixed form is only for tags/archives/binaries)", pluginVersion)
+	manifestPaths := []string{
+		"plugin.json",
+		filepath.Join(".claude-plugin", "plugin.json"),
 	}
 
 	headings := changelogHeadings(t)
@@ -53,28 +54,35 @@ func TestReleaseVersionConsistency(t *testing.T) {
 		}
 	}
 	if topReleased == "" {
-		t.Fatal("CHANGELOG.md has no released '## [x.y.z]' heading to compare against plugin.json")
+		t.Fatal("CHANGELOG.md has no released '## [x.y.z]' heading to compare against plugin manifests")
 	}
-	if pluginVersion != topReleased {
-		t.Errorf("version drift: plugin.json has %q but the newest CHANGELOG heading is %q — cut releases with `make release VERSION=...` instead of editing one side by hand", pluginVersion, topReleased)
+
+	for _, path := range manifestPaths {
+		version := readPluginVersion(t, path)
+		if !bareSemverRE.MatchString(version) {
+			t.Errorf("%s version %q is not a bare x.y.z semver (the v-prefixed form is only for tags/archives/binaries)", path, version)
+		}
+		if version != topReleased {
+			t.Errorf("version drift: %s has %q but the newest CHANGELOG heading is %q — cut releases with `make release VERSION=...` instead of editing one side by hand", path, version, topReleased)
+		}
 	}
 }
 
-// readPluginVersion returns the "version" field of plugin.json.
-func readPluginVersion(t *testing.T) string {
+// readPluginVersion returns the "version" field of the plugin manifest at path.
+func readPluginVersion(t *testing.T, path string) string {
 	t.Helper()
-	data, err := os.ReadFile("plugin.json")
+	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read plugin.json: %v", err)
+		t.Fatalf("read %s: %v", path, err)
 	}
 	var plugin struct {
 		Version string `json:"version"`
 	}
 	if err := json.Unmarshal(data, &plugin); err != nil {
-		t.Fatalf("parse plugin.json: %v", err)
+		t.Fatalf("parse %s: %v", path, err)
 	}
 	if plugin.Version == "" {
-		t.Fatal("plugin.json has no \"version\" field")
+		t.Fatalf("%s has no \"version\" field", path)
 	}
 	return plugin.Version
 }

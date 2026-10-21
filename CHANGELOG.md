@@ -5,6 +5,32 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+### Performance
+
+- **Token analysis slice pre-allocation and ASCII fast-path** (`internal/search`): `AnalyzeToken`
+  pre-allocates slice capacity and adds an ASCII fast-path for non-stemmed single-token queries.
+- **Batched DDL during Store initialization** (`internal/store`): `initCoreSchema` executes
+  core table and index DDL statements as batched DDL rather than one statement per query.
+- **Batched missing chunk embedding queries** (`internal/store`): incremental vector index sync
+  batches chunk ID lookups in chunks of 500 when querying missing embeddings.
+
+### Fixed
+
+- **Claude plugin version drift** (`.claude-plugin`): synchronize `.claude-plugin/plugin.json`
+  with the release version, update `scripts/release.sh` to bump both plugin manifests, and
+  extend `TestReleaseVersionConsistency` to guard both manifests against version drift.
+
+### Refactored
+
+- **Remove deprecated RRFk constant** (`internal/search`): removed unused deprecated `RRFk` constant.
+- **Extract parser row format string constant** (`cmd`): extracted `parserRowFmt` format string constant.
+
+### Tests
+
+- **Test coverage expansion** (`internal/indexer`, `internal/source`, `internal/extractor`):
+  added unit test suites for indexer constructors, Codex file parsing with image context,
+  conversation text formatting, and builtin/xberg extractor constructors and health checks.
+
 ## [0.6.3] - 2026-10-18
 
 ### Performance
