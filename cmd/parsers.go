@@ -14,6 +14,8 @@ import (
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
+const parserListRowFmt = "%-15s  %-9s  %-6s  %-16s  %s\n"
+
 // ParsersCmd manages schema-driven parser definitions.
 type ParsersCmd struct {
 	List ParsersListCmd `cmd:"" help:"List all available parser schemas"`
@@ -44,7 +46,7 @@ func (c *ParsersListCmd) Run(cfg *config.AppConfig) error {
 		fmt.Fprintf(os.Stderr, "warning: could not read collections: %v\n", colErr)
 	}
 
-	fmt.Printf("%-15s  %-9s  %-6s  %-16s  %s\n",
+	fmt.Printf(parserListRowFmt,
 		"SCHEMA", "SOURCE", "VER", "DETECT", "COLLECTIONS")
 	fmt.Println(strings.Repeat("-", 80))
 
@@ -59,8 +61,8 @@ func (c *ParsersListCmd) Run(cfg *config.AppConfig) error {
 
 		// Schema failed to parse — show error state.
 		if ld.Def == nil {
-			fmt.Printf("%-15s  %-9s  %-6s  %-16s  (parse error)\n",
-				ld.Name, source, "-", "-")
+			fmt.Printf(parserListRowFmt,
+				ld.Name, source, "-", "-", "(parse error)")
 			continue
 		}
 
@@ -74,7 +76,7 @@ func (c *ParsersListCmd) Run(cfg *config.AppConfig) error {
 			colSummary = fmt.Sprintf("%d: %v", len(cols), cols)
 		}
 
-		fmt.Printf("%-15s  %-9s  %-6s  %-16s  %s\n",
+		fmt.Printf(parserListRowFmt,
 			ld.Name, source, version, detect, colSummary)
 	}
 
