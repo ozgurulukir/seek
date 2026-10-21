@@ -26,6 +26,44 @@ type fakeOCR struct{ out string }
 
 func (f fakeOCR) ExtractText(string) (string, error) { return f.out, nil }
 
+func TestNew(t *testing.T) {
+	fake := fakeOCR{out: "test"}
+	cacheDir := "/tmp/test-cache"
+
+	// Test New with non-nil OCR
+	e := New(fake, cacheDir)
+	if e == nil {
+		t.Fatal("New returned nil")
+	}
+	if e.ocr != fake {
+		t.Errorf("ocr = %v, want %v", e.ocr, fake)
+	}
+	if e.cacheDir != cacheDir {
+		t.Errorf("cacheDir = %q, want %q", e.cacheDir, cacheDir)
+	}
+
+	// Test New with nil OCR
+	eNil := New(nil, cacheDir)
+	if eNil == nil {
+		t.Fatal("New with nil OCR returned nil")
+	}
+	if eNil.ocr != nil {
+		t.Errorf("ocr = %v, want nil", eNil.ocr)
+	}
+	if eNil.cacheDir != cacheDir {
+		t.Errorf("cacheDir = %q, want %q", eNil.cacheDir, cacheDir)
+	}
+
+	// Test newBuiltin constructor
+	ext := newBuiltin(fake, cacheDir)
+	if ext == nil {
+		t.Fatal("newBuiltin returned nil")
+	}
+	if ext.Name() != "builtin" {
+		t.Errorf("Name = %q, want builtin", ext.Name())
+	}
+}
+
 func TestName(t *testing.T) {
 	e := New(nil, t.TempDir())
 	if e.Name() != "builtin" {
