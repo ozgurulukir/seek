@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ozgurulukir/seek/internal/config"
 )
@@ -63,7 +64,9 @@ func fakeServer(t *testing.T, extractHandler func(w http.ResponseWriter, r *http
 			{Extension: ".xlsx", MimeType: "application/vnd.ms-excel"},
 		})
 	})
-	mux.HandleFunc("/extract", extractHandler)
+	if extractHandler != nil {
+		mux.HandleFunc("/extract", extractHandler)
+	}
 	return httptest.NewServer(mux)
 }
 
@@ -230,4 +233,107 @@ func TestFormats_FetchedOnce(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("formats fetched %d times, want 1", calls)
 	}
+}
+
+func TestNew(t *testing.T) {
+	tests := []struct {
+		name             string
+		cfg              config.ExtractorConfig
+		cacheDir         string
+		wantBaseURL      string
+		wantOutputFormat string
+		wantTimeout      time.Duration
+		wantCacheDir     string
+	}{
+		{
+			name: "default values when config is empty",
+			cfg: config.ExtractorConfig{
+				Backend: "xberg",
+			},
+			cacheDir:         "/tmp/cache",
+			wantBaseURL:      config.DefaultXbergBaseURL,
+			wantOutputFormat: config.DefaultExtractorOutputFormat,
+			wantTimeout:      config.DefaultXbergTimeout,
+			wantCacheDir:     "/tmp/cache",
+		},
+		{
+			name: "custom config with trailing slash in URL",
+			cfg: config.ExtractorConfig{
+				Backend:      "xberg",
+				XbergBaseURL: "http://example.com:8000/",
+				OutputFormat: "text",
+				Timeout:      10 * time.Second,
+			},
+			cacheDir:         "/tmp/custom_cache",
+			wantBaseURL:      "http://example.com:8000",
+			wantOutputFormat: "text",
+			wantTimeout:      10 * time.Second,
+			wantCacheDir:     "/tmp/custom_cache",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := New(tt.cfg, tt.cacheDir)
+			if err != nil {
+				t.Fatalf("New() error = %v, want nil", err)
+			}
+			if c.baseURL != tt.wantBaseURL {
+				t.Errorf("baseURL = %q, want %q", c.baseURL, tt.wantBaseURL)
+			}
+			if c.outputFormat != tt.wantOutputFormat {
+				t.Errorf("outputFormat = %q, want %q", c.outputFormat, tt.wantOutputFormat)
+			}
+			if c.http == nil || c.http.Timeout != tt.wantTimeout {
+				t.Errorf("http.Timeout = %v, want %v", c.http.Timeout, tt.wantTimeout)
+			}
+			if c.cacheDir != tt.wantCacheDir {
+				t.Errorf("cacheDir = %q, want %q", c.cacheDir, tt.wantCacheDir)
+			}
+		})
+	}
+}
+
+func TestName(t *testing.T) {
+	c := newTestClient(t, "http://localhost")
+	if got := c.Name(); got != "xberg" {
+		t.Errorf("Name() = %q, want %q", got, "xberg")
+	}
+}
+
+func TestNewWithHealthCheck(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		srv := fakeServer(t, nil)
+		defer srv.Close()
+
+		cfg := config.ExtractorConfig{
+			Backend:      "xberg",
+			XbergBaseURL: srv.URL,
+			OutputFormat: "markdown",
+			Timeout:      5 * time.Second,
+		}
+		ext, err := NewWithHealthCheck(cfg, t.TempDir())
+		if err != nil {
+			t.Fatalf("NewWithHealthCheck() error = %v, want nil", err)
+		}
+		if ext == nil {
+			t.Fatal("NewWithHealthCheck() returned nil Extractor")
+		}
+		if ext.Name() != "xberg" {
+			t.Errorf("ext.Name() = %q, want xberg", ext.Name())
+		}
+	})
+
+	t.Run("failure on unreachable server", func(t *testing.T) {
+		cfg := config.ExtractorConfig{
+			Backend:      "xberg",
+			XbergBaseURL: "http://127.0.0.1:1",
+			OutputFormat: "markdown",
+			Timeout:      1 * time.Second,
+		}
+		_, err := NewWithHealthCheck(cfg, t.TempDir())
+		if err == nil {
+			t.Fatal("NewWithHealthCheck() expected error for unreachable server, got nil")
+		}
+	})
 }
