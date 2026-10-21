@@ -623,7 +623,15 @@ func toFTS5(q Query, a *Analyzer) (string, bool) {
 
 // AnalyzeToken splits text into tokens compatible with unicode61.
 func AnalyzeToken(s string) []string {
-	var tokens []string
+	if len(s) == 0 {
+		return nil
+	}
+	// PERF: preallocate tokens slice based on input length to avoid repeated slice capacity reallocation.
+	capEst := len(s)/4 + 1
+	if capEst > 64 {
+		capEst = 64
+	}
+	tokens := make([]string, 0, capEst)
 	start := -1
 	for i, r := range s {
 		isWord := (r < utf8.RuneSelf && (('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') || r == '_')) ||
