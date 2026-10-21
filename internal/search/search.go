@@ -13,7 +13,6 @@ import (
 const (
 	DefaultLimit = 20
 	DefaultRRFK  = 60
-	RRFk         = DefaultRRFK // Deprecated: use DefaultRRFK or Options.RRFK
 )
 
 // Options configures search behavior.
