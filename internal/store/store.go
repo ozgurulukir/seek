@@ -270,8 +270,8 @@ func (s *Store) verifyFTS5() error {
 }
 
 func (s *Store) initCoreSchema() error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS collections (
+	const schema = `
+		CREATE TABLE IF NOT EXISTS collections (
 			id INTEGER PRIMARY KEY,
 			name TEXT UNIQUE NOT NULL,
 			type TEXT NOT NULL,
@@ -279,8 +279,8 @@ func (s *Store) initCoreSchema() error {
 			pattern TEXT DEFAULT '**/*.md',
 			created_at TEXT,
 			updated_at TEXT
-		)`,
-		`CREATE TABLE IF NOT EXISTS documents (
+		);
+		CREATE TABLE IF NOT EXISTS documents (
 			id INTEGER PRIMARY KEY,
 			collection_id INTEGER REFERENCES collections(id) ON DELETE CASCADE,
 			path TEXT NOT NULL,
@@ -291,17 +291,17 @@ func (s *Store) initCoreSchema() error {
 			created_at TEXT,
 			updated_at TEXT,
 			UNIQUE(collection_id, path)
-		)`,
-		`CREATE TABLE IF NOT EXISTS chunks (
+		);
+		CREATE TABLE IF NOT EXISTS chunks (
 			id INTEGER PRIMARY KEY,
 			document_id INTEGER REFERENCES documents(id) ON DELETE CASCADE,
 			seq INTEGER,
 			content TEXT,
 			embedding BLOB,
 			created_at TEXT
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id)`,
-		`CREATE TABLE IF NOT EXISTS embedding_profile (
+		);
+		CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id);
+		CREATE TABLE IF NOT EXISTS embedding_profile (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			provider_kind TEXT NOT NULL,
 			model TEXT NOT NULL,
@@ -312,12 +312,9 @@ func (s *Store) initCoreSchema() error {
 			fingerprint TEXT NOT NULL,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
-		)`,
-	}
-	for _, stmt := range stmts {
-		if _, err := s.db.Exec(stmt); err != nil {
-			return fmt.Errorf("exec %q: %w", stmt[:40], err)
-		}
+		);`
+	if _, err := s.db.Exec(schema); err != nil {
+		return fmt.Errorf("init core schema: %w", err)
 	}
 	return nil
 }
