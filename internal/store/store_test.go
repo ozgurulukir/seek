@@ -790,3 +790,108 @@ func BenchmarkInitCoreSchema(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkSyncVectorIndexIncremental(b *testing.B) {
+	s := newTestStore(b)
+	vIdx := newLinearIndex(4)
+	s.SetVectorIndex(vIdx)
+
+	col, err := s.CreateCollection("bench-sync-col", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		b.Fatal(err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "/tmp/bench-sync.md", "BenchSync", "hash", 1, 1)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	emb := []float32{0.1, 0.2, 0.3, 0.4}
+	if err := s.InsertChunk(docID, 99999, "initial chunk", emb); err != nil {
+		b.Fatal(err)
+	}
+	var initialChunkID int64
+	if err := s.db.QueryRow("SELECT id FROM chunks WHERE seq = 99999").Scan(&initialChunkID); err != nil {
+		b.Fatal(err)
+	}
+
+	const count = 1000
+	for i := 0; i < count; i++ {
+		if err := s.InsertChunk(docID, i, "chunk content", emb); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		if err := vIdx.Clear(); err != nil {
+			b.Fatal(err)
+		}
+		if err := vIdx.Add(initialChunkID, emb); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+
+		added, err := s.SyncVectorIndexIncremental()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if added != count {
+			b.Fatalf("added = %d, want %d", added, count)
+		}
+	}
+}
+
+func TestSyncVectorIndexIncremental_BatchBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		n    int
+	}{
+		{"500_exact_single_group", 500},
+		{"501_spills_to_second_group", 501},
+		{"1001_spills_to_third_group", 1001},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			vIndex := newLinearIndex(4)
+			store.SetVectorIndex(vIndex)
+
+			col, err := store.CreateCollection("vec-col-"+tc.name, "markdown", "/tmp", "**/*.md")
+			if err != nil {
+				t.Fatalf("CreateCollection: %v", err)
+			}
+			docID, err := store.UpsertDocument(col.ID, "/path/to/doc", "Doc", "hash", 1, 1)
+			if err != nil {
+				t.Fatalf("UpsertDocument: %v", err)
+			}
+
+			emb := []float32{0.1, 0.2, 0.3, 0.4}
+			if err := store.InsertChunk(docID, 99999, "initial chunk", emb); err != nil {
+				t.Fatalf("InsertChunk initial: %v", err)
+			}
+			if _, err := store.SyncVectorIndexIncremental(); err != nil {
+				t.Fatalf("initial sync: %v", err)
+			}
+			if vIndex.Len() != 1 {
+				t.Fatalf("initial vector len = %d, want 1", vIndex.Len())
+			}
+
+			for i := 0; i < tc.n; i++ {
+				if err := store.InsertChunk(docID, i, "batch chunk", emb); err != nil {
+					t.Fatalf("InsertChunk %d: %v", i, err)
+				}
+			}
+
+			added, err := store.SyncVectorIndexIncremental()
+			if err != nil {
+				t.Fatalf("SyncVectorIndexIncremental: %v", err)
+			}
+			if added != tc.n {
+				t.Fatalf("added = %d, want %d", added, tc.n)
+			}
+			if vIndex.Len() != tc.n+1 {
+				t.Fatalf("vector index len = %d, want %d", vIndex.Len(), tc.n+1)
+			}
+		})
+	}
+}
