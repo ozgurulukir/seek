@@ -140,29 +140,60 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 		return 0, nil
 	}
 
-	// Load and insert embeddings only for missing chunks
+	// Load and insert embeddings only for missing chunks in batches of up to 500 items
+	const batchSize = 500
 	added := 0
-	for _, chunkID := range missingIDs {
+
+	for i := 0; i < len(missingIDs); i += batchSize {
 		if err := ctx.Err(); err != nil {
 			return added, err
 		}
-		var embBlob []byte
-		err := s.db.QueryRowContext(ctx, `SELECT embedding FROM chunks WHERE id = ?`, chunkID).Scan(&embBlob)
+
+		end := i + batchSize
+		if end > len(missingIDs) {
+			end = len(missingIDs)
+		}
+		batchIDs := missingIDs[i:end]
+
+		placeholders := make([]string, len(batchIDs))
+		args := make([]interface{}, len(batchIDs))
+		for j, id := range batchIDs {
+			placeholders[j] = "?"
+			args[j] = id
+		}
+
+		query := fmt.Sprintf("SELECT id, embedding FROM chunks WHERE id IN (%s)", strings.Join(placeholders, ","))
+		rows, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
-			// A DB failure must not be collapsed with "no embedding yet" —
-			// that skipped the chunk silently until the next full embed
-			// (review 2026-09-17 L7). sql.ErrNoRows cannot occur here: the
-			// id came from the chunks table moments ago.
-			return added, fmt.Errorf("load embedding for chunk %d: %w", chunkID, err)
+			return added, fmt.Errorf("load embeddings batch: %w", err)
 		}
-		if len(embBlob) == 0 {
-			continue
+
+		for rows.Next() {
+			if err := ctx.Err(); err != nil {
+				rows.Close()
+				return added, err
+			}
+			var chunkID int64
+			var embBlob []byte
+			if err := rows.Scan(&chunkID, &embBlob); err != nil {
+				rows.Close()
+				return added, fmt.Errorf("scan chunk %d embedding: %w", chunkID, err)
+			}
+			if len(embBlob) == 0 {
+				continue
+			}
+			emb := decodeEmbedding(embBlob)
+			if err := s.vector().Add(chunkID, emb); err != nil {
+				rows.Close()
+				return added, err
+			}
+			added++
 		}
-		emb := decodeEmbedding(embBlob)
-		if err := s.vector().Add(chunkID, emb); err != nil {
-			return added, err
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return added, fmt.Errorf("load embeddings batch rows: %w", err)
 		}
-		added++
+		rows.Close()
 	}
 
 	return added, nil
