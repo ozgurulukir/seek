@@ -61,7 +61,11 @@ func Open(cfg *config.AppConfig) (*Runtime, error) {
 	r.Indexer = indexer.NewWithDependencies(cfg, s, indexer.NewConfigExtractorResolver(cfg), s)
 	r.EmbedClient = provider.Query
 	r.VLClient = provider.VLQuery
-	r.Search = search.NewEngineWithProvider(NewStoreSearchRepository(s), provider)
+	defaultBucketLimit := cfg.Config.Aggregations.DefaultBucketLimit
+	if defaultBucketLimit <= 0 {
+		defaultBucketLimit = config.DefaultAggregationBucketLimit
+	}
+	r.Search = search.NewEngineWithProvider(NewStoreSearchRepositoryWithLimit(s, defaultBucketLimit), provider)
 	r.Pipeline = pipeline.New(cfg, s, r.Indexer, provider)
 	return r, nil
 }
@@ -103,7 +107,14 @@ func NewSearchEngine(s *store.Store, cfg *config.AppConfig) (*search.Engine, err
 	if err != nil {
 		return nil, fmt.Errorf("build embedding provider: %w", err)
 	}
-	return search.NewEngineWithProvider(NewStoreSearchRepository(s), provider), nil
+	defaultBucketLimit := 0
+	if cfg != nil {
+		defaultBucketLimit = cfg.Config.Aggregations.DefaultBucketLimit
+	}
+	if defaultBucketLimit <= 0 {
+		defaultBucketLimit = config.DefaultAggregationBucketLimit
+	}
+	return search.NewEngineWithProvider(NewStoreSearchRepositoryWithLimit(s, defaultBucketLimit), provider), nil
 }
 
 // OpenStore is the lightweight composition path for commands that only need

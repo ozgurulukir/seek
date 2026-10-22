@@ -5,6 +5,12 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bounded terms aggregations** (`internal/search`, `internal/store`, `internal/app`, `cmd`): terms aggregations
+  are now bounded by default to 10 buckets (configurable via `aggregations.default_bucket_limit`) with an optional
+  syntax override (e.g. `tags:terms:50`), keeping text, JSON, and MCP results consistent.
+
 ## [0.6.4] - 2026-10-21
 
 ### Performance

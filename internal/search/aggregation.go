@@ -2,6 +2,7 @@ package search
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -15,6 +16,10 @@ const (
 	AggregationHistogram AggregationType = "histogram"
 	AggregationRange     AggregationType = "range"
 	AggregationCount     AggregationType = "count"
+
+	// DefaultAggregationBucketLimit is the default maximum number of buckets returned
+	// for a terms aggregation when no explicit size is specified.
+	DefaultAggregationBucketLimit = 10
 )
 
 // AggregationSpec is the validated, persistence-neutral description of an
@@ -24,6 +29,7 @@ type AggregationSpec struct {
 	Field    string
 	Interval string
 	Ranges   []string
+	Size     int
 }
 
 // Aggregation is the parsed aggregation contract consumed by SearchRepository.
@@ -38,10 +44,17 @@ type Bucket struct {
 	Count int
 }
 
-type TermAggregation struct{ Field string }
+type TermAggregation struct {
+	Field string
+	Size  int
+}
 
 func (a *TermAggregation) Spec() AggregationSpec {
-	return AggregationSpec{Type: AggregationTerm, Field: a.Field}
+	size := a.Size
+	if size <= 0 {
+		size = DefaultAggregationBucketLimit
+	}
+	return AggregationSpec{Type: AggregationTerm, Field: a.Field, Size: size}
 }
 
 type HistogramAggregation struct {
@@ -92,7 +105,15 @@ func ParseAggregation(spec string) (Aggregation, error) {
 
 	switch aggType {
 	case "terms":
-		return &TermAggregation{Field: field}, nil
+		size := 0
+		if len(parts) == 3 && parts[2] != "" {
+			var err error
+			size, err = strconv.Atoi(parts[2])
+			if err != nil || size <= 0 {
+				return nil, fmt.Errorf("invalid aggregation spec %q: terms size must be a positive integer", spec)
+			}
+		}
+		return &TermAggregation{Field: field, Size: size}, nil
 	case "histogram":
 		interval := "month"
 		if len(parts) == 3 && parts[2] != "" {

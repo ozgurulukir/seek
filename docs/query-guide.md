@@ -115,9 +115,9 @@ Compute statistical facet distributions alongside search results:
 seek search "error" --aggs "type:terms" --aggs "collection:terms"
 
 # Metadata fast-field facets (markdown frontmatter + code metadata)
-seek search "signal" --aggs "tags:terms"        # tags (frontmatter + semantic)
-seek search "error" --aggs "lang:terms"          # code language (go, rust, python, ts, …)
-seek search "req"   --aggs "repo:terms"          # repository/collection name
+seek search "signal" --aggs "tags:terms"        # tags (default 10 buckets)
+seek search "error"  --aggs "lang:terms:20"     # code language with explicit limit (top 20)
+seek search "req"    --aggs "repo:terms"        # repository/collection name
 
 # Semantic enrichment facets (all text-bearing collections, semantic.enabled)
 seek search "note"  --aggs "topics:terms"        # BERTopic labels
@@ -142,7 +142,10 @@ collection types when `semantic.enabled: true` (see
 Terms facets are not limited to the curated names: every fast field
 physically present in the index is aggregatable (run `seek fields` to
 discover what the index holds), each distinct stored value counting as one
-bucket. Histograms and ranges stay on the numeric/date documents columns. One caveat: a fast field whose name collides with a documents column
+bucket. Terms aggregations default to returning the top 10 buckets sorted by
+frequency (configurable via `aggregations.default_bucket_limit` in `config.yaml`).
+You can override the limit by appending a third segment, e.g. `tags:terms:50`.
+Histograms and ranges stay on the numeric/date documents columns. One caveat: a fast field whose name collides with a documents column
 (`type`, `path`, `created_at`, ...) shadows it in terms facets whenever any
 value is indexed, even outside the collections you filtered to.
 All these fields are filterable too via the generic `--field <name>:<value>`

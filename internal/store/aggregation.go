@@ -7,6 +7,10 @@ import (
 	"strings"
 )
 
+// DefaultAggregationBucketLimit is the default maximum number of buckets returned
+// for a terms aggregation when no explicit size is specified.
+const DefaultAggregationBucketLimit = 10
+
 // AggregationSpec is the persistence-side form of a validated search
 // aggregation. The search package owns parsing; Store owns identifiers, SQL,
 // row scanning, and filter application.
@@ -15,6 +19,7 @@ type AggregationSpec struct {
 	Field    string
 	Interval string
 	Ranges   []string
+	Size     int
 }
 
 type AggregationBucket struct {
@@ -27,13 +32,17 @@ type AggregationBucket struct {
 // into search.
 func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationSpec, filters *FilterSet) ([]AggregationBucket, error) {
 	if strings.ToLower(spec.Type) == "terms" {
+		limit := spec.Size
+		if limit <= 0 {
+			limit = DefaultAggregationBucketLimit
+		}
 		field := strings.ToLower(strings.TrimSpace(spec.Field))
 		if mode, ok := fastFieldMatchMode(field); ok {
 			if mode == FastFieldMembership {
-				return s.executeMembershipTermsAggregationContext(ctx, field, filters)
+				return s.executeMembershipTermsAggregationContext(ctx, field, filters, limit)
 			}
 			// Curated exact fast field.
-			return s.executeFastFieldTermsAggregationContext(ctx, field, filters)
+			return s.executeFastFieldTermsAggregationContext(ctx, field, filters, limit)
 		}
 		// Dynamic discovery: any field physically present in fast_fields
 		// aggregates in exact mode, mirroring --field validation. Otherwise
@@ -41,7 +50,7 @@ func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationS
 		if present, err := s.hasFastField(ctx, field); err != nil {
 			return nil, err
 		} else if present {
-			return s.executeFastFieldTermsAggregationContext(ctx, field, filters)
+			return s.executeFastFieldTermsAggregationContext(ctx, field, filters, limit)
 		}
 	}
 
@@ -57,6 +66,14 @@ func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationS
 	query, args, err = applyAggregationFilters(query, args, filters)
 	if err != nil {
 		return nil, err
+	}
+	if strings.ToLower(spec.Type) == "terms" {
+		limit := spec.Size
+		if limit <= 0 {
+			limit = DefaultAggregationBucketLimit
+		}
+		query += " LIMIT ?"
+		args = append(args, limit)
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -89,7 +106,7 @@ func (s *Store) ExecuteAggregationContext(ctx context.Context, spec AggregationS
 // buckets group on the raw stored value (JSON encoding is injective per
 // string, so raw grouping equals decoded grouping) and ride the
 // (field_name, field_value) index; keys are decoded after scanning.
-func (s *Store) executeFastFieldTermsAggregationContext(ctx context.Context, field string, filters *FilterSet) ([]AggregationBucket, error) {
+func (s *Store) executeFastFieldTermsAggregationContext(ctx context.Context, field string, filters *FilterSet, limit int) ([]AggregationBucket, error) {
 	query := `SELECT ff.field_value as key, COUNT(*) as count
 		FROM documents d
 		JOIN collections c ON c.id = d.collection_id
@@ -101,6 +118,11 @@ func (s *Store) executeFastFieldTermsAggregationContext(ctx context.Context, fie
 	if err != nil {
 		return nil, err
 	}
+	if limit <= 0 {
+		limit = DefaultAggregationBucketLimit
+	}
+	query += " LIMIT ?"
+	args = append(args, limit)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -123,7 +145,7 @@ func (s *Store) executeFastFieldTermsAggregationContext(ctx context.Context, fie
 	return buckets, nil
 }
 
-func (s *Store) executeMembershipTermsAggregationContext(ctx context.Context, field string, filters *FilterSet) ([]AggregationBucket, error) {
+func (s *Store) executeMembershipTermsAggregationContext(ctx context.Context, field string, filters *FilterSet, limit int) ([]AggregationBucket, error) {
 	// Fetch raw values and decode/split in Go: the SQL-side REPLACE decode
 	// corrupts values containing quotes, and the token counting happens
 	// per row anyway.
@@ -172,6 +194,12 @@ func (s *Store) executeMembershipTermsAggregationContext(ctx context.Context, fi
 		}
 		return buckets[i].Key < buckets[j].Key
 	})
+	if limit <= 0 {
+		limit = DefaultAggregationBucketLimit
+	}
+	if limit > 0 && len(buckets) > limit {
+		buckets = buckets[:limit]
+	}
 	return buckets, nil
 }
 
@@ -203,7 +231,7 @@ func buildTermsQuery(field string) (string, []interface{}, bool, error) {
 	if err != nil {
 		return "", nil, false, err
 	}
-	return fmt.Sprintf("SELECT %s as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY %s ORDER BY count DESC", column, column), nil, false, nil
+	return fmt.Sprintf("SELECT %s as key, COUNT(*) as count FROM documents d JOIN collections c ON c.id = d.collection_id GROUP BY %s ORDER BY count DESC, key ASC", column, column), nil, false, nil
 }
 
 func buildHistogramQuery(field, interval string) (string, []interface{}, bool, error) {
