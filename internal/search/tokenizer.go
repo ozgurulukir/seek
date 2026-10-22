@@ -79,6 +79,7 @@ func NewAnalyzer(lang string, enableStopWords, enableStemmer bool) *Analyzer {
 				env.SetCurrent(s)
 				english.Stem(env)
 				res := env.AssignTo()
+				env.SetCurrent("")
 				envPool.Put(env)
 				return res
 			}
@@ -89,6 +90,7 @@ func NewAnalyzer(lang string, enableStopWords, enableStemmer bool) *Analyzer {
 				env.SetCurrent(s)
 				turkish.Stem(env)
 				res := guardedTurkishStem(s, env.AssignTo())
+				env.SetCurrent("")
 				envPool.Put(env)
 				return res
 			}

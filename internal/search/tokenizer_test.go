@@ -1,6 +1,7 @@
 package search
 
 import (
+	"sync"
 	"testing"
 )
 
@@ -224,4 +225,59 @@ func TestAnalyzerEmptyInput(t *testing.T) {
 	if len(got) != 0 {
 		t.Errorf("Analyze('') = %v, want []", got)
 	}
+}
+
+func TestAnalyzerConcurrentStemming(t *testing.T) {
+	enAnalyzer := NewAnalyzer("en", true, true)
+	trAnalyzer := NewAnalyzer("tr", true, true)
+
+	const goroutines = 32
+	const iterations = 100
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 2)
+
+	// Concurrent English stemming
+	for g := 0; g < goroutines; g++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				res := enAnalyzer.Analyze("running jumps quickly happily studies")
+				want := []string{"run", "jump", "quick", "happili", "studi"}
+				if len(res) != len(want) {
+					t.Errorf("enAnalyzer len = %d, want %d", len(res), len(want))
+					return
+				}
+				for j := range res {
+					if res[j] != want[j] {
+						t.Errorf("enAnalyzer[%d] = %q, want %q", j, res[j], want[j])
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	// Concurrent Turkish stemming
+	for g := 0; g < goroutines; g++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				res := trAnalyzer.Analyze("kitaplar evlerde arabam")
+				want := []string{"kitap", "ev", "araba"}
+				if len(res) != len(want) {
+					t.Errorf("trAnalyzer len = %d, want %d", len(res), len(want))
+					return
+				}
+				for j := range res {
+					if res[j] != want[j] {
+						t.Errorf("trAnalyzer[%d] = %q, want %q", j, res[j], want[j])
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
 }
