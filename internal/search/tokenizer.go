@@ -2,6 +2,7 @@ package search
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/blevesearch/snowballstem"
 	"github.com/blevesearch/snowballstem/english"
@@ -72,16 +73,24 @@ func NewAnalyzer(lang string, enableStopWords, enableStemmer bool) *Analyzer {
 	if enableStemmer {
 		switch a.lang {
 		case "en", "english":
+			// PERF: reuse snowballstem.Env via sync.Pool for thread-safe allocation reduction.
 			a.stemmer = func(s string) string {
-				env := snowballstem.NewEnv(s)
+				env := envPool.Get().(*snowballstem.Env)
+				env.SetCurrent(s)
 				english.Stem(env)
-				return env.AssignTo()
+				res := env.AssignTo()
+				envPool.Put(env)
+				return res
 			}
 		case "tr", "turkish":
+			// PERF: reuse snowballstem.Env via sync.Pool for thread-safe allocation reduction.
 			a.stemmer = func(s string) string {
-				env := snowballstem.NewEnv(s)
+				env := envPool.Get().(*snowballstem.Env)
+				env.SetCurrent(s)
 				turkish.Stem(env)
-				return guardedTurkishStem(s, env.AssignTo())
+				res := guardedTurkishStem(s, env.AssignTo())
+				envPool.Put(env)
+				return res
 			}
 		}
 	}
@@ -134,6 +143,12 @@ func (a *Analyzer) Analyze(text string) []string {
 		}
 	}
 	return result
+}
+
+var envPool = sync.Pool{
+	New: func() any {
+		return snowballstem.NewEnv("")
+	},
 }
 
 // minFTS5PrefixLen is the minimum length of a stemmed term that gets `*` prefix
