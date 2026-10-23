@@ -5,6 +5,11 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Filter code boilerplate from semantic keyphrases while preserving meaningful identifiers and Turkish text;
+  merge native and semantic tags case-insensitively while retaining the first spelling.
+
 ## [0.6.5] - 2026-10-23
 
 ### Fixed

@@ -125,17 +125,19 @@ func mergeFastFields(native, semantic map[string]string) map[string]string {
 
 // mergeTagValues joins two comma-separated tag lists into one deduplicated
 // list, preserving first-seen order (native values first, then the new
-// semantic values) and trimming whitespace. Empty parts are skipped.
+// semantic values) and trimming whitespace. Deduplication is case-insensitive and preserves
+// the first spelling. Empty parts are skipped.
 func mergeTagValues(native, semantic string) string {
 	seen := make(map[string]bool)
 	var out []string
 	for _, combine := range [][]string{strings.Split(native, ","), strings.Split(semantic, ",")} {
 		for _, tag := range combine {
 			tag = strings.TrimSpace(tag)
-			if tag == "" || seen[tag] {
+			key := strings.ToLower(tag)
+			if tag == "" || seen[key] {
 				continue
 			}
-			seen[tag] = true
+			seen[key] = true
 			out = append(out, tag)
 		}
 	}
