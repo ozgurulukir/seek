@@ -2,6 +2,7 @@ package embed
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -90,6 +91,14 @@ type ocrResponse struct {
 
 // ExtractText runs OCR on a base64 data-URI image and returns the extracted text.
 func (c *OCRClient) ExtractText(imageDataURI string) (string, error) {
+	return c.ExtractTextWithContext(context.Background(), imageDataURI)
+}
+
+// ExtractTextWithContext runs OCR on a base64 data-URI image with a context and returns the extracted text.
+func (c *OCRClient) ExtractTextWithContext(ctx context.Context, imageDataURI string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	req := ocrRequest{
 		Model: c.model,
 		Messages: []ocrMessage{
@@ -112,7 +121,7 @@ func (c *OCRClient) ExtractText(imageDataURI string) (string, error) {
 	}
 
 	url := strings.TrimRight(c.baseURL, "/") + "/chat/completions"
-	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
