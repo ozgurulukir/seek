@@ -12,9 +12,10 @@
 #      does not already exist locally or on the remote;
 #   2. runs the release quality gate (build, vet, gofmt, tests) — the same gate
 #      as .github/workflows/release.yml — unless --no-test / SKIP_TESTS=1;
-#   3. bumps "version" in plugin.json and .claude-plugin/plugin.json and rewrites
-#      the top "## [Unreleased]" CHANGELOG heading into "## [<version>] - <YYYY-MM-DD>",
-#      reopening a fresh [Unreleased] above it;
+#   3. bumps "version" in plugin.json, .claude-plugin/plugin.json, and
+#      .codex-plugin/plugin.json and rewrites the top "## [Unreleased]"
+#      CHANGELOG heading into "## [<version>] - <YYYY-MM-DD>", reopening a
+#      fresh [Unreleased] above it;
 #   4. commits those files, creates an annotated tag v<version>, and pushes
 #      the branch and tag to the remote.
 #
@@ -98,6 +99,7 @@ repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$repo_root"
 plugins="$repo_root/plugin.json"
 claude_plugins="$repo_root/.claude-plugin/plugin.json"
+codex_plugins="$repo_root/.codex-plugin/plugin.json"
 changelog="$repo_root/CHANGELOG.md"
 
 command -v git >/dev/null 2>&1 || {
@@ -110,6 +112,10 @@ command -v git >/dev/null 2>&1 || {
 }
 [ -f "$claude_plugins" ] || {
 	echo "release: $claude_plugins not found" >&2
+	exit 1
+}
+[ -f "$codex_plugins" ] || {
+	echo "release: $codex_plugins not found" >&2
 	exit 1
 }
 [ -f "$changelog" ] || {
@@ -169,7 +175,7 @@ promote_changelog() {
 }
 
 bump_plugin() {
-	for file in "$plugins" "$claude_plugins"; do
+	for file in "$plugins" "$claude_plugins" "$codex_plugins"; do
 		tmp="$(mktemp)"
 		sed -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*(\")/\1${VERSION}\2/" "$file" >"$tmp"
 		cp "$tmp" "$file"
@@ -197,7 +203,7 @@ fi
 
 if [ "$DRY_RUN" = "1" ]; then
 	echo "release: DRY RUN — nothing written"
-	echo "  would bump $plugins and $claude_plugins to version $VERSION"
+	echo "  would bump $plugins, $claude_plugins, and $codex_plugins to version $VERSION"
 	echo "  would add '## [$VERSION] - $TODAY' to CHANGELOG.md and reopen [Unreleased]"
 	echo "  would commit 'release $TAG', tag $TAG, and push to $REMOTE/$BRANCH"
 	exit 0
@@ -206,7 +212,7 @@ fi
 bump_plugin
 promote_changelog
 
-git add "$plugins" "$claude_plugins" "$changelog"
+git add "$plugins" "$claude_plugins" "$codex_plugins" "$changelog"
 git commit -m "release $TAG"
 git tag -a "$TAG" -m "release $TAG"
 

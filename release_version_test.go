@@ -22,9 +22,9 @@ var releasedHeadingRE = regexp.MustCompile(`^## \[([0-9]+\.[0-9]+\.[0-9]+[^\]]*)
 // TestReleaseVersionConsistency guards against version drift (see AGENTS.md
 // "Releasing"). The plugin manifests must always agree with the CHANGELOG:
 //
-//   - plugin.json's and .claude-plugin/plugin.json's "version" are bare x.y.z
-//     and must equal the newest released CHANGELOG heading; `make release` writes
-//     all together, so a mismatch means one was hand-edited without the others.
+//   - plugin.json's, .claude-plugin/plugin.json's, and .codex-plugin/plugin.json's "version"
+//     are bare x.y.z and must equal the newest released CHANGELOG heading; `make release`
+//     writes all together, so a mismatch means one was hand-edited without the others.
 //   - the CHANGELOG must open with exactly one "## [Unreleased]" section. A
 //     second/stray section (or a missing reopen after a release) is the exact
 //     drift the release script prevents and this guard catches.
@@ -32,6 +32,7 @@ func TestReleaseVersionConsistency(t *testing.T) {
 	manifestPaths := []string{
 		"plugin.json",
 		filepath.Join(".claude-plugin", "plugin.json"),
+		filepath.Join(".codex-plugin", "plugin.json"),
 	}
 
 	headings := changelogHeadings(t)
