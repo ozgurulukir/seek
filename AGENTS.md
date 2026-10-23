@@ -52,23 +52,25 @@ make release VERSION=X.Y.Z RELEASE_ARGS=--dry-run   # preview; changes nothing
 
 `scripts/release.sh` validates the version, branch, clean tracked tree, and tag
 uniqueness; runs the same quality gate as `.github/workflows/release.yml`
-(build, vet, gofmt, tests); bumps `plugin.json` and `.claude-plugin/plugin.json`; promotes the top
-`## [Unreleased]` CHANGELOG heading to `## [<version>] - <date>` (reopening a
-fresh `[Unreleased]` above it); then commits, creates an annotated `v<version>`
-tag, and pushes the branch and tag. Pushing the tag triggers the Release
-workflow. Untracked files do not block a release; only staged/unstaged tracked
-changes do. The script is POSIX sh (macOS/Linux) and is not runnable from the
-Windows dev shell.
+(build, vet, gofmt, tests); bumps `plugin.json`, `.claude-plugin/plugin.json`,
+and `.codex-plugin/plugin.json`; promotes the top `## [Unreleased]` CHANGELOG
+heading to `## [<version>] - <date>` (reopening a fresh `[Unreleased]` above
+it); then commits, creates an annotated `v<version>` tag, and pushes the branch
+and tag. Pushing the tag triggers the Release workflow. Untracked files do not
+block a release; only staged/unstaged tracked changes do. The script is POSIX sh
+(macOS/Linux) and is not runnable from the Windows dev shell.
 
-**Version convention:** `plugin.json`, `.claude-plugin/plugin.json`, and the CHANGELOG headings carry the bare
-version (`X.Y.Z`) — `make release` writes both. The git tag, release archive
+**Version convention:** `plugin.json`, `.claude-plugin/plugin.json`,
+`.codex-plugin/plugin.json`, and the CHANGELOG headings carry the bare
+version (`X.Y.Z`) — `make release` writes all three. The git tag, release archive
 names, and the binary's `--version` string use the `vX.Y.Z` form;
 `scripts/release.sh` accepts either and strips a leading `v`.
 
 **CHANGELOG discipline:** add a bullet under the top `## [Unreleased]` section as
 each user-facing change lands; `make release` moves those bullets under the new
-version heading. `plugin.json` and `.claude-plugin/plugin.json` mirror the released version. A root-package test
-(`TestReleaseVersionConsistency`) fails if either `plugin.json` or `.claude-plugin/plugin.json` drifts from the newest
+version heading. `plugin.json`, `.claude-plugin/plugin.json`, and
+`.codex-plugin/plugin.json` mirror the released version. A root-package test
+(`TestReleaseVersionConsistency`) fails if any manifest drifts from the newest
 released CHANGELOG heading, or if the CHANGELOG does not open with exactly one
 `[Unreleased]` section.
 

@@ -7,6 +7,10 @@ All notable changes to `seek` are documented here. This follows
 
 ### Fixed
 
+- **Codex and Claude plugin manifests validation and consistency** (`.codex-plugin`, `.claude-plugin`, `plugin.json`):
+  add native `.codex-plugin/plugin.json` manifest, add official schema declarations to Claude Code manifests,
+  configure relative marketplace source for local/cloned setups, and extend release automation and
+  `TestReleaseVersionConsistency` to prevent drift across all plugin manifests.
 - **Bounded terms aggregations** (`internal/search`, `internal/store`, `internal/app`, `cmd`): terms aggregations
   are now bounded by default to 10 buckets (configurable via `aggregations.default_bucket_limit`) with an optional
   syntax override (e.g. `tags:terms:50`), keeping text, JSON, and MCP results consistent.
