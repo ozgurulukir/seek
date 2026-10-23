@@ -169,9 +169,11 @@ type FilterConfig struct {
 }
 
 // AggregationConfig configures aggregation behavior. Enabled gates the
-// --aggs search flag and the MCP aggs argument.
+// --aggs search flag and the MCP aggs argument. DefaultBucketLimit bounds
+// terms aggregations when no explicit size is specified in the spec.
 type AggregationConfig struct {
-	Enabled bool `yaml:"enabled,omitempty"`
+	Enabled            bool `yaml:"enabled,omitempty"`
+	DefaultBucketLimit int  `yaml:"default_bucket_limit,omitempty"`
 }
 
 // VectorIndexConfig configures the vector index backend.
@@ -373,7 +375,8 @@ func defaultAppConfig(cacheD string) *AppConfig {
 				Enabled: true,
 			},
 			Aggregations: AggregationConfig{
-				Enabled: true,
+				Enabled:            true,
+				DefaultBucketLimit: DefaultAggregationBucketLimit,
 			},
 			VectorIndex: VectorIndexConfig{
 				Backend: DefaultVectorIndexBackend,

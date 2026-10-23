@@ -39,7 +39,7 @@ type SearchCmd struct {
 	ChunkType       string   `group:"Advanced" help:"Filter by chunk type (text, image)"`
 	Workspace       string   `group:"Advanced" help:"Filter parser collections by workspace directory (fast field)"`
 	Field           []string `group:"Advanced" help:"Filter by fast field name:value (e.g. topics:concurrency, entities:ORG:OpenAI, language:en, repo:myproject)"`
-	Aggs            []string `group:"Advanced" help:"Aggregations to run (e.g., type:terms, created_at:histogram:month)"`
+	Aggs            []string `group:"Advanced" help:"Aggregations to run (e.g., type:terms, tags:terms:20, created_at:histogram:month)"`
 	QueryMode       string   `group:"Advanced" help:"Query mode: raw or parsed" default:""`
 	SortBy          string   `group:"Advanced" help:"Sort results by field (e.g., created_at, line_count)"`
 	SortOrder       string   `group:"Advanced" help:"Sort order: asc or desc" default:"desc"`

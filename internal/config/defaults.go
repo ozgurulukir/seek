@@ -78,6 +78,8 @@ const (
 	// DefaultSearchLimit is the default search result limit when neither the
 	// CLI (-l) nor an MCP limit argument specifies one.
 	DefaultSearchLimit = 10
+	// DefaultAggregationBucketLimit is the default max bucket count for terms aggregations.
+	DefaultAggregationBucketLimit = 10
 	// DefaultAnalyzeLang is the default query analysis language (English).
 	DefaultAnalyzeLang = "en"
 	// DefaultRRFK is the default RRF constant.

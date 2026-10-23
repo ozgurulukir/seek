@@ -11,11 +11,19 @@ import (
 // persistence-neutral contract and SQLite. Keeping it here prevents the
 // search domain package from importing Store types or SQL concerns.
 type StoreSearchRepository struct {
-	store *store.Store
+	store              *store.Store
+	defaultBucketLimit int
 }
 
 func NewStoreSearchRepository(s *store.Store) *StoreSearchRepository {
-	return &StoreSearchRepository{store: s}
+	return NewStoreSearchRepositoryWithLimit(s, store.DefaultAggregationBucketLimit)
+}
+
+func NewStoreSearchRepositoryWithLimit(s *store.Store, defaultBucketLimit int) *StoreSearchRepository {
+	if defaultBucketLimit <= 0 {
+		defaultBucketLimit = store.DefaultAggregationBucketLimit
+	}
+	return &StoreSearchRepository{store: s, defaultBucketLimit: defaultBucketLimit}
 }
 
 func (r *StoreSearchRepository) SearchFTS(ctx context.Context, query string, limit int, filters *search.FilterSet) ([]search.Result, error) {
@@ -53,11 +61,28 @@ func (r *StoreSearchRepository) ExecuteAggregation(ctx context.Context, aggregat
 		return nil, err
 	}
 	spec := aggregation.Spec()
+	size := spec.Size
+	if spec.Type == search.AggregationTerm {
+		if termAgg, ok := aggregation.(*search.TermAggregation); ok && termAgg.Size <= 0 {
+			if r != nil && r.defaultBucketLimit > 0 {
+				size = r.defaultBucketLimit
+			} else {
+				size = store.DefaultAggregationBucketLimit
+			}
+		} else if size <= 0 {
+			if r != nil && r.defaultBucketLimit > 0 {
+				size = r.defaultBucketLimit
+			} else {
+				size = store.DefaultAggregationBucketLimit
+			}
+		}
+	}
 	buckets, err := r.store.ExecuteAggregationContext(ctx, store.AggregationSpec{
 		Type:     string(spec.Type),
 		Field:    spec.Field,
 		Interval: spec.Interval,
 		Ranges:   spec.Ranges,
+		Size:     size,
 	}, storeFilters)
 	if err != nil {
 		return nil, err
