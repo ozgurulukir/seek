@@ -201,12 +201,99 @@ func TestAnalyzerEnglishNonPrefixStemFallsBackToSurface(t *testing.T) {
 }
 
 func TestAnalyzerIsStopWord(t *testing.T) {
-	a := NewAnalyzer("en", true, true)
-	if !a.IsStopWord("the") {
-		t.Error("IsStopWord(the) = false, want true")
+	tests := []struct {
+		name     string
+		analyzer *Analyzer
+		word     string
+		want     bool
+	}{
+		{
+			name:     "english stop word lowercase",
+			analyzer: NewAnalyzer("en", true, true),
+			word:     "the",
+			want:     true,
+		},
+		{
+			name:     "english stop word uppercase case folding",
+			analyzer: NewAnalyzer("en", true, true),
+			word:     "THE",
+			want:     true,
+		},
+		{
+			name:     "english stop word mixed case",
+			analyzer: NewAnalyzer("en", true, true),
+			word:     "ThE",
+			want:     true,
+		},
+		{
+			name:     "english non-stop word",
+			analyzer: NewAnalyzer("en", true, true),
+			word:     "running",
+			want:     false,
+		},
+		{
+			name:     "english stop words disabled",
+			analyzer: NewAnalyzer("en", false, true),
+			word:     "the",
+			want:     false,
+		},
+		{
+			name:     "turkish stop word lowercase",
+			analyzer: NewAnalyzer("tr", true, true),
+			word:     "ve",
+			want:     true,
+		},
+		{
+			name:     "turkish stop word uppercase",
+			analyzer: NewAnalyzer("tr", true, true),
+			word:     "VE",
+			want:     true,
+		},
+		{
+			name:     "turkish non-stop word",
+			analyzer: NewAnalyzer("tr", true, true),
+			word:     "kitap",
+			want:     false,
+		},
+		{
+			name:     "unsupported language with stop words enabled (nil stopWords map)",
+			analyzer: NewAnalyzer("fr", true, true),
+			word:     "the",
+			want:     false,
+		},
+		{
+			name:     "analyzer with nil stopWords map explicitly",
+			analyzer: &Analyzer{enableStopWords: true, stopWords: nil},
+			word:     "the",
+			want:     false,
+		},
+		{
+			name: "custom stopWords map case folding",
+			analyzer: &Analyzer{
+				enableStopWords: true,
+				stopWords:       map[string]bool{"custom": true, "foo": true},
+			},
+			word: "Foo",
+			want: true,
+		},
+		{
+			name: "custom stopWords map non-matching word",
+			analyzer: &Analyzer{
+				enableStopWords: true,
+				stopWords:       map[string]bool{"custom": true},
+			},
+			word: "bar",
+			want: false,
+		},
 	}
-	if a.IsStopWord("running") {
-		t.Error("IsStopWord(running) = true, want false")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.analyzer.IsStopWord(tt.word)
+			if got != tt.want {
+				t.Errorf("IsStopWord(%q) = %v, want %v", tt.word, got, tt.want)
+			}
+		})
 	}
 }
 
