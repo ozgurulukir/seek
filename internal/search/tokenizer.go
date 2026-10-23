@@ -73,23 +73,33 @@ func NewAnalyzer(lang string, enableStopWords, enableStemmer bool) *Analyzer {
 	if enableStemmer {
 		switch a.lang {
 		case "en", "english":
-			// PERF: reuse snowballstem.Env via sync.Pool for thread-safe allocation reduction.
+			// PERF: reuse snowballstem.Env via sync.Pool and check EqS for unstemmed words to avoid env.AssignTo() allocations.
 			a.stemmer = func(s string) string {
 				env := envPool.Get().(*snowballstem.Env)
 				env.SetCurrent(s)
 				english.Stem(env)
-				res := env.AssignTo()
+				var res string
+				if env.EqS(s) {
+					res = s
+				} else {
+					res = env.AssignTo()
+				}
 				env.SetCurrent("")
 				envPool.Put(env)
 				return res
 			}
 		case "tr", "turkish":
-			// PERF: reuse snowballstem.Env via sync.Pool for thread-safe allocation reduction.
+			// PERF: reuse snowballstem.Env via sync.Pool and check EqS for unstemmed words to avoid env.AssignTo() allocations.
 			a.stemmer = func(s string) string {
 				env := envPool.Get().(*snowballstem.Env)
 				env.SetCurrent(s)
 				turkish.Stem(env)
-				res := guardedTurkishStem(s, env.AssignTo())
+				var res string
+				if env.EqS(s) {
+					res = s
+				} else {
+					res = guardedTurkishStem(s, env.AssignTo())
+				}
 				env.SetCurrent("")
 				envPool.Put(env)
 				return res
@@ -127,23 +137,27 @@ func guardedTurkishStem(token, stem string) string {
 // Analyze processes text through the analyzer pipeline:
 // tokenization → lowercase → stop-word filter → stemming.
 // It returns the analyzed tokens (without FTS5 prefix expansion).
+// PERF: uses AnalyzeTokenFunc to stream tokens directly into the pipeline without allocating an intermediate token slice.
 func (a *Analyzer) Analyze(text string) []string {
-	tokens := AnalyzeToken(text)
-	result := make([]string, 0, len(tokens))
-	for _, token := range tokens {
-		token = LowerToken(token)
+	capEst := len(text)/5 + 1
+	if capEst > 64 {
+		capEst = 64
+	}
+	result := make([]string, 0, capEst)
+	AnalyzeTokenFunc(text, func(rawToken string) {
+		token := LowerToken(rawToken)
 		if token == "" {
-			continue
+			return
 		}
 		if a.enableStopWords && a.stopWords != nil && a.stopWords[token] {
-			continue
+			return
 		}
 		if a.enableStemmer && a.stemmer != nil {
 			result = append(result, a.stemmer(token))
 		} else {
 			result = append(result, token)
 		}
-	}
+	})
 	return result
 }
 
@@ -168,16 +182,20 @@ const minFTS5PrefixLen = 3
 // then matches nothing and silently drops the term. Such unusable stems fall
 // back to the surface token. Stems that are shorter than the token are still
 // honored for root reconstruction (the Turkish "kitabı"->"kitap" case).
+// PERF: uses AnalyzeTokenFunc to stream tokens directly into the pipeline without allocating an intermediate token slice.
 func (a *Analyzer) AnalyzeForQuery(text string) []string {
-	tokens := AnalyzeToken(text)
-	result := make([]string, 0, len(tokens))
-	for _, token := range tokens {
-		token = LowerToken(token)
+	capEst := len(text)/5 + 1
+	if capEst > 64 {
+		capEst = 64
+	}
+	result := make([]string, 0, capEst)
+	AnalyzeTokenFunc(text, func(rawToken string) {
+		token := LowerToken(rawToken)
 		if token == "" {
-			continue
+			return
 		}
 		if a.enableStopWords && a.stopWords != nil && a.stopWords[token] {
-			continue
+			return
 		}
 		if a.enableStemmer && a.stemmer != nil {
 			stemmed := a.stemmer(token)
@@ -193,7 +211,7 @@ func (a *Analyzer) AnalyzeForQuery(text string) []string {
 		} else {
 			result = append(result, token)
 		}
-	}
+	})
 	return result
 }
 
