@@ -111,3 +111,37 @@ func TestRunAggs_ConfiguredDefaultBucketLimit(t *testing.T) {
 		t.Fatalf("explicit path:terms:8 buckets = %d, want 8", got)
 	}
 }
+
+func TestRunAggs_NonTermAggregations(t *testing.T) {
+	ctx := context.Background()
+	runtime := newRequestTestRuntimeWithConfig(t, config.Config{
+		Aggregations: config.AggregationConfig{Enabled: true},
+	})
+	col, err := runtime.Store.CreateCollection("docs", store.CollectionTypeMarkdown, "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 1; i <= 5; i++ {
+		name := fmt.Sprintf("doc%02d.md", i)
+		path := fmt.Sprintf("/tmp/%s", name)
+		docID, err := runtime.Store.UpsertDocument(col.ID, path, name, fmt.Sprintf("h%d", i), 1, 10*i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.Store.UpsertFTS(docID, name, "content"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	aggs, err := runtime.RunAggs(ctx, SearchRequest{Aggs: []string{"count", "line_count:range:0-25,25-"}})
+	if err != nil {
+		t.Fatalf("RunAggs: %v", err)
+	}
+	if got := len(aggs["count"]); got != 1 || aggs["count"][0].Count != 5 {
+		t.Fatalf("count buckets = %#v, want 1 bucket with count 5", aggs["count"])
+	}
+	if got := len(aggs["line_count:range:0-25,25-"]); got != 2 {
+		t.Fatalf("range buckets = %#v, want 2 buckets", aggs["line_count:range:0-25,25-"])
+	}
+}

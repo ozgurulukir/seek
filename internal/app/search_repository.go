@@ -62,17 +62,19 @@ func (r *StoreSearchRepository) ExecuteAggregation(ctx context.Context, aggregat
 	}
 	spec := aggregation.Spec()
 	size := spec.Size
-	if termAgg, ok := aggregation.(*search.TermAggregation); ok && termAgg.Size <= 0 {
-		if r != nil && r.defaultBucketLimit > 0 {
-			size = r.defaultBucketLimit
-		} else {
-			size = store.DefaultAggregationBucketLimit
-		}
-	} else if size <= 0 {
-		if r != nil && r.defaultBucketLimit > 0 {
-			size = r.defaultBucketLimit
-		} else {
-			size = store.DefaultAggregationBucketLimit
+	if spec.Type == search.AggregationTerm {
+		if termAgg, ok := aggregation.(*search.TermAggregation); ok && termAgg.Size <= 0 {
+			if r != nil && r.defaultBucketLimit > 0 {
+				size = r.defaultBucketLimit
+			} else {
+				size = store.DefaultAggregationBucketLimit
+			}
+		} else if size <= 0 {
+			if r != nil && r.defaultBucketLimit > 0 {
+				size = r.defaultBucketLimit
+			} else {
+				size = store.DefaultAggregationBucketLimit
+			}
 		}
 	}
 	buckets, err := r.store.ExecuteAggregationContext(ctx, store.AggregationSpec{
