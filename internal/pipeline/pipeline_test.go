@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -312,5 +313,19 @@ func TestEmbedPending_Privacy(t *testing.T) {
 		t.Fatal("offline_only + remote should be refused")
 	} else if !strings.Contains(why, "offline_only") {
 		t.Errorf("refusal reason should mention offline_only, got: %s", why)
+	}
+}
+
+func TestNewStdoutLogger(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewStdoutLogger(&buf)
+	if logger == nil {
+		t.Fatal("expected non-nil Logger")
+	}
+
+	logger.Printf("hello %s %d", "world", 42)
+	expected := "hello world 42"
+	if got := buf.String(); got != expected {
+		t.Errorf("logger output = %q, want %q", got, expected)
 	}
 }
