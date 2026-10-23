@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -81,5 +82,39 @@ func TestOCRClientDoesNotFollowRedirects(t *testing.T) {
 	}
 	if redirected {
 		t.Fatal("OCR client followed redirect to another host")
+	}
+}
+
+func TestOCRClientExtractTextWithContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"choices":[{"message":{"content":"EXTRACTED TEXT WITH CTX"}}]}`))
+	}))
+	defer srv.Close()
+
+	c := NewOCRClient(srv.URL, "testkey", "qwen-vl-ocr", 100)
+	got, err := c.ExtractTextWithContext(context.Background(), "data:image/png;base64,AAAA")
+	if err != nil {
+		t.Fatalf("ExtractTextWithContext: %v", err)
+	}
+	if got != "EXTRACTED TEXT WITH CTX" {
+		t.Errorf("got %q, want EXTRACTED TEXT WITH CTX", got)
+	}
+}
+
+func TestOCRClientExtractTextWithContext_Canceled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer srv.Close()
+
+	c := NewOCRClient(srv.URL, "testkey", "qwen-vl-ocr", 100)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, err := c.ExtractTextWithContext(ctx, "data:image/png;base64,AAAA")
+	if err == nil {
+		t.Fatal("expected error with canceled context, got nil")
 	}
 }

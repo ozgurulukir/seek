@@ -158,7 +158,14 @@ func (e *Extractor) extractPDF(ctx context.Context, pdfPath string) (extractor.R
 		text = strings.TrimSpace(text)
 		if text == "" && e.ocr != nil {
 			var ocrErr error
-			if text, ocrErr = e.ocr.ExtractText(dataURIFromFile(pagePath)); ocrErr != nil {
+			if ocrWithCtx, ok := e.ocr.(interface {
+				ExtractTextWithContext(ctx context.Context, imageDataURI string) (string, error)
+			}); ok {
+				text, ocrErr = ocrWithCtx.ExtractTextWithContext(ctx, dataURIFromFile(pagePath))
+			} else {
+				text, ocrErr = e.ocr.ExtractText(dataURIFromFile(pagePath))
+			}
+			if ocrErr != nil {
 				// A failed OCR page must not fail the whole document, but it
 				// must not vanish silently either — the page indexes with no
 				// text and the user otherwise never learns OCR is broken.
