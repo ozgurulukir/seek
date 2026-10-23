@@ -621,17 +621,12 @@ func toFTS5(q Query, a *Analyzer) (string, bool) {
 
 // --- Query Analysis ---
 
-// AnalyzeToken splits text into tokens compatible with unicode61.
-// PERF: pre-allocate slice capacity and fast-path ASCII character checks to avoid slice reallocations and rune decoding overhead.
-func AnalyzeToken(s string) []string {
+// AnalyzeTokenFunc streams tokens compatible with unicode61 directly into fn without slice allocations.
+// PERF: fast-path ASCII character checks and zero-allocation streaming callback for text analysis.
+func AnalyzeTokenFunc(s string, fn func(token string)) {
 	if len(s) == 0 {
-		return nil
+		return
 	}
-	capEst := len(s)/5 + 1
-	if capEst > 64 {
-		capEst = 64
-	}
-	tokens := make([]string, 0, capEst)
 	start := -1
 	i := 0
 	for i < len(s) {
@@ -653,15 +648,31 @@ func AnalyzeToken(s string) []string {
 			}
 		} else {
 			if start >= 0 {
-				tokens = append(tokens, s[start:i])
+				fn(s[start:i])
 				start = -1
 			}
 		}
 		i += width
 	}
 	if start >= 0 {
-		tokens = append(tokens, s[start:])
+		fn(s[start:])
 	}
+}
+
+// AnalyzeToken splits text into tokens compatible with unicode61.
+// PERF: pre-allocate slice capacity and fast-path ASCII character checks to avoid slice reallocations and rune decoding overhead.
+func AnalyzeToken(s string) []string {
+	if len(s) == 0 {
+		return nil
+	}
+	capEst := len(s)/5 + 1
+	if capEst > 64 {
+		capEst = 64
+	}
+	tokens := make([]string, 0, capEst)
+	AnalyzeTokenFunc(s, func(tok string) {
+		tokens = append(tokens, tok)
+	})
 	return tokens
 }
 

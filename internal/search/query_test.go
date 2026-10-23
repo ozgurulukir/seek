@@ -153,6 +153,7 @@ func TestAnalyzeToken(t *testing.T) {
 		{"hello world", []string{"hello", "world"}},
 		{"hello-world", []string{"hello", "world"}},
 		{"hello_world", []string{"hello_world"}},
+		{"İstanbul, 42_abc", []string{"İstanbul", "42_abc"}},
 		{"", []string{}},
 		{"123", []string{"123"}},
 	}
@@ -166,6 +167,20 @@ func TestAnalyzeToken(t *testing.T) {
 		for i := range got {
 			if got[i] != tt.want[i] {
 				t.Errorf("AnalyzeToken(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+			}
+		}
+
+		var streamed []string
+		AnalyzeTokenFunc(tt.input, func(token string) {
+			streamed = append(streamed, token)
+		})
+		if len(streamed) != len(tt.want) {
+			t.Errorf("AnalyzeTokenFunc(%q) produced %v, want %v", tt.input, streamed, tt.want)
+			continue
+		}
+		for i := range streamed {
+			if streamed[i] != tt.want[i] {
+				t.Errorf("AnalyzeTokenFunc(%q)[%d] = %q, want %q", tt.input, i, streamed[i], tt.want[i])
 			}
 		}
 	}
