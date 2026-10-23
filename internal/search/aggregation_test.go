@@ -133,70 +133,136 @@ func TestParseAggregationRejectsInvalidSpecs(t *testing.T) {
 	}
 }
 
-func TestTermAggregationSpecDefaults(t *testing.T) {
+func TestTermAggregationSpec(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		agg      TermAggregation
-		wantSize int
+		name      string
+		agg       TermAggregation
+		wantType  AggregationType
+		wantField string
+		wantSize  int
 	}{
-		{name: "zero size", agg: TermAggregation{Field: "tag"}, wantSize: DefaultAggregationBucketLimit},
-		{name: "negative size", agg: TermAggregation{Field: "tag", Size: -3}, wantSize: DefaultAggregationBucketLimit},
-		{name: "explicit size", agg: TermAggregation{Field: "tag", Size: 25}, wantSize: 25},
+		{
+			name:      "zero size default limit",
+			agg:       TermAggregation{Field: "category"},
+			wantType:  AggregationTerm,
+			wantField: "category",
+			wantSize:  DefaultAggregationBucketLimit,
+		},
+		{
+			name:      "negative size default limit",
+			agg:       TermAggregation{Field: "tag", Size: -3},
+			wantType:  AggregationTerm,
+			wantField: "tag",
+			wantSize:  DefaultAggregationBucketLimit,
+		},
+		{
+			name:      "explicit size",
+			agg:       TermAggregation{Field: "author", Size: 25},
+			wantType:  AggregationTerm,
+			wantField: "author",
+			wantSize:  25,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := tc.agg.Spec()
+			if spec.Type != tc.wantType {
+				t.Errorf("Type = %q, want %q", spec.Type, tc.wantType)
+			}
+			if spec.Field != tc.wantField {
+				t.Errorf("Field = %q, want %q", spec.Field, tc.wantField)
+			}
 			if spec.Size != tc.wantSize {
-				t.Errorf("got size %d, want %d", spec.Size, tc.wantSize)
+				t.Errorf("Size = %d, want %d", spec.Size, tc.wantSize)
 			}
 		})
 	}
 }
 
-func TestHistogramAggregationSpecDefaults(t *testing.T) {
+func TestHistogramAggregationSpec(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		agg          HistogramAggregation
+		wantType     AggregationType
+		wantField    string
 		wantInterval string
 	}{
-		{name: "empty interval", agg: HistogramAggregation{Field: "created_at"}, wantInterval: "month"},
-		{name: "explicit interval", agg: HistogramAggregation{Field: "created_at", Interval: "day"}, wantInterval: "day"},
+		{
+			name:         "default interval",
+			agg:          HistogramAggregation{Field: "created_at"},
+			wantType:     AggregationHistogram,
+			wantField:    "created_at",
+			wantInterval: "month",
+		},
+		{
+			name:         "explicit interval",
+			agg:          HistogramAggregation{Field: "created_at", Interval: "year"},
+			wantType:     AggregationHistogram,
+			wantField:    "created_at",
+			wantInterval: "year",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := tc.agg.Spec()
+			if spec.Type != tc.wantType {
+				t.Errorf("Type = %q, want %q", spec.Type, tc.wantType)
+			}
+			if spec.Field != tc.wantField {
+				t.Errorf("Field = %q, want %q", spec.Field, tc.wantField)
+			}
 			if spec.Interval != tc.wantInterval {
-				t.Errorf("got interval %q, want %q", spec.Interval, tc.wantInterval)
+				t.Errorf("Interval = %q, want %q", spec.Interval, tc.wantInterval)
 			}
 		})
 	}
 }
 
-func TestRangeAggregationSpecDefaults(t *testing.T) {
+func TestRangeAggregationSpec(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		agg        RangeAggregation
+		wantType   AggregationType
+		wantField  string
 		wantRanges []string
 	}{
 		{
-			name:       "empty ranges",
+			name:       "default ranges",
 			agg:        RangeAggregation{Field: "line_count"},
+			wantType:   AggregationRange,
+			wantField:  "line_count",
 			wantRanges: []string{"0-100", "100-500", "500-"},
 		},
 		{
 			name:       "explicit ranges",
 			agg:        RangeAggregation{Field: "line_count", Ranges: []string{"0-10", "10-"}},
+			wantType:   AggregationRange,
+			wantField:  "line_count",
 			wantRanges: []string{"0-10", "10-"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := tc.agg.Spec()
+			if spec.Type != tc.wantType {
+				t.Errorf("Type = %q, want %q", spec.Type, tc.wantType)
+			}
+			if spec.Field != tc.wantField {
+				t.Errorf("Field = %q, want %q", spec.Field, tc.wantField)
+			}
 			if len(spec.Ranges) != len(tc.wantRanges) {
-				t.Fatalf("got ranges %#v, want %#v", spec.Ranges, tc.wantRanges)
+				t.Fatalf("len(Ranges) = %d, want %d", len(spec.Ranges), len(tc.wantRanges))
 			}
 			for i := range spec.Ranges {
 				if spec.Ranges[i] != tc.wantRanges[i] {
-					t.Errorf("range %d = %q, want %q", i, spec.Ranges[i], tc.wantRanges[i])
+					t.Errorf("Ranges[%d] = %q, want %q", i, spec.Ranges[i], tc.wantRanges[i])
 				}
 			}
 		})
+	}
+}
+
+func TestCountAggregationSpec(t *testing.T) {
+	agg := CountAggregation{}
+	spec := agg.Spec()
+	if spec.Type != AggregationCount {
+		t.Errorf("Type = %q, want %q", spec.Type, AggregationCount)
 	}
 }
