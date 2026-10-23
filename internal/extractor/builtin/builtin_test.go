@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,6 +26,17 @@ func writeMinPdf(t *testing.T, path string) {
 type fakeOCR struct{ out string }
 
 func (f fakeOCR) ExtractText(string) (string, error) { return f.out, nil }
+
+type cancelingOCR struct{ cancel context.CancelFunc }
+
+func (f cancelingOCR) ExtractText(string) (string, error) {
+	return "", errors.New("unexpected legacy OCR call")
+}
+
+func (f cancelingOCR) ExtractTextWithContext(ctx context.Context, _ string) (string, error) {
+	f.cancel()
+	return "", ctx.Err()
+}
 
 func TestNew(t *testing.T) {
 	fake := fakeOCR{out: "test"}
@@ -182,6 +194,19 @@ func TestExtractPDF_OCRInvoked(t *testing.T) {
 	}
 	if !contains(res.Content, "SCANNED PAGE TEXT") {
 		t.Errorf("Content = %q, want to contain OCR output", res.Content)
+	}
+}
+
+func TestExtractPDF_OCRCancellationPropagates(t *testing.T) {
+	dir := t.TempDir()
+	pdfPath := filepath.Join(dir, "scan.pdf")
+	writeMinPdf(t, pdfPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	e := New(cancelingOCR{cancel: cancel}, t.TempDir())
+	_, err := e.Extract(ctx, pdfPath)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Extract error = %v, want context.Canceled", err)
 	}
 }
 

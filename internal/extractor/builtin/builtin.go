@@ -165,6 +165,9 @@ func (e *Extractor) extractPDF(ctx context.Context, pdfPath string) (extractor.R
 			} else {
 				text, ocrErr = e.ocr.ExtractText(dataURIFromFile(pagePath))
 			}
+			if err := ctx.Err(); err != nil {
+				return extractor.Result{}, err
+			}
 			if ocrErr != nil {
 				// A failed OCR page must not fail the whole document, but it
 				// must not vanish silently either — the page indexes with no
