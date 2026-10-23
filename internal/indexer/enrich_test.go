@@ -146,3 +146,10 @@ func TestSemanticEligibleMatrix(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeTagValuesCaseInsensitive(t *testing.T) {
+	got := mergeTagValues(" Go,CacheKey,önbellek,,Go ", "go,cachekey,ÖNBELLEK,SQLite, sqlite ")
+	if want := "Go,CacheKey,önbellek,SQLite"; got != want {
+		t.Fatalf("mergeTagValues = %q, want %q", got, want)
+	}
+}

@@ -26,7 +26,9 @@ the Go side persists it as the ``language`` fast field.
 from __future__ import annotations
 
 import logging
+import re
 import threading
+import unicodedata
 
 log = logging.getLogger("semantic")
 
@@ -36,6 +38,30 @@ BERTOPIC_MIN_CHUNKS = 3
 BERTOPIC_UMAP_DIMS = 10
 MAX_TOPIC_LABEL_WORDS = 4
 MAX_ENTITIES_PER_CHUNK = 10
+
+
+# Filter standalone boilerplate and phrases made entirely of it.
+# Do not split identifiers: errHandler and cache_key carry useful meaning.
+CODE_STOPWORDS = frozenset(
+    "err nil none null true false ok ctx self this return func def var const let".split()
+)
+
+
+def _normalize_keyphrase(value: str) -> str:
+    """Keep Unicode words/identifiers, normalize wrappers and whitespace."""
+    value = unicodedata.normalize("NFC", value).lower()
+    # Turkish capital dotted I lowercases to i + combining dot in Python.
+    value = value.replace("i\u0307", "i")
+    tokens = re.findall(r"[^\W_]+(?:_[^\W_]+)*", value)
+    if not tokens or not any(
+        any(c.isalpha() for c in token) and token not in CODE_STOPWORDS
+        for token in tokens
+    ):
+        return ""
+    phrase = " ".join(tokens)
+    if len(tokens) == 1 and len(phrase) < 3:
+        return ""
+    return phrase if len(phrase) <= 40 else ""
 
 
 def _topic_label(model, topic_id: int) -> str:
@@ -221,8 +247,8 @@ class TagPipeline:
             return []
         seen: dict[str, None] = {}
         for kw, _score in kws:
-            k = kw.strip().lower()
-            if 2 < len(k) <= 40:
+            k = _normalize_keyphrase(kw)
+            if k:
                 seen.setdefault(k, None)
         return list(seen)
 

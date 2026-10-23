@@ -14,6 +14,7 @@ FILES = (
     ("tools/semantic/tagger.py", "skills/seek/scripts/services/semantic/tagger.py"),
     ("tools/semantic/bootstrap_models.py", "skills/seek/scripts/services/semantic/bootstrap_models.py"),
     ("tools/semantic/test_server.py", "skills/seek/scripts/services/semantic/test_server.py"),
+    ("tools/semantic/test_keyphrases.py", "skills/seek/scripts/services/semantic/test_keyphrases.py"),
     ("tools/semantic/setup.sh", "skills/seek/scripts/services/semantic/setup.sh"),
     ("tools/semantic/setup.ps1", "skills/seek/scripts/services/semantic/setup.ps1"),
     ("tools/semantic/requirements.txt", "skills/seek/scripts/services/semantic/requirements.txt"),
