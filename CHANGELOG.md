@@ -5,6 +5,8 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-10-23
+
 ### Fixed
 
 - **Codex and Claude plugin manifests validation and consistency** (`.codex-plugin`, `.claude-plugin`, `plugin.json`):
