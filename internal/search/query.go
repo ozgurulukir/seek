@@ -677,7 +677,9 @@ func AnalyzeToken(s string) []string {
 }
 
 // LowerToken lowercases a token (basic ASCII + Unicode case folding).
-// PERF: fast-path already-lowercase ASCII tokens to avoid string allocation in strings.ToLower.
+// PERF: fast-path already-lowercase ASCII tokens. strings.ToLower also skips
+// allocation for these, but its per-byte isASCII/hasUpper bookkeeping costs
+// more than this single-break scan on the analyzer hot path.
 func LowerToken(s string) string {
 	hasUpperOrNonASCII := false
 	for i := 0; i < len(s); i++ {
