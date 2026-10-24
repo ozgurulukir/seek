@@ -20,3 +20,14 @@ func BenchmarkAnalyzerAnalyze(b *testing.B) {
 		_ = a.Analyze(text)
 	}
 }
+
+func BenchmarkLowerToken(b *testing.B) {
+	tokens := []string{"the", "quick", "BROWN", "Fox", "jumps", "over", "the", "lazy", "dog", "sqlite", "Hybrid", "search"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, tok := range tokens {
+			_ = LowerToken(tok)
+		}
+	}
+}
