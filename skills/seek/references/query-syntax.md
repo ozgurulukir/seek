@@ -50,7 +50,7 @@ seek search "NEAR(term1 term2, 5)"
 ## Aggregations
 
 ```bash
-seek search "query" --aggs "type:terms"
+seek search "query" --aggs "type:terms"           # terms (default size 10; "type:terms:25" for size 25)
 seek search "query" --aggs "collection:terms"
 seek search "query" --aggs "created_at:histogram:month"
 seek search "query" --aggs "line_count:range:0-100,100-500"

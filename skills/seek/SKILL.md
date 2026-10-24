@@ -110,15 +110,32 @@ seek add /path/to/docs --docs --name mydocs          # shortcut alias
 seek add /path/to/docs --documents --backend xberg
 
 # Add agent conversation collections
-seek add --claude        # Claude Code conversations (native, with images)
-seek add --codex         # Codex conversations (native, with images)
-seek add --opencode      # opencode CLI sessions (schema-driven)
-seek add --copilot       # GitHub Copilot CLI sessions (schema-driven)
-seek add --zed           # Zed Agent panel threads (schema-driven)
-seek add --claude-schema # Claude (text-only, schema-driven, no image extraction)
-seek add --codex-schema  # Codex (text-only, schema-driven, no image extraction)
-seek add --parser zcode  # ZCode sessions (~/.zcode/cli/rollout, schema-driven)
-seek add --parser <name> # any parser schema by name
+# --agent is the canonical selector (claude|codex are native; opencode|copilot|
+# zed|hermes map to parser schemas). The per-agent flags (--claude, --opencode,
+# ...) are compatibility aliases.
+seek add --agent claude    # Claude Code conversations (native, with images)
+seek add --claude          # alias
+seek add --agent codex     # Codex conversations (native, with images)
+seek add --codex           # alias
+seek add --agent opencode  # opencode CLI sessions (schema-driven)
+seek add --opencode        # alias
+seek add --agent copilot   # GitHub Copilot CLI sessions (schema-driven)
+seek add --copilot         # alias
+seek add --agent zed       # Zed Agent panel threads (schema-driven)
+seek add --zed             # alias
+seek add --agent hermes    # Hermes Agent sessions — transcripts live in per-profile
+                           # SQLite state.db (~/.hermes/state.db,
+                           # ~/.hermes/profiles/*/state.db), not JSONL
+seek add --hermes          # alias
+seek add --parser claude   # Claude (text-only, schema-driven, no image extraction)
+seek add --claude-schema   # alias (--parser claude)
+seek add --parser codex    # Codex (text-only, schema-driven, no image extraction)
+seek add --codex-schema    # alias (--parser codex)
+seek add --parser zcode    # ZCode sessions (~/.zcode/cli/rollout, schema-driven)
+seek add --parser <name>   # any parser schema by name
+
+# Path-based collections also accept the canonical --type selector
+# (markdown|code|documents|pdf|images), e.g.: seek add ~/docs --type documents
 
 # List available parser schemas + detection status
 seek advanced parsers list
@@ -206,12 +223,57 @@ seek hooks install
 
 # Uninstall hooks
 seek hooks uninstall
+
+# Diagnose hook installation and binary resolution (run when syncs silently fail)
+seek hooks doctor
 ```
 
 ZCode syncs via a manually configured `Stop` hook in `~/.zcode/cli/config.json`
 (already installed on this machine) — no `seek hooks install` involvement.
 
 See also: [Hooks Reference](references/hooks.md)
+
+### MCP Server (`seek mcp`)
+
+Exposes seek as an MCP stdio server so MCP-capable agents can search the index
+directly. Tools: `seek_capabilities` (backend availability) and `seek_search`
+(hybrid/lex/vec search with `--aggs`-style fast-field aggregations, e.g.
+`doc_type:terms`; returns a structured `vector_unavailable` error with a
+lexical-fallback hint if the embedding backend is unreachable).
+
+```bash
+# Start the MCP server on stdio (configure it from the agent side)
+seek mcp
+```
+
+Register it with Claude Code via `claude mcp add seek -- seek mcp` (or a
+`.mcp.json` entry with command `seek` and args `["mcp"]`). The binary must stay
+on the agent's PATH (or use an absolute path).
+
+### Maintenance & Repair (`seek doctor`, `seek uninstall`)
+
+```bash
+# Inspect the local installation; audit private-data permissions and show warnings
+seek doctor
+
+# Also tighten permissions on private data (config dir, cache/index, hnsw.index:
+# dirs 0700, files 0600 — the index contains the searchable text of everything)
+seek doctor --fix-permissions
+
+# Print the effective resolved config (advanced knobs + applied defaults)
+seek doctor --verbose
+
+# Uninstall preview — lists every seek artifact (service, hooks, cache, config)
+seek uninstall --dry-run
+
+# Remove only the background service and agent hooks (keep config + index)
+seek uninstall --service --hooks
+
+# Full removal: periodic service, agent hooks, cache/index (~/.cache/seek),
+# and config (~/.config/seek). The binary itself is never self-deleted —
+# remove it by hand afterwards.
+seek uninstall
+```
 
 ### Authentication & Config
 
@@ -282,7 +344,7 @@ seek search "query" \
 - [OCR Reference](references/ocr.md) — local Ollama/GLM-OCR quickstart, privacy boundary, compatibility, and troubleshooting
 - [Semantic Service](references/semantic.md) — degraded vs full local NLP setup, health verification, and backfill
 - [Service](references/service.md) — background periodic sync+embed service
-- [Hooks](references/hooks.md) — Claude Code, Codex, and ZCode auto-indexing hooks
+- [Hooks](references/hooks.md) — Claude Code, Codex, and ZCode auto-indexing hooks (incl. `seek hooks doctor`)
 - [Troubleshooting](references/troubleshooting.md) — no results, API errors, index issues
 
 ## Optional Python Services

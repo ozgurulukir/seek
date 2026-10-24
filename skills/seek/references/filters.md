@@ -139,6 +139,7 @@ seek search "query" --sort-by line_count --sort-order asc
 
 **Sort fields:**
 - `created_at` — document creation timestamp
+- `mtime` — document modification timestamp
 - `line_count` — document line count
 
 **Sort order:**

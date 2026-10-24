@@ -29,12 +29,12 @@ seek service stop
 
 ## What It Runs
 
-The service executes two commands in sequence:
+The service executes a single command:
 
-1. **`seek sync`** — Incrementally syncs new/changed files across all collections
-2. **`seek embed`** — Generates embeddings for any chunks that don't have them yet
+1. **`seek sync`** — Incrementally syncs new/changed files across all collections,
+   embedding any new chunks in the same pass (in-process)
 
-Both commands are idempotent — running them repeatedly is safe and only processes new work.
+Sync is idempotent — running it repeatedly is safe and only processes new work.
 
 ## Interval
 
