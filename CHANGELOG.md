@@ -5,6 +5,8 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-10-24
+
 ### Fixed
 
 - Filter code boilerplate from semantic keyphrases while preserving meaningful identifiers and Turkish text;
