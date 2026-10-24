@@ -126,6 +126,9 @@ func TestFastFieldResolver(t *testing.T) {
 
 func TestFieldDiscoveryHintListsCuratedFields(t *testing.T) {
 	hint := FieldDiscoveryHint()
+	if !strings.Contains(hint, "run 'seek fields'") {
+		t.Errorf("hint %q does not contain expected substring %q", hint, "run 'seek fields'")
+	}
 	for _, name := range SupportedFastFields() {
 		if !strings.Contains(hint, name) {
 			t.Errorf("hint %q does not mention curated field %q", hint, name)
