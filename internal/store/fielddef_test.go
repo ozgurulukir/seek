@@ -135,3 +135,52 @@ func TestFieldDiscoveryHintListsCuratedFields(t *testing.T) {
 		}
 	}
 }
+
+func TestFastFieldResolverNilReceiverAndUninitializedMap(t *testing.T) {
+	tests := []struct {
+		name     string
+		resolver *FastFieldResolver
+		field    string
+		want     bool
+	}{
+		{
+			name:     "nil resolver with curated field",
+			resolver: nil,
+			field:    "tags",
+			want:     true,
+		},
+		{
+			name:     "nil resolver with unknown field",
+			resolver: nil,
+			field:    "custom_field",
+			want:     false,
+		},
+		{
+			name:     "nil resolver with empty string",
+			resolver: nil,
+			field:    "",
+			want:     false,
+		},
+		{
+			name:     "uninitialized present map with curated field",
+			resolver: &FastFieldResolver{present: nil},
+			field:    "repo",
+			want:     true,
+		},
+		{
+			name:     "uninitialized present map with unknown field",
+			resolver: &FastFieldResolver{present: nil},
+			field:    "custom_field",
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.resolver.Known(tt.field)
+			if got != tt.want {
+				t.Errorf("Known(%q) = %v, want %v", tt.field, got, tt.want)
+			}
+		})
+	}
+}
