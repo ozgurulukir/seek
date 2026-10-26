@@ -187,18 +187,32 @@ func TestHistogramAggregationSpec(t *testing.T) {
 		wantInterval string
 	}{
 		{
-			name:         "default interval",
+			name:         "default interval when empty",
 			agg:          HistogramAggregation{Field: "created_at"},
 			wantType:     AggregationHistogram,
 			wantField:    "created_at",
 			wantInterval: "month",
 		},
 		{
-			name:         "explicit interval",
+			name:         "explicit year interval",
 			agg:          HistogramAggregation{Field: "created_at", Interval: "year"},
 			wantType:     AggregationHistogram,
 			wantField:    "created_at",
 			wantInterval: "year",
+		},
+		{
+			name:         "explicit day interval",
+			agg:          HistogramAggregation{Field: "updated_at", Interval: "day"},
+			wantType:     AggregationHistogram,
+			wantField:    "updated_at",
+			wantInterval: "day",
+		},
+		{
+			name:         "custom interval string",
+			agg:          HistogramAggregation{Field: "timestamp", Interval: "10m"},
+			wantType:     AggregationHistogram,
+			wantField:    "timestamp",
+			wantInterval: "10m",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
