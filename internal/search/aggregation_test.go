@@ -437,8 +437,15 @@ func TestRangeAggregationSpec(t *testing.T) {
 		wantRanges []string
 	}{
 		{
-			name:       "default ranges",
-			agg:        RangeAggregation{Field: "line_count"},
+			name:       "nil ranges default",
+			agg:        RangeAggregation{Field: "line_count", Ranges: nil},
+			wantType:   AggregationRange,
+			wantField:  "line_count",
+			wantRanges: []string{"0-100", "100-500", "500-"},
+		},
+		{
+			name:       "empty ranges slice default",
+			agg:        RangeAggregation{Field: "line_count", Ranges: []string{}},
 			wantType:   AggregationRange,
 			wantField:  "line_count",
 			wantRanges: []string{"0-100", "100-500", "500-"},
@@ -468,6 +475,26 @@ func TestRangeAggregationSpec(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRangeAggregationSpec_DefensiveCopy(t *testing.T) {
+	origRanges := []string{"0-10", "10-50"}
+	agg := RangeAggregation{
+		Field:  "score",
+		Ranges: origRanges,
+	}
+
+	spec1 := agg.Spec()
+	spec1.Ranges[0] = "MUTATED"
+
+	if agg.Ranges[0] == "MUTATED" {
+		t.Errorf("mutating returned spec.Ranges modified internal agg.Ranges")
+	}
+
+	spec2 := agg.Spec()
+	if spec2.Ranges[0] == "MUTATED" {
+		t.Errorf("mutating returned spec.Ranges affected subsequent Spec() calls")
 	}
 }
 
