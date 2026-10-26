@@ -368,3 +368,56 @@ func TestAnalyzerConcurrentStemming(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestAnalyzerStem(t *testing.T) {
+	dummyStemmer := func(word string) string {
+		return word + "_stemmed"
+	}
+
+	tests := []struct {
+		name     string
+		analyzer *Analyzer
+		word     string
+		want     string
+	}{
+		{
+			name:     "english stemmer enabled",
+			analyzer: NewAnalyzer("en", true, true),
+			word:     "running",
+			want:     "run",
+		},
+		{
+			name:     "english stemmer disabled",
+			analyzer: NewAnalyzer("en", true, false),
+			word:     "running",
+			want:     "running",
+		},
+		{
+			name: "custom stemmer enabled",
+			analyzer: &Analyzer{
+				enableStemmer: true,
+				stemmer:       dummyStemmer,
+			},
+			word: "test",
+			want: "test_stemmed",
+		},
+		{
+			name: "stemmer enabled but nil stemmer func",
+			analyzer: &Analyzer{
+				enableStemmer: true,
+				stemmer:       nil,
+			},
+			word: "running",
+			want: "running",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.analyzer.Stem(tt.word)
+			if got != tt.want {
+				t.Errorf("Stem(%q) = %q, want %q", tt.word, got, tt.want)
+			}
+		})
+	}
+}
