@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -22,8 +23,9 @@ import (
 const DefaultVLEndpoint = config.DefaultVLBaseURL
 
 const (
-	vlMaxContents = config.DefaultVLMaxContents // max content elements per request
-	vlMaxImages   = config.DefaultVLMaxImages   // max images per request
+	vlMaxContents   = config.DefaultVLMaxContents // max content elements per request
+	vlMaxImages     = config.DefaultVLMaxImages   // max images per request
+	maxImageWorkers = 8                           // max concurrent image readers
 )
 
 // EmbedItem represents a single item to embed — either text-only or image+context.
@@ -441,19 +443,41 @@ func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []Imag
 			dataURI string
 			err     error
 		}
-		results := make([]readResult, end-i)
-		var wg sync.WaitGroup
+		batchLen := end - i
+		results := make([]readResult, batchLen)
 
-		for j := i; j < end; j++ {
-			wg.Add(1)
-			go func(idx int, item ImageBatchItem) {
-				defer wg.Done()
-				mediaType := ImagePathToMediaType(item.ImagePath)
-				dataURI, err := ImageToDataURI(item.ImagePath, mediaType)
-				results[idx-i] = readResult{dataURI, err}
-			}(j, items[j])
+		numWorkers := batchLen
+		if numWorkers > maxImageWorkers {
+			numWorkers = maxImageWorkers
 		}
-		wg.Wait()
+
+		if numWorkers <= 1 {
+			for j := i; j < end; j++ {
+				mediaType := ImagePathToMediaType(items[j].ImagePath)
+				dataURI, err := ImageToDataURI(items[j].ImagePath, mediaType)
+				results[j-i] = readResult{dataURI, err}
+			}
+		} else {
+			var wg sync.WaitGroup
+			wg.Add(numWorkers)
+			var nextIdx int32 = int32(i)
+			for w := 0; w < numWorkers; w++ {
+				go func() {
+					for {
+						j := int(atomic.AddInt32(&nextIdx, 1) - 1)
+						if j >= end {
+							break
+						}
+						item := items[j]
+						mediaType := ImagePathToMediaType(item.ImagePath)
+						dataURI, err := ImageToDataURI(item.ImagePath, mediaType)
+						results[j-i] = readResult{dataURI, err}
+					}
+					wg.Done()
+				}()
+			}
+			wg.Wait()
+		}
 
 		embedItems := make([]EmbedItem, 0, end-i)
 		validIndices := make([]int, 0, end-i)
