@@ -453,6 +453,9 @@ func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []Imag
 
 		if numWorkers <= 1 {
 			for j := i; j < end; j++ {
+				if ctx.Err() != nil {
+					break
+				}
 				mediaType := ImagePathToMediaType(items[j].ImagePath)
 				dataURI, err := ImageToDataURI(items[j].ImagePath, mediaType)
 				results[j-i] = readResult{dataURI, err}
@@ -463,7 +466,11 @@ func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []Imag
 			var nextIdx int32 = int32(i)
 			for w := 0; w < numWorkers; w++ {
 				go func() {
+					defer wg.Done()
 					for {
+						if ctx.Err() != nil {
+							break
+						}
 						j := int(atomic.AddInt32(&nextIdx, 1) - 1)
 						if j >= end {
 							break
@@ -473,7 +480,6 @@ func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []Imag
 						dataURI, err := ImageToDataURI(item.ImagePath, mediaType)
 						results[j-i] = readResult{dataURI, err}
 					}
-					wg.Done()
 				}()
 			}
 			wg.Wait()
