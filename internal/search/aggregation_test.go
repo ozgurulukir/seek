@@ -61,10 +61,22 @@ func TestParseAggregationSpecs(t *testing.T) {
 			want:     AggregationSpec{Type: AggregationHistogram, Field: "created_at", Interval: "month"},
 		},
 		{
-			name:     "histogram interval",
+			name:     "histogram year interval",
 			text:     "created_at:HISTOGRAM:year",
 			wantType: reflect.TypeOf(&HistogramAggregation{}),
 			want:     AggregationSpec{Type: AggregationHistogram, Field: "created_at", Interval: "year"},
+		},
+		{
+			name:     "histogram day interval",
+			text:     "created_at:histogram:day",
+			wantType: reflect.TypeOf(&HistogramAggregation{}),
+			want:     AggregationSpec{Type: AggregationHistogram, Field: "created_at", Interval: "day"},
+		},
+		{
+			name:     "histogram week interval",
+			text:     "created_at:histogram:week",
+			wantType: reflect.TypeOf(&HistogramAggregation{}),
+			want:     AggregationSpec{Type: AggregationHistogram, Field: "created_at", Interval: "week"},
 		},
 		{
 			name:     "range default",
@@ -83,6 +95,12 @@ func TestParseAggregationSpecs(t *testing.T) {
 			text:     "line_count:RANGE:0-10,10-",
 			wantType: reflect.TypeOf(&RangeAggregation{}),
 			want:     AggregationSpec{Type: AggregationRange, Field: "line_count", Ranges: []string{"0-10", "10-"}},
+		},
+		{
+			name:     "range custom multi-range",
+			text:     "line_count:range:0-50,50-100",
+			wantType: reflect.TypeOf(&RangeAggregation{}),
+			want:     AggregationSpec{Type: AggregationRange, Field: "line_count", Ranges: []string{"0-50", "50-100"}},
 		},
 	}
 
@@ -109,6 +127,146 @@ func TestParseAggregationSpecs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseAggregationStructFields(t *testing.T) {
+	t.Run("histogram default fallback struct fields", func(t *testing.T) {
+		agg, err := ParseAggregation("created_at:histogram")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		h, ok := agg.(*HistogramAggregation)
+		if !ok {
+			t.Fatalf("expected *HistogramAggregation, got %T", agg)
+		}
+		if h.Field != "created_at" {
+			t.Errorf("Field = %q, want %q", h.Field, "created_at")
+		}
+		if h.Interval != "month" {
+			t.Errorf("Interval = %q, want %q", h.Interval, "month")
+		}
+	})
+
+	t.Run("histogram empty trailing interval struct fields", func(t *testing.T) {
+		agg, err := ParseAggregation("created_at:histogram:")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		h, ok := agg.(*HistogramAggregation)
+		if !ok {
+			t.Fatalf("expected *HistogramAggregation, got %T", agg)
+		}
+		if h.Interval != "month" {
+			t.Errorf("Interval = %q, want %q", h.Interval, "month")
+		}
+	})
+
+	t.Run("histogram custom interval struct fields", func(t *testing.T) {
+		agg, err := ParseAggregation("created_at:histogram:day")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		h, ok := agg.(*HistogramAggregation)
+		if !ok {
+			t.Fatalf("expected *HistogramAggregation, got %T", agg)
+		}
+		if h.Interval != "day" {
+			t.Errorf("Interval = %q, want %q", h.Interval, "day")
+		}
+	})
+
+	t.Run("range default fallback struct fields", func(t *testing.T) {
+		agg, err := ParseAggregation("line_count:range")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		r, ok := agg.(*RangeAggregation)
+		if !ok {
+			t.Fatalf("expected *RangeAggregation, got %T", agg)
+		}
+		if r.Field != "line_count" {
+			t.Errorf("Field = %q, want %q", r.Field, "line_count")
+		}
+		wantRanges := []string{"0-100", "100-500", "500-"}
+		if !reflect.DeepEqual(r.Ranges, wantRanges) {
+			t.Errorf("Ranges = %#v, want %#v", r.Ranges, wantRanges)
+		}
+	})
+
+	t.Run("range empty trailing ranges struct fields", func(t *testing.T) {
+		agg, err := ParseAggregation("line_count:range:")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		r, ok := agg.(*RangeAggregation)
+		if !ok {
+			t.Fatalf("expected *RangeAggregation, got %T", agg)
+		}
+		wantRanges := []string{"0-100", "100-500", "500-"}
+		if !reflect.DeepEqual(r.Ranges, wantRanges) {
+			t.Errorf("Ranges = %#v, want %#v", r.Ranges, wantRanges)
+		}
+	})
+
+	t.Run("range custom ranges struct fields", func(t *testing.T) {
+		agg, err := ParseAggregation("line_count:range:0-10,10-50,50-")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		r, ok := agg.(*RangeAggregation)
+		if !ok {
+			t.Fatalf("expected *RangeAggregation, got %T", agg)
+		}
+		wantRanges := []string{"0-10", "10-50", "50-"}
+		if !reflect.DeepEqual(r.Ranges, wantRanges) {
+			t.Errorf("Ranges = %#v, want %#v", r.Ranges, wantRanges)
+		}
+	})
+
+	t.Run("terms default fallback struct fields", func(t *testing.T) {
+		agg, err := ParseAggregation("category:terms")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		term, ok := agg.(*TermAggregation)
+		if !ok {
+			t.Fatalf("expected *TermAggregation, got %T", agg)
+		}
+		if term.Field != "category" {
+			t.Errorf("Field = %q, want %q", term.Field, "category")
+		}
+		if term.Size != 0 {
+			t.Errorf("Size = %d, want 0", term.Size)
+		}
+	})
+
+	t.Run("terms empty trailing size struct fields", func(t *testing.T) {
+		agg, err := ParseAggregation("category:terms:")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		term, ok := agg.(*TermAggregation)
+		if !ok {
+			t.Fatalf("expected *TermAggregation, got %T", agg)
+		}
+		if term.Size != 0 {
+			t.Errorf("Size = %d, want 0", term.Size)
+		}
+	})
+
+	t.Run("terms explicit size struct fields", func(t *testing.T) {
+		agg, err := ParseAggregation("category:terms:20")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		term, ok := agg.(*TermAggregation)
+		if !ok {
+			t.Fatalf("expected *TermAggregation, got %T", agg)
+		}
+		if term.Size != 20 {
+			t.Errorf("Size = %d, want 20", term.Size)
+		}
+	})
 }
 
 func TestParseAggregationRejectsInvalidSpecs(t *testing.T) {
