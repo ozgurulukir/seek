@@ -347,6 +347,9 @@ func splitMembershipTokens(decoded string) []string {
 			tokens = append(tokens, token)
 		}
 	}
+	if len(tokens) == 0 {
+		return nil
+	}
 	return tokens
 }
 
