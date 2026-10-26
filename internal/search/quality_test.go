@@ -2,6 +2,8 @@ package search
 
 import (
 	"context"
+	"errors"
+	"github.com/ozgurulukir/seek/internal/embed"
 	"math"
 	"strings"
 	"testing"
@@ -107,11 +109,34 @@ func TestRRFFusionWithK_MultipleVectorChunksKeepsHighestRanked(t *testing.T) {
 }
 
 func TestContentKind(t *testing.T) {
-	if got := ContentKind(Result{}); got != "snippet" {
-		t.Errorf("document-level = %q, want snippet", got)
+	tests := []struct {
+		name     string
+		result   Result
+		wantKind string
+	}{
+		{
+			name:     "zero chunk id returns snippet",
+			result:   Result{ChunkID: 0, DocumentID: 1, Title: "doc"},
+			wantKind: "snippet",
+		},
+		{
+			name:     "positive chunk id returns full",
+			result:   Result{ChunkID: 7, DocumentID: 1, Title: "chunk"},
+			wantKind: "full",
+		},
+		{
+			name:     "negative chunk id returns snippet",
+			result:   Result{ChunkID: -1, DocumentID: 1, Title: "invalid"},
+			wantKind: "snippet",
+		},
 	}
-	if got := ContentKind(Result{ChunkID: 7}); got != "full" {
-		t.Errorf("chunk-level = %q, want full", got)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ContentKind(tt.result); got != tt.wantKind {
+				t.Errorf("ContentKind(%+v) = %q, want %q", tt.result, got, tt.wantKind)
+			}
+		})
 	}
 }
 
@@ -167,5 +192,141 @@ func TestEnrichContent_FullChunkFromDB(t *testing.T) {
 	}
 	if !strings.Contains(results[0].Content, ">>>") {
 		t.Errorf("marker-strip must not apply to full content: %q", results[0].Content)
+	}
+}
+
+func TestRRFFusion_UsesDefaultK(t *testing.T) {
+	bm25 := []Result{{DocumentID: 1, ChunkID: 0, Content: "bm25 snippet"}}
+	vec := []Result{{DocumentID: 2, ChunkID: 10, Content: "vec chunk"}}
+
+	resDefault := rrfFusion(bm25, vec, 10)
+	resWithK := rrfFusionWithK(bm25, vec, 10, DefaultRRFK)
+
+	if len(resDefault) != len(resWithK) {
+		t.Fatalf("length mismatch: got %d, want %d", len(resDefault), len(resWithK))
+	}
+	for i := range resDefault {
+		if resDefault[i].DocumentID != resWithK[i].DocumentID {
+			t.Errorf("[%d] DocumentID = %d, want %d", i, resDefault[i].DocumentID, resWithK[i].DocumentID)
+		}
+		if resDefault[i].Score != resWithK[i].Score {
+			t.Errorf("[%d] Score = %f, want %f", i, resDefault[i].Score, resWithK[i].Score)
+		}
+	}
+}
+
+type mockQualityReranker struct {
+	err     error
+	results []embed.RerankResult
+}
+
+func (m *mockQualityReranker) Rerank(ctx context.Context, query string, documents []string, topN int) ([]embed.RerankResult, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.results, nil
+}
+
+func TestRerankResults_NilReranker(t *testing.T) {
+	var engine Engine
+	ctx := context.Background()
+
+	candidates := []Result{
+		{DocumentID: 1, Title: "doc1"},
+		{DocumentID: 2, Title: "doc2"},
+		{DocumentID: 3, Title: "doc3"},
+	}
+
+	got, err := engine.rerankResults(ctx, "test", candidates, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2 (truncated to limit)", len(got))
+	}
+
+	gotNoTrunc, err := engine.rerankResults(ctx, "test", candidates, 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gotNoTrunc) != 3 {
+		t.Fatalf("len(gotNoTrunc) = %d, want 3", len(gotNoTrunc))
+	}
+}
+
+func TestRerankResults_SingleResultBypass(t *testing.T) {
+	mock := &mockQualityReranker{results: []embed.RerankResult{{Index: 0, RelevanceScore: 0.99}}}
+	engine := NewEngine(nil, nil).WithReranker(mock)
+	ctx := context.Background()
+
+	candidates := []Result{{DocumentID: 1, Title: "single"}}
+	got, err := engine.rerankResults(ctx, "test", candidates, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1", len(got))
+	}
+	if got[0].Score != 0 {
+		t.Errorf("expected original score preserved when <= 1 candidate, got %f", got[0].Score)
+	}
+}
+
+func TestRerankResults_ErrorPropagation(t *testing.T) {
+	mock := &mockQualityReranker{err: errors.New("reranker service unavailable")}
+	engine := NewEngine(nil, nil).WithReranker(mock)
+	ctx := context.Background()
+
+	candidates := []Result{
+		{DocumentID: 1, Title: "doc1"},
+		{DocumentID: 2, Title: "doc2"},
+	}
+
+	_, err := engine.rerankResults(ctx, "test", candidates, 10)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "reranker service unavailable") {
+		t.Errorf("error = %v, want contained original error", err)
+	}
+}
+
+func TestRerankResults_EmptyResponseAndOutOfBoundsIndices(t *testing.T) {
+	ctx := context.Background()
+	candidates := []Result{
+		{DocumentID: 1, Title: "doc1"},
+		{DocumentID: 2, Title: "doc2"},
+		{DocumentID: 3, Title: "doc3"},
+	}
+
+	// Case 1: Empty scores response falls back to limit-truncated candidates
+	mockEmpty := &mockQualityReranker{results: []embed.RerankResult{}}
+	engineEmpty := NewEngine(nil, nil).WithReranker(mockEmpty)
+	gotEmpty, err := engineEmpty.rerankResults(ctx, "test", candidates, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gotEmpty) != 2 {
+		t.Fatalf("len(gotEmpty) = %d, want 2", len(gotEmpty))
+	}
+
+	// Case 2: Out of bounds indices are filtered out
+	mockOOB := &mockQualityReranker{
+		results: []embed.RerankResult{
+			{Index: -1, RelevanceScore: 0.9},
+			{Index: 1, RelevanceScore: 0.8},
+			{Index: 99, RelevanceScore: 0.7},
+		},
+	}
+	engineOOB := NewEngine(nil, nil).WithReranker(mockOOB)
+	gotOOB, err := engineOOB.rerankResults(ctx, "test", candidates, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gotOOB) != 1 {
+		t.Fatalf("len(gotOOB) = %d, want 1 valid result", len(gotOOB))
+	}
+	if gotOOB[0].DocumentID != 2 || gotOOB[0].Score != 0.8 {
+		t.Errorf("got result %+v, want DocumentID=2 with score 0.8", gotOOB[0])
 	}
 }
