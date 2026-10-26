@@ -10,6 +10,7 @@ require (
 	github.com/gen2brain/go-fitz v1.28.2
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/renameio v1.0.1
+	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/klauspost/compress v1.19.2
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/modelcontextprotocol/go-sdk v1.7.0

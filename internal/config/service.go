@@ -6,6 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
+
+	"github.com/google/shlex"
 )
 
 // Service is the single read/write/edit surface for the seek config file.
@@ -53,7 +56,19 @@ func (s *Service) Edit() error {
 	if editor == "" {
 		return fmt.Errorf("no editor found\nSet $EDITOR or $VISUAL to the command that opens your config, e.g. EDITOR=vim seek config --edit")
 	}
-	cmd := exec.Command(editor, s.path)
+	parseCmd := editor
+	if runtime.GOOS == "windows" {
+		parseCmd = strings.ReplaceAll(editor, "\\", "/")
+	}
+	args, err := shlex.Split(parseCmd)
+	if err != nil {
+		return fmt.Errorf("parse editor command %q: %w", editor, err)
+	}
+	if len(args) == 0 {
+		return fmt.Errorf("invalid editor command %q", editor)
+	}
+	cmdArgs := append(append([]string{}, args[1:]...), s.path)
+	cmd := exec.Command(args[0], cmdArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

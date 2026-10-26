@@ -93,6 +93,35 @@ func fakeEditorScript(t *testing.T, home string) string {
 	return path
 }
 
+// fakeEditorScriptWithArgs creates a script that appends all received args to a file.
+func fakeEditorScriptWithArgs(t *testing.T, home string) string {
+	t.Helper()
+	path := filepath.Join(home, "fake-editor-args")
+	logPath := filepath.Join(home, "args.log")
+	var script string
+	var perm os.FileMode
+	if runtime.GOOS == "windows" {
+		path += ".cmd"
+		script = "@echo off\necho %* >> \"" + logPath + "\"\n" +
+			"for %%I in (%*) do (\n" +
+			"  if not exist \"%%~dpI\" mkdir \"%%~dpI\"\n" +
+			"  echo edited > \"%%~I\"\n" +
+			")\n"
+		perm = 0o644
+	} else {
+		script = "#!/bin/sh\n" +
+			"echo \"$@\" >> \"" + logPath + "\"\n" +
+			"for last; do :; done\n" +
+			"mkdir -p \"$(dirname \"$last\")\"\n" +
+			"echo edited > \"$last\"\n"
+		perm = 0o755
+	}
+	if err := os.WriteFile(path, []byte(script), perm); err != nil {
+		t.Fatalf("write fake editor with args: %v", err)
+	}
+	return path
+}
+
 // TestEdit_LaunchesFakeEditor verifies Edit launches the resolved editor with
 // the config path as an argument and returns after it exits.
 func TestEdit_LaunchesFakeEditor(t *testing.T) {
@@ -107,6 +136,54 @@ func TestEdit_LaunchesFakeEditor(t *testing.T) {
 	}
 	if !svc.Exists() {
 		t.Fatalf("editor did not create the config file")
+	}
+}
+
+// TestEdit_WithArguments verifies Edit properly parses $EDITOR strings containing
+// flags and arguments (e.g. "code -w" or "subl -w --goto").
+func TestEdit_WithArguments(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
+	script := fakeEditorScriptWithArgs(t, tmpHome)
+	// Add arguments and quoted strings to EDITOR
+	editorCmd := script + " --wait --title \"My Config Editor\""
+	t.Setenv("EDITOR", editorCmd)
+
+	svc := NewService()
+	if err := svc.Edit(); err != nil {
+		t.Fatalf("Edit with arguments failed: %v", err)
+	}
+	if !svc.Exists() {
+		t.Fatalf("editor did not create the config file")
+	}
+
+	logData, err := os.ReadFile(filepath.Join(tmpHome, "args.log"))
+	if err != nil {
+		t.Fatalf("read args log: %v", err)
+	}
+	logStr := string(logData)
+	if !strings.Contains(logStr, "--wait") || !strings.Contains(logStr, "My Config Editor") {
+		t.Errorf("expected logged args to contain parsed flags and quoted string, got: %s", logStr)
+	}
+}
+
+// TestEdit_InvalidSyntax verifies Edit returns an error when $EDITOR contains
+// invalid shell syntax (such as an unclosed quote).
+func TestEdit_InvalidSyntax(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+	t.Setenv("EDITOR", "code --wait \"unclosed quote")
+
+	svc := NewService()
+	err := svc.Edit()
+	if err == nil {
+		t.Fatalf("expected error for invalid editor command syntax, got nil")
+	}
+	if !strings.Contains(err.Error(), "parse editor command") {
+		t.Errorf("expected error to mention 'parse editor command', got: %v", err)
 	}
 }
 
