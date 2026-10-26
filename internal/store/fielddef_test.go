@@ -146,6 +146,9 @@ func TestFastFieldResolver_Known(t *testing.T) {
 	emptyResolver := &FastFieldResolver{
 		present: map[string]struct{}{},
 	}
+	uninitResolver := &FastFieldResolver{
+		present: nil,
+	}
 	var nilResolver *FastFieldResolver
 
 	tests := []struct {
@@ -157,11 +160,13 @@ func TestFastFieldResolver_Known(t *testing.T) {
 		// Curated fast fields - exact match mode
 		{"curated field (lang) on populated resolver", resolver, "lang", true},
 		{"curated field (repo) on empty resolver", emptyResolver, "repo", true},
+		{"curated field (repo) on uninitialized resolver", uninitResolver, "repo", true},
 		{"curated field (model) on nil resolver", nilResolver, "model", true},
 
 		// Curated fast fields - membership match mode
 		{"curated field (tags) on populated resolver", resolver, "tags", true},
 		{"curated field (topics) on empty resolver", emptyResolver, "topics", true},
+		{"curated field (topics) on uninitialized resolver", uninitResolver, "topics", true},
 		{"curated field (entities) on nil resolver", nilResolver, "entities", true},
 
 		// Present non-curated fields
@@ -171,6 +176,7 @@ func TestFastFieldResolver_Known(t *testing.T) {
 		// Non-curated fields absent from present map
 		{"absent field on populated resolver", resolver, "unknown_field", false},
 		{"absent field on empty resolver", emptyResolver, "author", false},
+		{"absent field on uninitialized resolver", uninitResolver, "author", false},
 		{"absent field on nil resolver", nilResolver, "author", false},
 		{"empty field string on populated resolver", resolver, "", false},
 		{"empty field string on nil resolver", nilResolver, "", false},
