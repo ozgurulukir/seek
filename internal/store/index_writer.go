@@ -107,9 +107,6 @@ func (s *Store) writeIndex(ctx context.Context, req DocumentIndex, replace bool)
 		if _, err := tx.ExecContext(ctx, `DELETE FROM chunks WHERE document_id = ?`, docID); err != nil {
 			return 0, fmt.Errorf("delete chunks: %w", err)
 		}
-		if err := ensureFastFieldsTx(ctx, tx); err != nil {
-			return 0, fmt.Errorf("ensure fast fields: %w", err)
-		}
 		// Only clear fast fields when the caller supplied a computed set
 		// (e.g. semantic enrichment). A nil FastFields map means the caller
 		// did not (re)compute metadata this pass (semantic disabled or the
@@ -120,10 +117,6 @@ func (s *Store) writeIndex(ctx context.Context, req DocumentIndex, replace bool)
 			if _, err := tx.ExecContext(ctx, `DELETE FROM fast_fields WHERE doc_id = ?`, docID); err != nil {
 				return 0, fmt.Errorf("delete fast fields: %w", err)
 			}
-		}
-	} else if len(req.FastFields) > 0 {
-		if err := ensureFastFieldsTx(ctx, tx); err != nil {
-			return 0, fmt.Errorf("ensure fast fields: %w", err)
 		}
 	}
 
@@ -149,19 +142,6 @@ func (s *Store) writeIndex(ctx context.Context, req DocumentIndex, replace bool)
 		return 0, fmt.Errorf("commit index transaction: %w", err)
 	}
 	return docID, nil
-}
-
-func ensureFastFieldsTx(ctx context.Context, tx *sql.Tx) error {
-	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS fast_fields (
-		doc_id INTEGER NOT NULL,
-		field_name TEXT NOT NULL,
-		field_value TEXT,
-		PRIMARY KEY (doc_id, field_name)
-	)`); err != nil {
-		return err
-	}
-	_, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_fast_fields_name_value ON fast_fields (field_name, field_value)`)
-	return err
 }
 
 func insertIndexChunk(ctx context.Context, tx *sql.Tx, docID int64, ch IndexChunk, compressionEnabled bool, compressionLevel int, now string) error {

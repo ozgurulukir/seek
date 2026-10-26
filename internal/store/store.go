@@ -312,7 +312,14 @@ func (s *Store) initCoreSchema() error {
 			fingerprint TEXT NOT NULL,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
-		);`
+		);
+		CREATE TABLE IF NOT EXISTS fast_fields (
+			doc_id INTEGER NOT NULL,
+			field_name TEXT NOT NULL,
+			field_value TEXT,
+			PRIMARY KEY (doc_id, field_name)
+		);
+		CREATE INDEX IF NOT EXISTS idx_fast_fields_name_value ON fast_fields (field_name, field_value);`
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("init core schema: %w", err)
 	}

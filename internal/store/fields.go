@@ -37,10 +37,6 @@ func (s *Store) GetFastFieldSummary(collection string) ([]FastFieldSummary, erro
 
 // GetFastFieldSummaryContext retrieves summary statistics across all supported fast fields with context.
 func (s *Store) GetFastFieldSummaryContext(ctx context.Context, collection string) ([]FastFieldSummary, error) {
-	if err := s.FastFields().ensureTable(); err != nil {
-		return nil, fmt.Errorf("ensure fast fields table: %w", err)
-	}
-
 	var totalDocs int
 	var err error
 	if collection != "" {
@@ -179,10 +175,6 @@ func (s *Store) ListFastFieldValues(field string, opts ListFastFieldOptions) ([]
 
 // ListFastFieldValuesContext returns distinct values and document counts for a given fast field.
 func (s *Store) ListFastFieldValuesContext(ctx context.Context, field string, opts ListFastFieldOptions) ([]FieldValueCount, error) {
-	if err := s.FastFields().ensureTable(); err != nil {
-		return nil, fmt.Errorf("ensure fast fields table: %w", err)
-	}
-
 	field = strings.ToLower(strings.TrimSpace(field))
 	mode, curated := fastFieldMatchMode(field)
 	if !curated {

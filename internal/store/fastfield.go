@@ -6,19 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 )
 
 // FastFieldStore provides fast field storage for sorting and aggregation.
 // It uses a dedicated SQLite table with JSON-encoded values.
 type FastFieldStore struct {
 	db *sql.DB
-	// ensureMu guards the table-ensured cache. Set is one of the hottest
-	// write paths (per-document fan-out across ~6-16 fields), so the two DDL
-	// statements are run once per store instead of on every call; a failure
-	// is never cached so a transient error can be retried.
-	ensureMu sync.Mutex
-	ensured  bool
 }
 
 // NewFastFieldStore creates a new fast field store.
@@ -26,39 +19,8 @@ func NewFastFieldStore(db *sql.DB) *FastFieldStore {
 	return &FastFieldStore{db: db}
 }
 
-// ensureTable creates the fast_fields table if it doesn't exist.
-func (f *FastFieldStore) ensureTable() error {
-	f.ensureMu.Lock()
-	defer f.ensureMu.Unlock()
-	if f.ensured {
-		return nil
-	}
-	_, err := f.db.Exec(`CREATE TABLE IF NOT EXISTS fast_fields (
-		doc_id INTEGER NOT NULL,
-		field_name TEXT NOT NULL,
-		field_value TEXT,
-		PRIMARY KEY (doc_id, field_name)
-	)`)
-	if err != nil {
-		return err
-	}
-	// Index for value lookups (FastFieldFilter: WHERE field_name = ? AND field_value = ?).
-	// The PK (doc_id, field_name) cannot serve these because it leads with doc_id,
-	// so without this index such filters fall back to a full table scan.
-	_, err = f.db.Exec(`CREATE INDEX IF NOT EXISTS idx_fast_fields_name_value ON fast_fields (field_name, field_value)`)
-	if err != nil {
-		return err
-	}
-	f.ensured = true
-	return nil
-}
-
 // Set stores a fast field value for a document.
 func (f *FastFieldStore) Set(docID int64, fieldName string, value interface{}) error {
-	if err := f.ensureTable(); err != nil {
-		return err
-	}
-
 	encoded, err := encodeFastFieldValue(value)
 	if err != nil {
 		return err
@@ -73,10 +35,6 @@ func (f *FastFieldStore) Set(docID int64, fieldName string, value interface{}) e
 
 // Get retrieves a fast field value for a document.
 func (f *FastFieldStore) Get(docID int64, fieldName string) (interface{}, error) {
-	if err := f.ensureTable(); err != nil {
-		return nil, err
-	}
-
 	var encoded sql.NullString
 	err := f.db.QueryRow(
 		`SELECT field_value FROM fast_fields WHERE doc_id = ? AND field_name = ?`,
@@ -103,10 +61,6 @@ func (f *FastFieldStore) BatchGet(docIDs []int64, fieldName string) (map[int64]i
 
 // BatchGetContext retrieves fast fields while honoring query cancellation.
 func (f *FastFieldStore) BatchGetContext(ctx context.Context, docIDs []int64, fieldName string) (map[int64]interface{}, error) {
-	if err := f.ensureTable(); err != nil {
-		return nil, err
-	}
-
 	if len(docIDs) == 0 {
 		return make(map[int64]interface{}), nil
 	}
@@ -152,9 +106,6 @@ func (f *FastFieldStore) BatchGetContext(ctx context.Context, docIDs []int64, fi
 
 // Delete removes a fast field value for a document.
 func (f *FastFieldStore) Delete(docID int64, fieldName string) error {
-	if err := f.ensureTable(); err != nil {
-		return err
-	}
 	_, err := f.db.Exec(
 		`DELETE FROM fast_fields WHERE doc_id = ? AND field_name = ?`,
 		docID, fieldName,
@@ -164,9 +115,6 @@ func (f *FastFieldStore) Delete(docID int64, fieldName string) error {
 
 // DeleteForDocument removes all fast field values for a document.
 func (f *FastFieldStore) DeleteForDocument(docID int64) error {
-	if err := f.ensureTable(); err != nil {
-		return err
-	}
 	_, err := f.db.Exec(`DELETE FROM fast_fields WHERE doc_id = ?`, docID)
 	return err
 }
@@ -180,9 +128,6 @@ func (f *FastFieldStore) ListForDocument(documentID int64) (map[string]string, e
 
 // ListForDocumentContext is the cancellation-aware variant of ListForDocument.
 func (f *FastFieldStore) ListForDocumentContext(ctx context.Context, documentID int64) (map[string]string, error) {
-	if err := f.ensureTable(); err != nil {
-		return nil, err
-	}
 	rows, err := f.db.QueryContext(ctx,
 		`SELECT field_name, field_value FROM fast_fields WHERE doc_id = ?`, documentID)
 	if err != nil {
