@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/google/shlex"
 )
@@ -55,7 +56,11 @@ func (s *Service) Edit() error {
 	if editor == "" {
 		return fmt.Errorf("no editor found\nSet $EDITOR or $VISUAL to the command that opens your config, e.g. EDITOR=vim seek config --edit")
 	}
-	args, err := shlex.Split(editor)
+	parseCmd := editor
+	if runtime.GOOS == "windows" {
+		parseCmd = strings.ReplaceAll(editor, "\\", "/")
+	}
+	args, err := shlex.Split(parseCmd)
 	if err != nil {
 		return fmt.Errorf("parse editor command %q: %w", editor, err)
 	}
