@@ -330,8 +330,8 @@ func splitMembershipTokens(decoded string) []string {
 	if decoded == "" {
 		return nil
 	}
-	// PERF: scan tokens using strings.IndexByte without allocating a []string slice for splits.
-	var tokens []string
+	// PERF: pre-allocate slice capacity based on comma count to avoid repeated slice growth reallocations.
+	tokens := make([]string, 0, strings.Count(decoded, ",")+1)
 	s := decoded
 	for len(s) > 0 {
 		var part string
