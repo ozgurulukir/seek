@@ -67,7 +67,7 @@ func (s *Service) Edit() error {
 	if len(args) == 0 {
 		return fmt.Errorf("invalid editor command %q", editor)
 	}
-	cmdArgs := append(args[1:], s.path)
+	cmdArgs := append(append([]string{}, args[1:]...), s.path)
 	cmd := exec.Command(args[0], cmdArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
