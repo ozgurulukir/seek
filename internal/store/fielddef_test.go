@@ -135,3 +135,59 @@ func TestFieldDiscoveryHintListsCuratedFields(t *testing.T) {
 		}
 	}
 }
+
+func TestFastFieldResolver_Known(t *testing.T) {
+	resolver := &FastFieldResolver{
+		present: map[string]struct{}{
+			"author": {},
+			"custom": {},
+		},
+	}
+	emptyResolver := &FastFieldResolver{
+		present: map[string]struct{}{},
+	}
+	uninitResolver := &FastFieldResolver{
+		present: nil,
+	}
+	var nilResolver *FastFieldResolver
+
+	tests := []struct {
+		name     string
+		resolver *FastFieldResolver
+		field    string
+		want     bool
+	}{
+		// Curated fast fields - exact match mode
+		{"curated field (lang) on populated resolver", resolver, "lang", true},
+		{"curated field (repo) on empty resolver", emptyResolver, "repo", true},
+		{"curated field (repo) on uninitialized resolver", uninitResolver, "repo", true},
+		{"curated field (model) on nil resolver", nilResolver, "model", true},
+
+		// Curated fast fields - membership match mode
+		{"curated field (tags) on populated resolver", resolver, "tags", true},
+		{"curated field (topics) on empty resolver", emptyResolver, "topics", true},
+		{"curated field (topics) on uninitialized resolver", uninitResolver, "topics", true},
+		{"curated field (entities) on nil resolver", nilResolver, "entities", true},
+
+		// Present non-curated fields
+		{"present field on populated resolver", resolver, "author", true},
+		{"another present field on populated resolver", resolver, "custom", true},
+
+		// Non-curated fields absent from present map
+		{"absent field on populated resolver", resolver, "unknown_field", false},
+		{"absent field on empty resolver", emptyResolver, "author", false},
+		{"absent field on uninitialized resolver", uninitResolver, "author", false},
+		{"absent field on nil resolver", nilResolver, "author", false},
+		{"empty field string on populated resolver", resolver, "", false},
+		{"empty field string on nil resolver", nilResolver, "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.resolver.Known(tt.field)
+			if got != tt.want {
+				t.Errorf("Known(%q) = %v, want %v", tt.field, got, tt.want)
+			}
+		})
+	}
+}
