@@ -270,62 +270,14 @@ func (p *Pipeline) embedPendingContext(ctx context.Context, opts Options, log Lo
 	}
 	log.Printf("Found %d chunks needing embeddings (%d text, %d image)", len(chunks), len(textChunks), len(imageChunks))
 
-	var updated int
 	deferVectorUpdate := opts.Force && opts.VectorIndex
 	if cfg.Config.Embedding.IsMultimodal() {
-		if mode == ModeBatch {
-			return fmt.Errorf("async provider batch is text-only; multimodal models use the realtime request batch (remove --batch or set embedding.mode: realtime)")
+		if err := p.embedMultimodalChunks(ctx, db, mode, textChunks, imageChunks, len(chunks), log, deferVectorUpdate); err != nil {
+			return err
 		}
-		vlClient := p.provider.VLQuery
-		if vlClient == nil {
-			return fmt.Errorf("multimodal embedding client unavailable — check embedding.vl_base_url")
-		}
-		if len(textChunks) > 0 {
-			if p.provider.VLText == nil {
-				return fmt.Errorf("multimodal text embedding capability unavailable")
-			}
-			count, err := embedVLTextContext(ctx, db, p.provider.VLText, textChunks, log, deferVectorUpdate)
-			updated += count
-			if err != nil {
-				return err
-			}
-		}
-		if len(imageChunks) > 0 {
-			if p.provider.VLImage == nil {
-				return fmt.Errorf("multimodal image embedding capability unavailable")
-			}
-			count, err := embedVLImagesContext(ctx, db, p.provider.VLImage, imageChunks, log, deferVectorUpdate)
-			updated += count
-			if err != nil {
-				return err
-			}
-		}
-		log.Printf("Embedded %d/%d chunks via VL API", updated, len(chunks))
 	} else {
-		if len(imageChunks) > 0 {
-			log.Printf("  WARNING: %d image chunks skipped (model %q does not support multimodal)", len(imageChunks), cfg.Config.Embedding.Model)
-			log.Printf("  To embed images, set model to a multimodal model (e.g. qwen3-vl-embedding) or set embedding.multimodal: true")
-		}
-		embedClient := p.provider.Document
-		if embedClient == nil {
-			return fmt.Errorf("text embedding client unavailable — check embedding.api_key")
-		}
-		// Nothing to embed text-wise (only image chunks, non-multimodal):
-		// skip the embed call entirely rather than round-trip an empty batch.
-		if len(textChunks) > 0 {
-			texts := make([]string, len(textChunks))
-			for i, ch := range textChunks {
-				texts[i] = ch.Content
-			}
-			if mode == ModeBatch {
-				updated, err = embedBatchContext(ctx, db, p.provider.Batch, textChunks, texts, log, deferVectorUpdate)
-			} else {
-				updated, err = embedRealtimeContext(ctx, db, embedClient, textChunks, texts, log, deferVectorUpdate)
-			}
-			if err != nil {
-				return err
-			}
-			log.Printf("Embedded %d/%d text chunks", updated, len(textChunks))
+		if err := p.embedStandardChunks(ctx, db, mode, cfg.Config.Embedding.Model, textChunks, imageChunks, log, deferVectorUpdate); err != nil {
+			return err
 		}
 	}
 
@@ -343,6 +295,86 @@ func (p *Pipeline) embedPendingContext(ctx context.Context, opts Options, log Lo
 		}
 	}
 
+	return nil
+}
+
+func (p *Pipeline) embedMultimodalChunks(
+	ctx context.Context,
+	db *store.Store,
+	mode Mode,
+	textChunks, imageChunks []store.Chunk,
+	totalChunks int,
+	log Logger,
+	deferVectorUpdate bool,
+) error {
+	if mode == ModeBatch {
+		return fmt.Errorf("async provider batch is text-only; multimodal models use the realtime request batch (remove --batch or set embedding.mode: realtime)")
+	}
+	vlClient := p.provider.VLQuery
+	if vlClient == nil {
+		return fmt.Errorf("multimodal embedding client unavailable — check embedding.vl_base_url")
+	}
+	updated := 0
+	if len(textChunks) > 0 {
+		if p.provider.VLText == nil {
+			return fmt.Errorf("multimodal text embedding capability unavailable")
+		}
+		count, err := embedVLTextContext(ctx, db, p.provider.VLText, textChunks, log, deferVectorUpdate)
+		updated += count
+		if err != nil {
+			return err
+		}
+	}
+	if len(imageChunks) > 0 {
+		if p.provider.VLImage == nil {
+			return fmt.Errorf("multimodal image embedding capability unavailable")
+		}
+		count, err := embedVLImagesContext(ctx, db, p.provider.VLImage, imageChunks, log, deferVectorUpdate)
+		updated += count
+		if err != nil {
+			return err
+		}
+	}
+	log.Printf("Embedded %d/%d chunks via VL API", updated, totalChunks)
+	return nil
+}
+
+func (p *Pipeline) embedStandardChunks(
+	ctx context.Context,
+	db *store.Store,
+	mode Mode,
+	model string,
+	textChunks, imageChunks []store.Chunk,
+	log Logger,
+	deferVectorUpdate bool,
+) error {
+	if len(imageChunks) > 0 {
+		log.Printf("  WARNING: %d image chunks skipped (model %q does not support multimodal)", len(imageChunks), model)
+		log.Printf("  To embed images, set model to a multimodal model (e.g. qwen3-vl-embedding) or set embedding.multimodal: true")
+	}
+	embedClient := p.provider.Document
+	if embedClient == nil {
+		return fmt.Errorf("text embedding client unavailable — check embedding.api_key")
+	}
+	// Nothing to embed text-wise (only image chunks, non-multimodal):
+	// skip the embed call entirely rather than round-trip an empty batch.
+	if len(textChunks) > 0 {
+		texts := make([]string, len(textChunks))
+		for i, ch := range textChunks {
+			texts[i] = ch.Content
+		}
+		var updated int
+		var err error
+		if mode == ModeBatch {
+			updated, err = embedBatchContext(ctx, db, p.provider.Batch, textChunks, texts, log, deferVectorUpdate)
+		} else {
+			updated, err = embedRealtimeContext(ctx, db, embedClient, textChunks, texts, log, deferVectorUpdate)
+		}
+		if err != nil {
+			return err
+		}
+		log.Printf("Embedded %d/%d text chunks", updated, len(textChunks))
+	}
 	return nil
 }
 
