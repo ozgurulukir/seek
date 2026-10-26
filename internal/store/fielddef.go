@@ -137,9 +137,6 @@ func SortableField(field string) bool {
 // written by producers without a curated entry (markdown frontmatter keys,
 // future parsers) surface here and in the field summary.
 func (s *Store) ListFastFieldNames(ctx context.Context) ([]string, error) {
-	if err := s.FastFields().ensureTable(); err != nil {
-		return nil, fmt.Errorf("ensure fast fields table: %w", err)
-	}
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT field_name FROM fast_fields ORDER BY field_name`)
 	if err != nil {
 		return nil, fmt.Errorf("list fast field names: %w", err)

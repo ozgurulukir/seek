@@ -222,9 +222,6 @@ func (s *Store) UpdateSemanticState(ctx context.Context, docID int64, fingerprin
 	}
 
 	if fastFields != nil {
-		if err := ensureFastFieldsTx(ctx, tx); err != nil {
-			return fmt.Errorf("ensure fast fields: %w", err)
-		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM fast_fields WHERE doc_id = ?`, docID); err != nil {
 			return fmt.Errorf("delete fast fields: %w", err)
 		}

@@ -104,11 +104,8 @@ func (s *Store) DeleteDocumentContext(ctx context.Context, docID int64) error {
 	}
 	defer tx.Rollback()
 
-	// fast_fields table is lazily created; ignore "no such table" errors.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM fast_fields WHERE doc_id = ?`, docID); err != nil {
-		if !strings.Contains(err.Error(), "no such table") {
-			return fmt.Errorf("delete fast_fields: %w", err)
-		}
+		return fmt.Errorf("delete fast_fields: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
 		return fmt.Errorf("delete fts entry: %w", err)
@@ -151,7 +148,7 @@ func (s *Store) DeleteOrphansContext(ctx context.Context, collectionID int64, li
 
 	// Full collection purge (reindex) can be done with set operations by collection ID.
 	if livePaths == nil {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM fast_fields WHERE doc_id IN (SELECT id FROM documents WHERE collection_id = ?)`, collectionID); err != nil && !strings.Contains(err.Error(), "no such table") {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM fast_fields WHERE doc_id IN (SELECT id FROM documents WHERE collection_id = ?)`, collectionID); err != nil {
 			return 0, fmt.Errorf("delete orphan fast_fields: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM documents_fts WHERE rowid IN (SELECT id FROM documents WHERE collection_id = ?)`, collectionID); err != nil {
@@ -222,7 +219,7 @@ func (s *Store) DeleteOrphansContext(ctx context.Context, collectionID int64, li
 		}
 		inClause := strings.Join(placeholders, ",")
 
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM fast_fields WHERE doc_id IN (%s)`, inClause), args...); err != nil && !strings.Contains(err.Error(), "no such table") {
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM fast_fields WHERE doc_id IN (%s)`, inClause), args...); err != nil {
 			return 0, fmt.Errorf("delete orphan fast_fields: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM documents_fts WHERE rowid IN (%s)`, inClause), args...); err != nil {
