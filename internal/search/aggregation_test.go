@@ -112,22 +112,76 @@ func TestParseAggregationSpecs(t *testing.T) {
 }
 
 func TestParseAggregationRejectsInvalidSpecs(t *testing.T) {
-	invalid := []string{
-		"",
-		"invalid",
-		"field",
-		"field:",
-		"field:unknown",
-		"type:terms:0",
-		"type:terms:-1",
-		"type:terms:-5",
-		"type:terms:abc",
-		"type:terms:10extra",
+	tests := []struct {
+		name    string
+		text    string
+		wantErr string
+	}{
+		{
+			name:    "empty spec",
+			text:    "",
+			wantErr: `invalid aggregation spec "": expected field:type[:interval]`,
+		},
+		{
+			name:    "missing separator",
+			text:    "invalid",
+			wantErr: `invalid aggregation spec "invalid": expected field:type[:interval]`,
+		},
+		{
+			name:    "field only",
+			text:    "field",
+			wantErr: `invalid aggregation spec "field": expected field:type[:interval]`,
+		},
+		{
+			name:    "empty type",
+			text:    "field:",
+			wantErr: `unknown aggregation type ""`,
+		},
+		{
+			name:    "unknown type simple",
+			text:    "field:unknown",
+			wantErr: `unknown aggregation type "unknown"`,
+		},
+		{
+			name:    "unknown type explicit",
+			text:    "field:unknown_type",
+			wantErr: `unknown aggregation type "unknown_type"`,
+		},
+		{
+			name:    "terms zero size",
+			text:    "type:terms:0",
+			wantErr: `invalid aggregation spec "type:terms:0": terms size must be a positive integer`,
+		},
+		{
+			name:    "terms negative size",
+			text:    "type:terms:-1",
+			wantErr: `invalid aggregation spec "type:terms:-1": terms size must be a positive integer`,
+		},
+		{
+			name:    "terms negative size large",
+			text:    "type:terms:-5",
+			wantErr: `invalid aggregation spec "type:terms:-5": terms size must be a positive integer`,
+		},
+		{
+			name:    "terms non numeric size",
+			text:    "type:terms:abc",
+			wantErr: `invalid aggregation spec "type:terms:abc": terms size must be a positive integer`,
+		},
+		{
+			name:    "terms alphanumeric size",
+			text:    "type:terms:10extra",
+			wantErr: `invalid aggregation spec "type:terms:10extra": terms size must be a positive integer`,
+		},
 	}
-	for _, text := range invalid {
-		t.Run(text, func(t *testing.T) {
-			if _, err := ParseAggregation(text); err == nil {
-				t.Fatalf("ParseAggregation(%q) returned nil error", text)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseAggregation(tt.text)
+			if err == nil {
+				t.Fatalf("ParseAggregation(%q) returned nil error, want %q", tt.text, tt.wantErr)
+			}
+			if err.Error() != tt.wantErr {
+				t.Errorf("ParseAggregation(%q) error = %q, want %q", tt.text, err.Error(), tt.wantErr)
 			}
 		})
 	}
