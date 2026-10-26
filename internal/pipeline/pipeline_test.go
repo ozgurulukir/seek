@@ -316,16 +316,45 @@ func TestEmbedPending_Privacy(t *testing.T) {
 	}
 }
 
-func TestNewStdoutLogger(t *testing.T) {
-	var buf bytes.Buffer
-	logger := NewStdoutLogger(&buf)
-	if logger == nil {
-		t.Fatal("expected non-nil Logger")
+func TestStdoutLogger_Printf(t *testing.T) {
+	tests := []struct {
+		name     string
+		format   string
+		args     []any
+		expected string
+	}{
+		{
+			name:     "formatted string with multiple args",
+			format:   "hello %s %d",
+			args:     []any{"world", 42},
+			expected: "hello world 42",
+		},
+		{
+			name:     "plain string without args",
+			format:   "simple log message\n",
+			args:     nil,
+			expected: "simple log message\n",
+		},
+		{
+			name:     "floating point and boolean formatting",
+			format:   "score: %.2f, status: %t",
+			args:     []any{3.14159, true},
+			expected: "score: 3.14, status: true",
+		},
 	}
 
-	logger.Printf("hello %s %d", "world", 42)
-	expected := "hello world 42"
-	if got := buf.String(); got != expected {
-		t.Errorf("logger output = %q, want %q", got, expected)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := NewStdoutLogger(&buf)
+			if logger == nil {
+				t.Fatal("expected non-nil Logger")
+			}
+
+			logger.Printf(tt.format, tt.args...)
+			if got := buf.String(); got != tt.expected {
+				t.Errorf("logger output = %q, want %q", got, tt.expected)
+			}
+		})
 	}
 }
