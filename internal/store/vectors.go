@@ -56,26 +56,44 @@ func (s *Store) syncVectorIndexFullContext(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
 
+	type pendingChunk struct {
+		id  int64
+		emb []byte
+	}
+	var items []pendingChunk
 	added := 0
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
+			rows.Close()
 			return added, err
 		}
 		var chunkID int64
 		var embBlob []byte
 		if err := rows.Scan(&chunkID, &embBlob); err != nil {
+			rows.Close()
 			return added, err
 		}
-		emb := decodeEmbedding(embBlob)
-		if err := target.Add(chunkID, emb); err != nil {
+		if len(embBlob) == 0 {
+			continue
+		}
+		items = append(items, pendingChunk{id: chunkID, emb: embBlob})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return added, fmt.Errorf("sync vector index rows: %w", err)
+	}
+	rows.Close()
+
+	for i := range items {
+		if err := ctx.Err(); err != nil {
+			return added, err
+		}
+		emb := decodeEmbedding(items[i].emb)
+		if err := target.Add(items[i].id, emb); err != nil {
 			return added, err
 		}
 		added++
-	}
-	if err := rows.Err(); err != nil {
-		return added, fmt.Errorf("sync vector index rows: %w", err)
 	}
 	if replace {
 		if err := publishVectorIndexRebuild(current, target); err != nil {
@@ -168,6 +186,12 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 			return added, fmt.Errorf("load embeddings batch: %w", err)
 		}
 
+		type pendingChunk struct {
+			id  int64
+			emb []byte
+		}
+		items := make([]pendingChunk, 0, len(batchIDs))
+
 		for rows.Next() {
 			if err := ctx.Err(); err != nil {
 				rows.Close()
@@ -182,18 +206,24 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 			if len(embBlob) == 0 {
 				continue
 			}
-			emb := decodeEmbedding(embBlob)
-			if err := s.vector().Add(chunkID, emb); err != nil {
-				rows.Close()
-				return added, err
-			}
-			added++
+			items = append(items, pendingChunk{id: chunkID, emb: embBlob})
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
 			return added, fmt.Errorf("load embeddings batch rows: %w", err)
 		}
 		rows.Close()
+
+		for j := range items {
+			if err := ctx.Err(); err != nil {
+				return added, err
+			}
+			emb := decodeEmbedding(items[j].emb)
+			if err := s.vector().Add(items[j].id, emb); err != nil {
+				return added, err
+			}
+			added++
+		}
 	}
 
 	return added, nil
@@ -519,9 +549,13 @@ func encodeEmbedding(v []float32) []byte {
 
 func decodeEmbedding(b []byte) []float32 {
 	n := len(b) / 4
+	if n == 0 {
+		return nil
+	}
 	v := make([]float32, n)
+	_ = b[n*4-1]
 	for i := 0; i < n; i++ {
-		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4 : i*4+4]))
 	}
 	return v
 }
