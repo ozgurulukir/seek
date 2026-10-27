@@ -46,22 +46,22 @@ jobs:
       - name: Build
         shell: pwsh
         env:
-          CC: "zig cc"
-          CXX: "zig c++"
+          CC: "zig cc -target x86_64-windows-gnu"
+          CXX: "zig c++ -target x86_64-windows-gnu"
           CGO_ENABLED: "1"
         run: go build -tags "fts5 sqlite_fts5" -o seek.exe .
       - name: Test
         shell: pwsh
         env:
-          CC: "zig cc"
-          CXX: "zig c++"
+          CC: "zig cc -target x86_64-windows-gnu"
+          CXX: "zig c++ -target x86_64-windows-gnu"
           CGO_ENABLED: "1"
         run: go test -tags "fts5 sqlite_fts5" ./...
       - name: Vet
         shell: pwsh
         env:
-          CC: "zig cc"
-          CXX: "zig c++"
+          CC: "zig cc -target x86_64-windows-gnu"
+          CXX: "zig c++ -target x86_64-windows-gnu"
           CGO_ENABLED: "1"
         run: go vet -tags "fts5 sqlite_fts5" ./...
       - name: Gofmt

@@ -677,22 +677,32 @@ func AnalyzeToken(s string) []string {
 }
 
 // LowerToken lowercases a token (basic ASCII + Unicode case folding).
-// PERF: fast-path already-lowercase ASCII tokens. strings.ToLower also skips
-// allocation for these, but its per-byte isASCII/hasUpper bookkeeping costs
-// more than this single-break scan on the analyzer hot path.
+// PERF: fast-path already-lowercase ASCII tokens and perform in-place byte lowercasing for ASCII tokens with uppercase characters to avoid strings.ToLower / strings.Map allocations.
 func LowerToken(s string) string {
-	hasUpperOrNonASCII := false
+	hasUpper := false
 	for i := 0; i < len(s); i++ {
 		b := s[i]
-		if b >= utf8.RuneSelf || ('A' <= b && b <= 'Z') {
-			hasUpperOrNonASCII = true
-			break
+		if b >= utf8.RuneSelf {
+			return strings.ToLower(s)
+		}
+		if 'A' <= b && b <= 'Z' {
+			hasUpper = true
 		}
 	}
-	if !hasUpperOrNonASCII {
+	if !hasUpper {
 		return s
 	}
-	return strings.ToLower(s)
+
+	// Fast ASCII lowercasing without strings.ToLower/strings.Map overhead
+	b := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b[i] = c
+	}
+	return string(b)
 }
 
 // --- Error types ---
