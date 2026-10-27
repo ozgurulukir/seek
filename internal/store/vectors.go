@@ -10,7 +10,6 @@ import (
 	"github.com/viterin/vek/vek32"
 	"math"
 	"sort"
-	"strings"
 )
 
 // Vector semantic search and the HNSW index sync lifecycle. Extracted from
@@ -155,14 +154,12 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 		}
 		batchIDs := missingIDs[i:end]
 
-		placeholders := make([]string, len(batchIDs))
 		args := make([]interface{}, len(batchIDs))
 		for j, id := range batchIDs {
-			placeholders[j] = "?"
 			args[j] = id
 		}
 
-		query := fmt.Sprintf("SELECT id, embedding FROM chunks WHERE id IN (%s)", strings.Join(placeholders, ","))
+		query := "SELECT id, embedding FROM chunks WHERE id IN (" + sqlPlaceholders(len(batchIDs)) + ")"
 		rows, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
 			return added, fmt.Errorf("load embeddings batch: %w", err)
@@ -439,22 +436,16 @@ func (s *Store) fetchSearchResultsContext(ctx context.Context, results []VectorR
 		ids[i] = r.ChunkID
 	}
 
-	// Build placeholders for IN clause
-	placeholders := make([]string, len(ids))
 	args := make([]interface{}, len(ids))
 	for i, id := range ids {
-		placeholders[i] = "?"
 		args[i] = id
 	}
 
-	query := fmt.Sprintf(
-		`SELECT `+chunkRowColumns+`
+	query := `SELECT ` + chunkRowColumns + `
 		 FROM chunks ch
 		 JOIN documents d ON d.id = ch.document_id
 		 JOIN collections c ON c.id = d.collection_id
-		 WHERE ch.id IN (%s)`,
-		strings.Join(placeholders, ","),
-	)
+		 WHERE ch.id IN (` + sqlPlaceholders(len(ids)) + `)`
 	args = append([]interface{}{ChunkTypeText}, args...)
 
 	// Push filters into the SQL query so the DB handles filtering
