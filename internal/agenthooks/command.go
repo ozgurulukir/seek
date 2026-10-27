@@ -197,6 +197,12 @@ var (
 	targetPatternMu    sync.RWMutex
 )
 
+func init() {
+	for _, t := range hookTargets {
+		getTargetPattern(t)
+	}
+}
+
 // PERF: memoize target regexes by target attributes so lookups are 0-alloc map accesses.
 func getTargetPattern(target Target) *regexp.Regexp {
 	key := targetPatternKey{

@@ -19,3 +19,19 @@ func BenchmarkIsTargetSeekHookCommand(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkGetTargetPattern(b *testing.B) {
+	target := Target{
+		agent: "claude",
+		event: "Stop",
+		embed: true,
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		re := getTargetPattern(target)
+		if re == nil {
+			b.Fatal("expected regex")
+		}
+	}
+}
