@@ -65,17 +65,12 @@ func (f *FastFieldStore) BatchGetContext(ctx context.Context, docIDs []int64, fi
 		return make(map[int64]interface{}), nil
 	}
 
-	placeholders := make([]string, len(docIDs))
 	args := make([]interface{}, len(docIDs))
 	for i, id := range docIDs {
-		placeholders[i] = "?"
 		args[i] = id
 	}
 
-	query := fmt.Sprintf(
-		`SELECT doc_id, field_value FROM fast_fields WHERE doc_id IN (%s) AND field_name = ?`,
-		strings.Join(placeholders, ","),
-	)
+	query := `SELECT doc_id, field_value FROM fast_fields WHERE doc_id IN (` + sqlPlaceholders(len(docIDs)) + `) AND field_name = ?`
 	args = append(args, fieldName)
 
 	rows, err := f.db.QueryContext(ctx, query, args...)

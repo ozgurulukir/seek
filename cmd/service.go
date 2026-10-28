@@ -46,13 +46,53 @@ var plistTemplate = template.Must(template.New("plist").Funcs(template.FuncMap{
 </plist>
 `))
 
+// escapeWindowsArg quotes and escapes an argument string for Windows
+// CommandLineToArgvW parsing.
+func escapeWindowsArg(s string) string {
+	if s == "" {
+		return `""`
+	}
+	needsQuotes := strings.ContainsAny(s, " \t\n\v\"")
+	if !needsQuotes {
+		return s
+	}
+
+	var b strings.Builder
+	b.WriteByte('"')
+	backslashes := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\\' {
+			backslashes++
+		} else if c == '"' {
+			b.WriteString(strings.Repeat("\\", backslashes*2+1))
+			b.WriteByte('"')
+			backslashes = 0
+		} else {
+			if backslashes > 0 {
+				b.WriteString(strings.Repeat("\\", backslashes))
+				backslashes = 0
+			}
+			b.WriteByte(c)
+		}
+	}
+	if backslashes > 0 {
+		b.WriteString(strings.Repeat("\\", backslashes*2))
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
 // windowsTaskAction renders the schtasks /TR action string for the sync
 // task. Task Scheduler launches the action via CreateProcess, not cmd.exe,
-// so a plainly quoted argv is correct — routing through `cmd.exe /c` would
+// so a properly escaped argv is correct — routing through `cmd.exe /c` would
 // expose the binary path to cmd metacharacter expansion (%VAR% expands even
 // inside double quotes) and quote injection.
-func windowsTaskAction(bin string) string {
-	return fmt.Sprintf(`"%s" sync`, bin)
+func windowsTaskAction(bin string) (string, error) {
+	if strings.ContainsAny(bin, "\x00\r\n") {
+		return "", fmt.Errorf("invalid binary path %q: contains control characters", bin)
+	}
+	return fmt.Sprintf("%s sync", escapeWindowsArg(bin)), nil
 }
 
 var systemdServiceTemplate = template.Must(template.New("systemdService").Parse(`[Unit]
@@ -157,7 +197,10 @@ func startWindowsService(bin string, interval int) error {
 	if minutes < 1 {
 		minutes = 1
 	}
-	trArg := windowsTaskAction(bin)
+	trArg, err := windowsTaskAction(bin)
+	if err != nil {
+		return fmt.Errorf("invalid service binary path: %w", err)
+	}
 	out, err := exec.Command("schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO", fmt.Sprintf("%d", minutes), "/TN", windowsTask, "/TR", trArg).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("schtasks create: %s (%w)", string(out), err)

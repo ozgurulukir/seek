@@ -299,14 +299,12 @@ func (s *Store) UpdateChunkEmbeddingsBatchContext(ctx context.Context, updates [
 				}
 				chunkIDs := candidateIDs[i:end]
 
-				placeholders := make([]string, len(chunkIDs))
 				args := make([]any, len(chunkIDs))
 				for j, id := range chunkIDs {
-					placeholders[j] = "?"
 					args[j] = id
 				}
 
-				query := fmt.Sprintf("SELECT id, embedding FROM chunks WHERE id IN (%s)", strings.Join(placeholders, ","))
+				query := "SELECT id, embedding FROM chunks WHERE id IN (" + sqlPlaceholders(len(chunkIDs)) + ")"
 				rows, err := s.db.QueryContext(ctx, query, args...)
 				if err != nil {
 					return fmt.Errorf("read previous chunk embeddings batch: %w", err)

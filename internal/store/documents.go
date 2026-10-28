@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -211,24 +210,22 @@ func (s *Store) DeleteOrphansContext(ctx context.Context, collectionID int64, li
 		}
 		batch := ids[i:end]
 
-		placeholders := make([]string, len(batch))
 		args := make([]any, len(batch))
 		for j, id := range batch {
-			placeholders[j] = "?"
 			args[j] = id
 		}
-		inClause := strings.Join(placeholders, ",")
+		inClause := sqlPlaceholders(len(batch))
 
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM fast_fields WHERE doc_id IN (%s)`, inClause), args...); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM fast_fields WHERE doc_id IN ("+inClause+")", args...); err != nil {
 			return 0, fmt.Errorf("delete orphan fast_fields: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM documents_fts WHERE rowid IN (%s)`, inClause), args...); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM documents_fts WHERE rowid IN ("+inClause+")", args...); err != nil {
 			return 0, fmt.Errorf("delete orphan fts: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM chunks WHERE document_id IN (%s)`, inClause), args...); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM chunks WHERE document_id IN ("+inClause+")", args...); err != nil {
 			return 0, fmt.Errorf("delete orphan chunks: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM documents WHERE id IN (%s)`, inClause), args...); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM documents WHERE id IN ("+inClause+")", args...); err != nil {
 			return 0, fmt.Errorf("delete orphan document: %w", err)
 		}
 	}

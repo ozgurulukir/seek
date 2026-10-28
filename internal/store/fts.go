@@ -324,18 +324,16 @@ func (r ftsRepository) searchContext(ctx context.Context, query string, limit in
 
 	// Populate line numbers from first chunk for all results in a single batch query
 	if len(docIDs) > 0 {
-		placeholders := make([]string, len(docIDs))
 		docArgs := make([]interface{}, len(docIDs))
 		for i, id := range docIDs {
-			placeholders[i] = "?"
 			docArgs[i] = id
 		}
-		chunkQuery := fmt.Sprintf(`SELECT document_id, COALESCE(start_line, 0), COALESCE(end_line, 0)
+		chunkQuery := `SELECT document_id, COALESCE(start_line, 0), COALESCE(end_line, 0)
 			FROM (
 				SELECT document_id, start_line, end_line,
 				       ROW_NUMBER() OVER (PARTITION BY document_id ORDER BY seq ASC) as rn
-				FROM chunks WHERE document_id IN (%s)
-			) WHERE rn = 1`, strings.Join(placeholders, ","))
+				FROM chunks WHERE document_id IN (` + sqlPlaceholders(len(docIDs)) + `)
+			) WHERE rn = 1`
 		chunkRows, err := r.db.QueryContext(ctx, chunkQuery, docArgs...)
 		if err != nil {
 			return nil, fmt.Errorf("line-span query for %d documents: %w", len(docIDs), err)
