@@ -30,6 +30,13 @@ func (s *Store) syncVectorIndexFull() (int, error) {
 	return s.syncVectorIndexFullContext(context.Background())
 }
 
+// pendingEmbedding is a scanned row whose BLOB is decoded after its cursor is
+// closed, so vector work does not run against an open SQLite read cursor.
+type pendingEmbedding struct {
+	id  int64
+	emb []byte
+}
+
 func (s *Store) syncVectorIndexFullContext(ctx context.Context) (int, error) {
 	current := s.vector()
 	if current == nil {
@@ -52,48 +59,57 @@ func (s *Store) syncVectorIndexFullContext(ctx context.Context) (int, error) {
 		}
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL`)
-	if err != nil {
-		return 0, err
-	}
-
-	type pendingChunk struct {
-		id  int64
-		emb []byte
-	}
-	var items []pendingChunk
+	// Read and decode in bounded batches so the BLOB cursor is closed before
+	// CPU-heavy decoding and graph insertion, without holding the whole
+	// embedding table in memory.
+	const fullSyncBatch = 500
 	added := 0
-	for rows.Next() {
+	lastID := int64(math.MinInt64)
+	for {
 		if err := ctx.Err(); err != nil {
-			rows.Close()
 			return added, err
 		}
-		var chunkID int64
-		var embBlob []byte
-		if err := rows.Scan(&chunkID, &embBlob); err != nil {
-			rows.Close()
+		rows, err := s.db.QueryContext(ctx,
+			`SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL AND id > ? ORDER BY id LIMIT ?`,
+			lastID, fullSyncBatch)
+		if err != nil {
 			return added, err
 		}
-		if len(embBlob) == 0 {
-			continue
-		}
-		items = append(items, pendingChunk{id: chunkID, emb: embBlob})
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return added, fmt.Errorf("sync vector index rows: %w", err)
-	}
-	rows.Close()
 
-	for i := range items {
-		if err := ctx.Err(); err != nil {
-			return added, err
+		items := make([]pendingEmbedding, 0, fullSyncBatch)
+		scanned := 0
+		for rows.Next() {
+			var chunkID int64
+			var embBlob []byte
+			if err := rows.Scan(&chunkID, &embBlob); err != nil {
+				rows.Close()
+				return added, err
+			}
+			lastID = chunkID
+			scanned++
+			if len(embBlob) == 0 {
+				continue
+			}
+			items = append(items, pendingEmbedding{id: chunkID, emb: embBlob})
 		}
-		emb := decodeEmbedding(items[i].emb)
-		if err := target.Add(items[i].id, emb); err != nil {
-			return added, err
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return added, fmt.Errorf("sync vector index rows: %w", err)
 		}
-		added++
+		rows.Close()
+
+		for i := range items {
+			if err := ctx.Err(); err != nil {
+				return added, err
+			}
+			if err := target.Add(items[i].id, decodeEmbedding(items[i].emb)); err != nil {
+				return added, err
+			}
+			added++
+		}
+		if scanned < fullSyncBatch {
+			break
+		}
 	}
 	if replace {
 		if err := publishVectorIndexRebuild(current, target); err != nil {
@@ -186,11 +202,7 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 			return added, fmt.Errorf("load embeddings batch: %w", err)
 		}
 
-		type pendingChunk struct {
-			id  int64
-			emb []byte
-		}
-		items := make([]pendingChunk, 0, len(batchIDs))
+		items := make([]pendingEmbedding, 0, len(batchIDs))
 
 		for rows.Next() {
 			if err := ctx.Err(); err != nil {
@@ -206,7 +218,7 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 			if len(embBlob) == 0 {
 				continue
 			}
-			items = append(items, pendingChunk{id: chunkID, emb: embBlob})
+			items = append(items, pendingEmbedding{id: chunkID, emb: embBlob})
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
@@ -549,13 +561,9 @@ func encodeEmbedding(v []float32) []byte {
 
 func decodeEmbedding(b []byte) []float32 {
 	n := len(b) / 4
-	if n == 0 {
-		return nil
-	}
 	v := make([]float32, n)
-	_ = b[n*4-1]
 	for i := 0; i < n; i++ {
-		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4 : i*4+4]))
+		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
 	}
 	return v
 }
