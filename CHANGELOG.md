@@ -17,6 +17,10 @@ All notable changes to `seek` are documented here. This follows
 
 ### Performance
 
+- **FastField batch retrieval chunking** (`internal/store`): batch `FastFieldStore.BatchGetContext`
+  queries in chunks of 500 using `sqlPlaceholders` to prevent SQLite parameter limits and avoid
+  N+1 query overhead on large document sets.
+
 - **Store IN-clause construction** (`internal/store`): replace per-query placeholder slices and
   joins with a shared precomputed helper across vector, chunk, FTS, fast-field, semantic,
   document, and profile queries.
@@ -28,7 +32,8 @@ All notable changes to `seek` are documented here. This follows
 ### Tests
 
 - Cover `FilterSet.Items` copy semantics, semantic config effective getters, orphan cleanup
-  partial/full purges, full vector-sync batch boundaries, and `splitByHeaders` section slicing.
+  partial/full purges, full vector-sync batch boundaries, `splitByHeaders` section slicing, and
+  chunked fast-field batch retrieval across multi-batch boundaries.
 
 ## [0.6.6] - 2026-10-24
 
