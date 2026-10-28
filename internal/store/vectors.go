@@ -10,7 +10,6 @@ import (
 	"github.com/viterin/vek/vek32"
 	"math"
 	"sort"
-	"strings"
 )
 
 // Vector semantic search and the HNSW index sync lifecycle. Extracted from
@@ -28,6 +27,13 @@ func (s *Store) SyncVectorIndexContext(ctx context.Context) error {
 
 func (s *Store) syncVectorIndexFull() (int, error) {
 	return s.syncVectorIndexFullContext(context.Background())
+}
+
+// pendingEmbedding is a scanned row whose BLOB is decoded after its cursor is
+// closed, so vector work does not run against an open SQLite read cursor.
+type pendingEmbedding struct {
+	id  int64
+	emb []byte
 }
 
 func (s *Store) syncVectorIndexFullContext(ctx context.Context) (int, error) {
@@ -52,30 +58,57 @@ func (s *Store) syncVectorIndexFullContext(ctx context.Context) (int, error) {
 		}
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL`)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
-
+	// Read and decode in bounded batches so the BLOB cursor is closed before
+	// CPU-heavy decoding and graph insertion, without holding the whole
+	// embedding table in memory.
+	const fullSyncBatch = 500
 	added := 0
-	for rows.Next() {
+	lastID := int64(math.MinInt64)
+	for {
 		if err := ctx.Err(); err != nil {
 			return added, err
 		}
-		var chunkID int64
-		var embBlob []byte
-		if err := rows.Scan(&chunkID, &embBlob); err != nil {
+		rows, err := s.db.QueryContext(ctx,
+			`SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL AND id > ? ORDER BY id LIMIT ?`,
+			lastID, fullSyncBatch)
+		if err != nil {
 			return added, err
 		}
-		emb := decodeEmbedding(embBlob)
-		if err := target.Add(chunkID, emb); err != nil {
-			return added, err
+
+		items := make([]pendingEmbedding, 0, fullSyncBatch)
+		scanned := 0
+		for rows.Next() {
+			var chunkID int64
+			var embBlob []byte
+			if err := rows.Scan(&chunkID, &embBlob); err != nil {
+				rows.Close()
+				return added, err
+			}
+			lastID = chunkID
+			scanned++
+			if len(embBlob) == 0 {
+				continue
+			}
+			items = append(items, pendingEmbedding{id: chunkID, emb: embBlob})
 		}
-		added++
-	}
-	if err := rows.Err(); err != nil {
-		return added, fmt.Errorf("sync vector index rows: %w", err)
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return added, fmt.Errorf("sync vector index rows: %w", err)
+		}
+		rows.Close()
+
+		for i := range items {
+			if err := ctx.Err(); err != nil {
+				return added, err
+			}
+			if err := target.Add(items[i].id, decodeEmbedding(items[i].emb)); err != nil {
+				return added, err
+			}
+			added++
+		}
+		if scanned < fullSyncBatch {
+			break
+		}
 	}
 	if replace {
 		if err := publishVectorIndexRebuild(current, target); err != nil {
@@ -155,18 +188,18 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 		}
 		batchIDs := missingIDs[i:end]
 
-		placeholders := make([]string, len(batchIDs))
 		args := make([]interface{}, len(batchIDs))
 		for j, id := range batchIDs {
-			placeholders[j] = "?"
 			args[j] = id
 		}
 
-		query := fmt.Sprintf("SELECT id, embedding FROM chunks WHERE id IN (%s)", strings.Join(placeholders, ","))
+		query := "SELECT id, embedding FROM chunks WHERE id IN (" + sqlPlaceholders(len(batchIDs)) + ")"
 		rows, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
 			return added, fmt.Errorf("load embeddings batch: %w", err)
 		}
+
+		items := make([]pendingEmbedding, 0, len(batchIDs))
 
 		for rows.Next() {
 			if err := ctx.Err(); err != nil {
@@ -182,18 +215,24 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 			if len(embBlob) == 0 {
 				continue
 			}
-			emb := decodeEmbedding(embBlob)
-			if err := s.vector().Add(chunkID, emb); err != nil {
-				rows.Close()
-				return added, err
-			}
-			added++
+			items = append(items, pendingEmbedding{id: chunkID, emb: embBlob})
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
 			return added, fmt.Errorf("load embeddings batch rows: %w", err)
 		}
 		rows.Close()
+
+		for j := range items {
+			if err := ctx.Err(); err != nil {
+				return added, err
+			}
+			emb := decodeEmbedding(items[j].emb)
+			if err := s.vector().Add(items[j].id, emb); err != nil {
+				return added, err
+			}
+			added++
+		}
 	}
 
 	return added, nil
@@ -439,22 +478,16 @@ func (s *Store) fetchSearchResultsContext(ctx context.Context, results []VectorR
 		ids[i] = r.ChunkID
 	}
 
-	// Build placeholders for IN clause
-	placeholders := make([]string, len(ids))
 	args := make([]interface{}, len(ids))
 	for i, id := range ids {
-		placeholders[i] = "?"
 		args[i] = id
 	}
 
-	query := fmt.Sprintf(
-		`SELECT `+chunkRowColumns+`
+	query := `SELECT ` + chunkRowColumns + `
 		 FROM chunks ch
 		 JOIN documents d ON d.id = ch.document_id
 		 JOIN collections c ON c.id = d.collection_id
-		 WHERE ch.id IN (%s)`,
-		strings.Join(placeholders, ","),
-	)
+		 WHERE ch.id IN (` + sqlPlaceholders(len(ids)) + `)`
 	args = append([]interface{}{ChunkTypeText}, args...)
 
 	// Push filters into the SQL query so the DB handles filtering

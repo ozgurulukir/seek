@@ -59,3 +59,40 @@ func TestSearchVectorEmptyHNSWFallsBackToLinear(t *testing.T) {
 		t.Fatal("expected linear-scan fallback to find the embedded chunk, got no results")
 	}
 }
+
+// TestSyncVectorIndexFull_BatchBoundaries verifies the keyset-paginated full
+// rebuild processes every embedded chunk across batch boundaries.
+func TestSyncVectorIndexFull_BatchBoundaries(t *testing.T) {
+	for _, n := range []int{500, 501, 1001} {
+		s := newTestStore(t)
+		idx := newLinearIndex(4)
+		s.SetVectorIndex(idx)
+
+		col, err := s.CreateCollection("vec-full", "markdown", "/tmp", "**/*.md")
+		if err != nil {
+			t.Fatalf("CreateCollection: %v", err)
+		}
+		docID, err := s.UpsertDocument(col.ID, "/path/to/doc", "Doc", "hash", 1, 1)
+		if err != nil {
+			t.Fatalf("UpsertDocument: %v", err)
+		}
+
+		emb := []float32{0.1, 0.2, 0.3, 0.4}
+		for i := 0; i < n; i++ {
+			if err := s.InsertChunk(docID, i, "chunk", emb); err != nil {
+				t.Fatalf("InsertChunk %d: %v", i, err)
+			}
+		}
+
+		added, err := s.SyncVectorIndexIncremental()
+		if err != nil {
+			t.Fatalf("SyncVectorIndexIncremental (full path): %v", err)
+		}
+		if added != n {
+			t.Fatalf("added = %d, want %d", added, n)
+		}
+		if idx.Len() != n {
+			t.Fatalf("vector index len = %d, want %d", idx.Len(), n)
+		}
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestEmbeddingModeValidation(t *testing.T) {
@@ -406,4 +407,51 @@ func TestSave_ConfigFilePrivatePerms(t *testing.T) {
 			t.Errorf("config.yaml perm = %04o, want %04o", uint32(got), uint32(DefaultPrivateFilePerms))
 		}
 	}
+}
+
+func TestSemanticConfigEffectiveGetters(t *testing.T) {
+	t.Run("EffectiveBaseURL", func(t *testing.T) {
+		if got := (SemanticConfig{}).EffectiveBaseURL(); got != DefaultSemanticBaseURL {
+			t.Errorf("EffectiveBaseURL() = %q, want default %q", got, DefaultSemanticBaseURL)
+		}
+		custom := "http://127.0.0.1:9999"
+		if got := (SemanticConfig{BaseURL: custom}).EffectiveBaseURL(); got != custom {
+			t.Errorf("EffectiveBaseURL() = %q, want %q", got, custom)
+		}
+	})
+
+	t.Run("EffectiveMaxTags", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			maxTags int
+			want    int
+		}{
+			{"zero falls back to default", 0, DefaultSemanticMaxTags},
+			{"negative falls back to default", -5, DefaultSemanticMaxTags},
+			{"valid count within range", 3, 3},
+			{"exceeding max tags clamped to default cap", DefaultSemanticMaxTags + 10, DefaultSemanticMaxTags},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				cfg := SemanticConfig{MaxTags: tc.maxTags}
+				if got := cfg.EffectiveMaxTags(); got != tc.want {
+					t.Errorf("EffectiveMaxTags() = %d, want %d", got, tc.want)
+				}
+			})
+		}
+	})
+
+	t.Run("EffectiveTimeout", func(t *testing.T) {
+		if got := (SemanticConfig{}).EffectiveTimeout(); got != DefaultSemanticTimeout {
+			t.Errorf("EffectiveTimeout() = %v, want default %v", got, DefaultSemanticTimeout)
+		}
+		if got := (SemanticConfig{Timeout: -1}).EffectiveTimeout(); got != DefaultSemanticTimeout {
+			t.Errorf("EffectiveTimeout() = %v, want default %v", got, DefaultSemanticTimeout)
+		}
+		customTimeout := 10 * time.Second
+		if got := (SemanticConfig{Timeout: customTimeout}).EffectiveTimeout(); got != customTimeout {
+			t.Errorf("EffectiveTimeout() = %v, want %v", got, customTimeout)
+		}
+	})
 }
