@@ -437,3 +437,41 @@ func TestTailBytesAdvancesToRuneStart(t *testing.T) {
 		}
 	}
 }
+
+// TestSplitByHeadersExactSections pins the zero-copy slicing contract: sections
+// are exact byte ranges of the input (no added trailing newline) and a split
+// only happens when a header follows accumulated content in the same section.
+func TestSplitByHeadersExactSections(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    []string
+	}{
+		{"empty", "", nil},
+		{"no headers", "abc", []string{"abc"}},
+		{"whitespace only", "   \n\n  \n", []string{"   \n\n  \n"}},
+		{
+			"intro then headers",
+			"intro line\n# Header One\nbody one\n# Header Two\nbody two",
+			[]string{"intro line\n", "# Header One\nbody one\n", "# Header Two\nbody two"},
+		},
+		{"leading header stays whole", "  # A\nbody", []string{"  # A\nbody"}},
+		{"consecutive headers", "# A\n# B\n", []string{"# A\n", "# B\n"}},
+		{"header after leading blank line", "\n# H\nbody", []string{"\n", "# H\nbody"}},
+		{"crlf preserved", "# A\r\nbody\r\n# B\r\nbody2", []string{"# A\r\nbody\r\n", "# B\r\nbody2"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := splitByHeaders(tt.content)
+			if len(got) != len(tt.want) {
+				t.Fatalf("splitByHeaders(%q) returned %d sections, want %d: %q", tt.content, len(got), len(tt.want), got)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("section %d = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}

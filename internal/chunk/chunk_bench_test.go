@@ -25,3 +25,18 @@ func BenchmarkAssignLineNumbers(b *testing.B) {
 		AssignLineNumbers(content, chunksCopy)
 	}
 }
+
+func BenchmarkSplitByHeaders(b *testing.B) {
+	var sb strings.Builder
+	for i := 1; i <= 200; i++ {
+		sb.WriteString(fmt.Sprintf("# Section %d\n\nThis is paragraph 1 of section %d with some text.\nThis is line 2 of paragraph 1.\n\nThis is paragraph 2 of section %d.\nLine 2 of para 2.\nLine 3 of para 2.\n\n", i, i, i))
+	}
+	content := sb.String()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		_ = splitByHeaders(content)
+	}
+}
