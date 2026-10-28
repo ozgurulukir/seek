@@ -71,3 +71,43 @@ func TestStoreFastFieldFilterExactValue(t *testing.T) {
 		t.Fatalf("expected field language, got %v", args[0])
 	}
 }
+
+func TestFilterSetItems(t *testing.T) {
+	t.Run("nil FilterSet", func(t *testing.T) {
+		var fs *FilterSet
+		if got := fs.Items(); got != nil {
+			t.Fatalf("expected nil for nil FilterSet, got %v", got)
+		}
+	})
+
+	t.Run("empty FilterSet", func(t *testing.T) {
+		fs := NewFilterSet()
+		got := fs.Items()
+		if got == nil || len(got) != 0 {
+			t.Fatalf("expected empty non-nil slice, got %v", got)
+		}
+	})
+
+	t.Run("populated FilterSet and immutability", func(t *testing.T) {
+		fs := NewFilterSet()
+		f1 := CollectionFilter("docs")
+		f2 := LanguageFilter("go")
+		fs.Add(f1)
+		fs.Add(f2)
+
+		items := fs.Items()
+		if len(items) != 2 {
+			t.Fatalf("expected 2 items, got %d", len(items))
+		}
+		if items[0] != f1 || items[1] != f2 {
+			t.Fatalf("unexpected items: %v", items)
+		}
+
+		// Mutate returned slice to verify internal slice is isolated
+		items[0] = CollectionFilter("modified")
+		itemsAfter := fs.Items()
+		if itemsAfter[0] != f1 {
+			t.Fatalf("FilterSet internal state mutated: expected %v, got %v", f1, itemsAfter[0])
+		}
+	})
+}
