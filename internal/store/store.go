@@ -256,14 +256,13 @@ func (s *Store) verifyFTS5() error {
 	}
 	defer conn.Close()
 
-	const probeTable = `temp.__seek_fts5_probe`
-	if _, err := conn.ExecContext(ctx, `CREATE VIRTUAL TABLE `+probeTable+` USING fts5(content)`); err != nil {
+	if _, err := conn.ExecContext(ctx, `CREATE VIRTUAL TABLE temp.__seek_fts5_probe USING fts5(content)`); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "no such module: fts5") {
 			return fmt.Errorf("SQLite FTS5 not enabled. Build with: make build (or: go build -tags \"fts5 sqlite_fts5\"): %w", err)
 		}
 		return fmt.Errorf("verify SQLite FTS5 capability: create probe table: %w", err)
 	}
-	if _, err := conn.ExecContext(ctx, `DROP TABLE `+probeTable); err != nil {
+	if _, err := conn.ExecContext(ctx, `DROP TABLE temp.__seek_fts5_probe`); err != nil {
 		return fmt.Errorf("verify SQLite FTS5 capability: drop probe table: %w", err)
 	}
 	return nil
