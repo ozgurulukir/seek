@@ -45,13 +45,17 @@ func TestServiceTemplates_RunSyncOnce(t *testing.T) {
 		t.Fatalf("systemd template contains %d ExecStart entries, want 1", got)
 	}
 
-	if got, want := windowsTaskAction(data.Binary), `"/path with spaces/seek" sync`; got != want {
-		t.Fatalf("windows task action = %q, want %q", got, want)
+	winAction, err := windowsTaskAction(data.Binary)
+	if err != nil {
+		t.Fatalf("windowsTaskAction error: %v", err)
+	}
+	if want := `"/path with spaces/seek" sync`; winAction != want {
+		t.Fatalf("windows task action = %q, want %q", winAction, want)
 	}
 	// The action must go through CreateProcess directly: cmd.exe would expand
 	// %VAR% even inside double quotes and treat embedded quotes as syntax.
-	if strings.Contains(windowsTaskAction(data.Binary), "cmd.exe") {
-		t.Fatalf("windows task action still routes through cmd.exe: %q", windowsTaskAction(data.Binary))
+	if strings.Contains(winAction, "cmd.exe") {
+		t.Fatalf("windows task action still routes through cmd.exe: %q", winAction)
 	}
 }
 
@@ -97,4 +101,67 @@ func TestServiceStartCmd_Helpers(t *testing.T) {
 			t.Errorf("logPath() = %q, want %q", lPath, expectedLog)
 		}
 	})
+}
+
+func TestWindowsTaskAction(t *testing.T) {
+	tests := []struct {
+		name      string
+		bin       string
+		want      string
+		expectErr bool
+	}{
+		{
+			name: "simple path without spaces",
+			bin:  `C:\ProgramFiles\seek\seek.exe`,
+			want: `C:\ProgramFiles\seek\seek.exe sync`,
+		},
+		{
+			name: "path with spaces",
+			bin:  `C:\Program Files\seek\seek.exe`,
+			want: `"C:\Program Files\seek\seek.exe" sync`,
+		},
+		{
+			name: "path with trailing backslash and space",
+			bin:  `C:\Program Files\seek\`,
+			want: `"C:\Program Files\seek\\" sync`,
+		},
+		{
+			name: "path with double quotes inside spaces",
+			bin:  `C:\Program Files\"seek"\seek.exe`,
+			want: `"C:\Program Files\\\"seek\"\seek.exe" sync`,
+		},
+		{
+			name:      "path with null byte",
+			bin:       "C:\\seek\x00.exe",
+			expectErr: true,
+		},
+		{
+			name:      "path with newline",
+			bin:       "C:\\seek\n.exe",
+			expectErr: true,
+		},
+		{
+			name:      "path with carriage return",
+			bin:       "C:\\seek\r.exe",
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := windowsTaskAction(tt.bin)
+			if tt.expectErr {
+				if err == nil {
+					t.Fatalf("windowsTaskAction(%q) expected error, got nil", tt.bin)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("windowsTaskAction(%q) unexpected error: %v", tt.bin, err)
+			}
+			if got != tt.want {
+				t.Errorf("windowsTaskAction(%q) = %q, want %q", tt.bin, got, tt.want)
+			}
+		})
+	}
 }
