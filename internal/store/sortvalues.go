@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 )
 
 // SortValues returns the sort key for each given document. Document-column
@@ -50,14 +49,12 @@ func (s *Store) documentSortValues(ctx context.Context, docIDs []int64, field st
 	}
 	column := field
 
-	placeholders := make([]string, 0, len(docIDs))
-	args := make([]interface{}, 0, len(docIDs))
-	for _, id := range docIDs {
-		placeholders = append(placeholders, "?")
-		args = append(args, id)
+	args := make([]interface{}, len(docIDs))
+	for i, id := range docIDs {
+		args[i] = id
 	}
 
-	query := fmt.Sprintf(`SELECT id, %s FROM documents WHERE id IN (%s)`, column, strings.Join(placeholders, ","))
+	query := fmt.Sprintf(`SELECT id, %s FROM documents WHERE id IN (%s)`, column, sqlPlaceholders(len(docIDs)))
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("sort values query: %w", err)
