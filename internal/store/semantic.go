@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // SemanticStatus is the persisted enrichment state of a single document.
@@ -145,18 +144,15 @@ func (s *Store) GetSemanticStates(ctx context.Context, docIDs []int64) (map[int6
 		return make(map[int64]SemanticState), nil
 	}
 
-	placeholders := make([]string, len(docIDs))
 	args := make([]interface{}, len(docIDs))
 	for i, id := range docIDs {
-		placeholders[i] = "?"
 		args[i] = id
 	}
 
-	query := fmt.Sprintf(`
+	query := `
 		SELECT id, semantic_fingerprint, semantic_status
 		FROM documents
-		WHERE id IN (%s)`,
-		strings.Join(placeholders, ","))
+		WHERE id IN (` + sqlPlaceholders(len(docIDs)) + `)`
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

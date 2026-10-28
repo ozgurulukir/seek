@@ -476,13 +476,11 @@ func (s *Store) RestoreEmbeddingSpace(ctx context.Context, backup *EmbeddingSpac
 			return fmt.Errorf("clear documents for restore: %w", err)
 		}
 	} else {
-		placeholders := make([]string, 0, len(backup.documents))
 		args := make([]interface{}, 0, len(backup.documents))
 		for documentID := range backup.documents {
-			placeholders = append(placeholders, "?")
 			args = append(args, documentID)
 		}
-		deleteQuery := `DELETE FROM documents WHERE id NOT IN (` + strings.Join(placeholders, ",") + `)`
+		deleteQuery := `DELETE FROM documents WHERE id NOT IN (` + sqlPlaceholders(len(backup.documents)) + `)`
 		if _, err := tx.ExecContext(ctx, deleteQuery, args...); err != nil {
 			return fmt.Errorf("remove documents absent from restore: %w", err)
 		}
