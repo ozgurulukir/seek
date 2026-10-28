@@ -65,35 +65,49 @@ func (f *FastFieldStore) BatchGetContext(ctx context.Context, docIDs []int64, fi
 		return make(map[int64]interface{}), nil
 	}
 
-	args := make([]interface{}, len(docIDs))
-	for i, id := range docIDs {
-		args[i] = id
-	}
-
-	query := `SELECT doc_id, field_value FROM fast_fields WHERE doc_id IN (` + sqlPlaceholders(len(docIDs)) + `) AND field_name = ?`
-	args = append(args, fieldName)
-
-	rows, err := f.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	result := make(map[int64]interface{}, len(docIDs))
-	for rows.Next() {
-		var docID int64
-		var encoded string
-		if err := rows.Scan(&docID, &encoded); err != nil {
-			return nil, err
+	const batchSize = 500
+
+	for i := 0; i < len(docIDs); i += batchSize {
+		end := i + batchSize
+		if end > len(docIDs) {
+			end = len(docIDs)
 		}
-		val, err := decodeFastFieldValue(encoded)
+		chunk := docIDs[i:end]
+
+		args := make([]any, len(chunk)+1)
+		for j, id := range chunk {
+			args[j] = id
+		}
+		args[len(chunk)] = fieldName
+
+		query := `SELECT doc_id, field_value FROM fast_fields WHERE doc_id IN (` + sqlPlaceholders(len(chunk)) + `) AND field_name = ?`
+		rows, err := f.db.QueryContext(ctx, query, args...)
 		if err != nil {
 			return nil, err
 		}
-		result[docID] = val
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+
+		for rows.Next() {
+			var docID int64
+			var encoded string
+			if err := rows.Scan(&docID, &encoded); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			val, err := decodeFastFieldValue(encoded)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			result[docID] = val
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
 	}
 
 	return result, nil

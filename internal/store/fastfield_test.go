@@ -122,6 +122,40 @@ func TestFastFieldBatchGetMissing(t *testing.T) {
 	}
 }
 
+func TestFastFieldBatchGet_Chunked(t *testing.T) {
+	db := newTestStore(t)
+	defer db.Close()
+
+	ff := db.FastFields()
+
+	const totalDocs = 1250
+	docIDs := make([]int64, totalDocs)
+	for i := 0; i < totalDocs; i++ {
+		id := int64(i + 1)
+		docIDs[i] = id
+		if err := ff.Set(id, "rank", float64(i*2)); err != nil {
+			t.Fatalf("Set failed for doc %d: %v", id, err)
+		}
+	}
+
+	vals, err := ff.BatchGet(docIDs, "rank")
+	if err != nil {
+		t.Fatalf("BatchGet failed: %v", err)
+	}
+
+	if len(vals) != totalDocs {
+		t.Fatalf("expected %d values, got %d", totalDocs, len(vals))
+	}
+
+	for i := 0; i < totalDocs; i++ {
+		id := int64(i + 1)
+		want := float64(i * 2)
+		if vals[id] != want {
+			t.Errorf("doc %d rank = %v, want %v", id, vals[id], want)
+		}
+	}
+}
+
 func TestFastFieldDelete(t *testing.T) {
 	db := newTestStore(t)
 	defer db.Close()
