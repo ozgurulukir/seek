@@ -9,6 +9,27 @@ All notable changes to `seek` are documented here. This follows
   and command coverage for `seek mcp`/`fields`/`doctor`/`uninstall`; correct default
   `max_tokens`, chunk size/overlap, and filter/query-syntax/service reference details.
 
+### Security
+
+- **Windows service task creation** (`cmd`): quote and escape the resolved binary path using
+  `CommandLineToArgvW` rules, and reject paths containing control characters before calling
+  `schtasks`.
+
+### Performance
+
+- **Store IN-clause construction** (`internal/store`): replace per-query placeholder slices and
+  joins with a shared precomputed helper across vector, chunk, FTS, fast-field, semantic,
+  document, and profile queries.
+- **Full vector index rebuild** (`internal/store`): read embeddings in bounded batches and close
+  the SQLite cursor before decoding and graph insertion, keeping memory flat on large indexes.
+- **Markdown header splitting** (`internal/chunk`): slice sections directly from the source
+  instead of building a line slice and per-section builders.
+
+### Tests
+
+- Cover `FilterSet.Items` copy semantics, semantic config effective getters, orphan cleanup
+  partial/full purges, full vector-sync batch boundaries, and `splitByHeaders` section slicing.
+
 ## [0.6.6] - 2026-10-24
 
 ### Fixed
