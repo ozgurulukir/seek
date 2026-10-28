@@ -211,22 +211,35 @@ func AssignLineNumbers(fullContent string, chunks []Chunk) []Chunk {
 	return chunks
 }
 
+// PERF: scan lines with strings.IndexByte and slice section bounds directly from content, eliminating line slice and string builder allocations.
 func splitByHeaders(content string) []string {
-	lines := strings.Split(content, "\n")
-	var sections []string
-	var current strings.Builder
+	sections := make([]string, 0, max(4, strings.Count(content, "\n#")+1))
+	sectionStart := 0
+	currOffset := 0
 
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") && current.Len() > 0 {
-			sections = append(sections, current.String())
-			current.Reset()
+	remainder := content
+	for len(remainder) > 0 {
+		lineStart := currOffset
+		var line string
+		if idx := strings.IndexByte(remainder, '\n'); idx >= 0 {
+			line = remainder[:idx]
+			currOffset += idx + 1
+			remainder = remainder[idx+1:]
+		} else {
+			line = remainder
+			currOffset += len(remainder)
+			remainder = ""
 		}
-		current.WriteString(line)
-		current.WriteString("\n")
+
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") && lineStart > sectionStart {
+			sections = append(sections, content[sectionStart:lineStart])
+			sectionStart = lineStart
+		}
 	}
-	if current.Len() > 0 {
-		sections = append(sections, current.String())
+
+	if sectionStart < len(content) {
+		sections = append(sections, content[sectionStart:])
 	}
 
 	return sections
