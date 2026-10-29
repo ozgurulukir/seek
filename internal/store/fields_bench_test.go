@@ -10,3 +10,12 @@ func BenchmarkSplitMembershipTokens(b *testing.B) {
 		_ = splitMembershipTokens(input)
 	}
 }
+
+func BenchmarkDecodeFastFieldText(b *testing.B) {
+	encoded := `"go,rust,org:OpenAI"`
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = decodeFastFieldText(encoded)
+	}
+}
