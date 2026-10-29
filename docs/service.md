@@ -101,3 +101,5 @@ seek add --parser zcode
    If `seek sync` and `seek embed` run concurrently, SQLite's busy timeout allows them to queue safely without returning `database is locked` errors.
 3. **Chunk Compression:**
    Chunks are stored with Zstd compression (`compression.algorithm: zstd`), saving disk space while allowing transparent decompress-on-read during search.
+4. **Bounded Batch Queries:**
+   Bulk operations (such as orphan cleanup, embedding sync, and fast-field batch retrieval) chunk ID parameter lists in batches of 500 (`sqlPlaceholders`) to remain comfortably within SQLite parameter limits while avoiding N+1 roundtrips.
