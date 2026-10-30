@@ -214,15 +214,27 @@ func tailOverlap(tail string, maxBytes int) string {
 }
 
 // splitCodeBlocks breaks code on double newlines while normalizing line breaks.
+// PERF: zero-allocation block iteration using strings.Index and conditional CRLF normalization.
 func splitCodeBlocks(content string) []string {
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	blocks := strings.Split(content, "\n\n")
-	result := make([]string, 0, len(blocks))
-	for _, b := range blocks {
-		t := strings.TrimSpace(b)
-		if t != "" {
+	norm := content
+	if strings.IndexByte(content, '\r') >= 0 {
+		norm = strings.ReplaceAll(content, "\r\n", "\n")
+	}
+
+	result := make([]string, 0, max(4, strings.Count(norm, "\n\n")+1))
+	start := 0
+	for {
+		idx := strings.Index(norm[start:], "\n\n")
+		if idx < 0 {
+			if t := strings.TrimSpace(norm[start:]); t != "" {
+				result = append(result, t)
+			}
+			break
+		}
+		if t := strings.TrimSpace(norm[start : start+idx]); t != "" {
 			result = append(result, t)
 		}
+		start += idx + 2
 	}
 	return result
 }
