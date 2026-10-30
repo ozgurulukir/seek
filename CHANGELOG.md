@@ -17,6 +17,10 @@ All notable changes to `seek` are documented here. This follows
 
 ### Performance
 
+- **Code block splitting** (`internal/chunk`): iterate blocks via `strings.Index` with conditional
+  CRLF normalization instead of `strings.Split` + `strings.ReplaceAll`, halving allocations
+  (2 → 1 alloc/op).
+
 - **Fast-field text decoding** (`internal/store`): fast-path quote-delimited backslash-free
   values in `decodeFastFieldText`, returning the interior bytes directly instead of paying
   `json.Unmarshal` allocations per row.
