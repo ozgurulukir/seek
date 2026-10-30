@@ -12,6 +12,9 @@ func TestDecodeFastFieldText(t *testing.T) {
 		want    string
 	}{
 		{`"go,rust"`, "go,rust"},
+		{`""`, ""},               // empty string hits the fast path too
+		{`"abc"def"`, `abc"def`}, // corrupt row: fast path returns interior verbatim
+		{`"a\\b"`, `a\b`},        // escape → slow json.Unmarshal path
 		{`"a quote: \" inside"`, `a quote: " inside`}, // legacy REPLACE corrupted this
 		{`42`, "42"},
 		{`true`, "true"},
