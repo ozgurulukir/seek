@@ -182,8 +182,12 @@ func decodeFastFieldValue(encoded string) (interface{}, error) {
 // String values (the only kind production writers store) decode faithfully —
 // including values that contain quotes, which the legacy SQL
 // REPLACE(field_value, '"', ”) idiom corrupted. Non-string JSON and
-// undecodable bytes fall back to best-effort text.
-// PERF: fast-path standard JSON strings (quoted strings without backslash escapes) to extract slice sub-string directly without json.Unmarshal allocations.
+// undecodable bytes fall back to best-effort text. Quote-delimited,
+// backslash-free input is the exception: its interior bytes are returned
+// verbatim even when not valid JSON (e.g. legacy rows with stray interior
+// quotes), instead of falling to the best-effort path.
+// PERF: the fast path slices quote-delimited backslash-free strings directly,
+// skipping the json.Unmarshal allocations; every other input decodes as before.
 func decodeFastFieldText(encoded string) string {
 	if len(encoded) >= 2 && encoded[0] == '"' && encoded[len(encoded)-1] == '"' && !strings.Contains(encoded, `\`) {
 		return encoded[1 : len(encoded)-1]

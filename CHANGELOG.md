@@ -17,6 +17,10 @@ All notable changes to `seek` are documented here. This follows
 
 ### Performance
 
+- **Fast-field text decoding** (`internal/store`): fast-path quote-delimited backslash-free
+  values in `decodeFastFieldText`, returning the interior bytes directly instead of paying
+  `json.Unmarshal` allocations per row.
+
 - **FastField batch retrieval chunking** (`internal/store`): batch `FastFieldStore.BatchGetContext`
   queries in chunks of 500 using `sqlPlaceholders` to prevent SQLite parameter limits and avoid
   N+1 query overhead on large document sets.
