@@ -124,6 +124,51 @@ func TestFastFieldResolver(t *testing.T) {
 	}
 }
 
+// TestNewFieldKnownFunc pins the per-request field oracle the search planner
+// shares across --field and --sort-by: one snapshot accepts curated names and
+// anything physically present in fast_fields, and a nil store degrades to
+// curated-only.
+func TestNewFieldKnownFunc(t *testing.T) {
+	s := newTestStore(t)
+	col, err := s.CreateCollection("notes", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "/tmp/note.md", "Note", "h", 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FastFields().Set(docID, "author", "jane"); err != nil {
+		t.Fatal(err)
+	}
+
+	known, err := NewFieldKnownFunc(t.Context(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !known("author") {
+		t.Error("dynamically written field must be known")
+	}
+	if !known("tags") {
+		t.Error("curated field must be known")
+	}
+	if known("status") {
+		t.Error("field never written must not be known")
+	}
+
+	// A nil store degrades to curated-only (degraded runtime path).
+	nilKnown, err := NewFieldKnownFunc(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nilKnown("author") {
+		t.Error("nil-store oracle must not accept dynamic fields")
+	}
+	if !nilKnown("repo") {
+		t.Error("nil-store oracle must still accept curated fields")
+	}
+}
+
 func TestFieldDiscoveryHintListsCuratedFields(t *testing.T) {
 	hint := FieldDiscoveryHint()
 	if !strings.Contains(hint, "run 'seek fields'") {

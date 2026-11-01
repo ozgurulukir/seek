@@ -60,48 +60,6 @@ func TestIndexer_WithExtractor(t *testing.T) {
 	}
 }
 
-func TestWriteFastFields(t *testing.T) {
-	tmp := t.TempDir()
-	db, err := store.Open(filepath.Join(tmp, "test.db"))
-	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled")
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	col, err := db.CreateCollection("notes", store.CollectionTypeMarkdown, tmp, "*.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	docID, err := db.UpsertDocument(col.ID, "n.md", "Note", "h", 1, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	idx := New(cfgFromTest(t, tmp, filepath.Join(tmp, "test.db")), db)
-	idx.WithLogger(nopLogger{}) // ignore the small diagnostic output
-
-	idx.writeFastFields(docID, "n.md", map[string]string{
-		"tag":  "go,rust",
-		"date": "2026-01-15",
-		"":     "skipped-empty-key", // empty key must be ignored
-	})
-
-	// Verify written values survive.
-	for key, want := range map[string]string{"tag": "go,rust", "date": "2026-01-15"} {
-		gotVal, err := db.FastFields().Get(docID, key)
-		if err != nil {
-			t.Fatalf("Get(%q): %v", key, err)
-		}
-		got, _ := gotVal.(string)
-		if got != want {
-			t.Errorf("fast field %q = %q, want %q", key, got, want)
-		}
-	}
-}
-
 // cfgFromTest builds a minimal AppConfig for New().
 func cfgFromTest(t *testing.T, cacheDir, dbPath string) *config.AppConfig {
 	t.Helper()

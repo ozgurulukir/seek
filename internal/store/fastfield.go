@@ -54,11 +54,6 @@ func (f *FastFieldStore) Get(docID int64, fieldName string) (interface{}, error)
 	return decodeFastFieldValue(encoded.String)
 }
 
-// BatchGet retrieves fast field values for multiple documents.
-func (f *FastFieldStore) BatchGet(docIDs []int64, fieldName string) (map[int64]interface{}, error) {
-	return f.BatchGetContext(context.Background(), docIDs, fieldName)
-}
-
 // BatchGetContext retrieves fast fields while honoring query cancellation.
 func (f *FastFieldStore) BatchGetContext(ctx context.Context, docIDs []int64, fieldName string) (map[int64]interface{}, error) {
 	if len(docIDs) == 0 {
@@ -113,29 +108,9 @@ func (f *FastFieldStore) BatchGetContext(ctx context.Context, docIDs []int64, fi
 	return result, nil
 }
 
-// Delete removes a fast field value for a document.
-func (f *FastFieldStore) Delete(docID int64, fieldName string) error {
-	_, err := f.db.Exec(
-		`DELETE FROM fast_fields WHERE doc_id = ? AND field_name = ?`,
-		docID, fieldName,
-	)
-	return err
-}
-
-// DeleteForDocument removes all fast field values for a document.
-func (f *FastFieldStore) DeleteForDocument(docID int64) error {
-	_, err := f.db.Exec(`DELETE FROM fast_fields WHERE doc_id = ?`, docID)
-	return err
-}
-
-// ListForDocument returns every fast field of one document decoded to plain
-// text. The semantic backfill reads the current fields so the merged
+// ListForDocumentContext returns every fast field of one document decoded to
+// plain text. The semantic backfill reads the current fields so the merged
 // native+semantic set it writes via UpdateSemanticState preserves them.
-func (f *FastFieldStore) ListForDocument(documentID int64) (map[string]string, error) {
-	return f.ListForDocumentContext(context.Background(), documentID)
-}
-
-// ListForDocumentContext is the cancellation-aware variant of ListForDocument.
 func (f *FastFieldStore) ListForDocumentContext(ctx context.Context, documentID int64) (map[string]string, error) {
 	rows, err := f.db.QueryContext(ctx,
 		`SELECT field_name, field_value FROM fast_fields WHERE doc_id = ?`, documentID)

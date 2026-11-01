@@ -227,21 +227,23 @@ func TestValidateFastField(t *testing.T) {
 	runtime := newRequestTestRuntime(t)
 	ctx := context.Background()
 
-	if _, err := ValidateFastField(ctx, runtime.Store, "topics"); err != nil {
+	// The single-name validation seam lives in store; pin the behavior the
+	// request planner and `seek fields` share through it.
+	if _, err := store.ValidateFilterField(ctx, runtime.Store, "topics"); err != nil {
 		t.Errorf("curated field rejected: %v", err)
 	}
-	if _, err := ValidateFastField(ctx, runtime.Store, "  LANG "); err != nil {
+	if _, err := store.ValidateFilterField(ctx, runtime.Store, "  LANG "); err != nil {
 		t.Errorf("normalization failed: %v", err)
 	}
-	if _, err := ValidateFastField(ctx, runtime.Store, "nope"); err == nil {
+	if _, err := store.ValidateFilterField(ctx, runtime.Store, "nope"); err == nil {
 		t.Error("unknown field must error")
 	}
 
 	// nil store degrades to curated-only validation.
-	if _, err := ValidateFastField(ctx, nil, "topics"); err != nil {
+	if _, err := store.ValidateFilterField(ctx, nil, "topics"); err != nil {
 		t.Errorf("nil-store curated check failed: %v", err)
 	}
-	if _, err := ValidateFastField(ctx, nil, "nope"); err == nil {
+	if _, err := store.ValidateFilterField(ctx, nil, "nope"); err == nil {
 		t.Error("nil-store unknown field must error")
 	}
 }

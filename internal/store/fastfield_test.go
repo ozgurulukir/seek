@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"testing"
 )
 
@@ -85,7 +86,7 @@ func TestFastFieldBatchGet(t *testing.T) {
 	}
 
 	// Batch get
-	vals, err := ff.BatchGet([]int64{1, 2, 3}, "score")
+	vals, err := ff.BatchGetContext(context.Background(), []int64{1, 2, 3}, "score")
 	if err != nil {
 		t.Fatalf("BatchGet failed: %v", err)
 	}
@@ -112,7 +113,7 @@ func TestFastFieldBatchGetMissing(t *testing.T) {
 	ff := db.FastFields()
 
 	// Batch get for non-existent docs
-	vals, err := ff.BatchGet([]int64{1, 2, 3}, "nonexistent")
+	vals, err := ff.BatchGetContext(context.Background(), []int64{1, 2, 3}, "nonexistent")
 	if err != nil {
 		t.Fatalf("BatchGet failed: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestFastFieldBatchGet_Chunked(t *testing.T) {
 		}
 	}
 
-	vals, err := ff.BatchGet(docIDs, "rank")
+	vals, err := ff.BatchGetContext(context.Background(), docIDs, "rank")
 	if err != nil {
 		t.Fatalf("BatchGet failed: %v", err)
 	}
@@ -153,55 +154,6 @@ func TestFastFieldBatchGet_Chunked(t *testing.T) {
 		if vals[id] != want {
 			t.Errorf("doc %d rank = %v, want %v", id, vals[id], want)
 		}
-	}
-}
-
-func TestFastFieldDelete(t *testing.T) {
-	db := newTestStore(t)
-	defer db.Close()
-
-	ff := db.FastFields()
-
-	if err := ff.Set(1, "title", "hello"); err != nil {
-		t.Fatalf("Set failed: %v", err)
-	}
-
-	if err := ff.Delete(1, "title"); err != nil {
-		t.Fatalf("Delete failed: %v", err)
-	}
-
-	val, err := ff.Get(1, "title")
-	if err != nil {
-		t.Fatalf("Get failed: %v", err)
-	}
-
-	if val != nil {
-		t.Errorf("expected nil after delete, got %v", val)
-	}
-}
-
-func TestFastFieldDeleteForDocument(t *testing.T) {
-	db := newTestStore(t)
-	defer db.Close()
-
-	ff := db.FastFields()
-
-	if err := ff.Set(1, "title", "hello"); err != nil {
-		t.Fatalf("Set failed: %v", err)
-	}
-	if err := ff.Set(1, "score", 0.9); err != nil {
-		t.Fatalf("Set failed: %v", err)
-	}
-
-	if err := ff.DeleteForDocument(1); err != nil {
-		t.Fatalf("DeleteForDocument failed: %v", err)
-	}
-
-	val1, _ := ff.Get(1, "title")
-	val2, _ := ff.Get(1, "score")
-
-	if val1 != nil || val2 != nil {
-		t.Error("expected all fields deleted for document")
 	}
 }
 
@@ -275,7 +227,7 @@ func BenchmarkFastFieldBatchGet(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := ff.BatchGet(docIDs, "score")
+		_, err := ff.BatchGetContext(context.Background(), docIDs, "score")
 		if err != nil {
 			b.Fatalf("BatchGet failed: %v", err)
 		}
