@@ -1,11 +1,8 @@
 package embed
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -30,27 +27,20 @@ func NewOCRClient(baseURL, apiKey, model string, maxTokens int) *OCRClient {
 	if maxTokens <= 0 {
 		maxTokens = config.DefaultOCRMaxTokens
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if config.IsNumericLoopbackURL(baseURL) {
-		// ProxyFromEnvironment only special-cases the hostname "localhost";
-		// numeric loopback URLs could otherwise be sent through HTTP_PROXY.
-		transport.Proxy = nil
+	httpClient := newHTTPClient(config.DefaultEmbeddingTimeout, false, baseURL)
+	// OCR requests may carry private document images. Never follow a redirect
+	// automatically — for remote endpoints too, not just the loopback
+	// isolation the shared policy applies: a 3xx must not cause the payload
+	// to be re-sent to a different host.
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
 	}
 	return &OCRClient{
 		baseURL:   baseURL,
 		apiKey:    apiKey,
 		model:     model,
 		maxTokens: maxTokens,
-		http: &http.Client{
-			Transport: transport,
-			Timeout:   config.DefaultEmbeddingTimeout,
-			// OCR requests may carry private document images. Never follow a
-			// redirect automatically; a local endpoint must not be able to
-			// redirect the request to an external host.
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
+		http:      httpClient,
 	}
 }
 
@@ -115,37 +105,9 @@ func (c *OCRClient) ExtractTextWithContext(ctx context.Context, imageDataURI str
 		Stream:      false,
 	}
 
-	body, err := json.Marshal(req)
-	if err != nil {
-		return "", err
-	}
-
-	url := strings.TrimRight(c.baseURL, "/") + "/chat/completions"
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.http.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("ocr request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		return "", fmt.Errorf("ocr status %d: %s", resp.StatusCode, truncate(string(snippet), 300))
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
 	var out ocrResponse
-	if err := json.Unmarshal(data, &out); err != nil {
+	url := strings.TrimRight(c.baseURL, "/") + "/chat/completions"
+	if err := postJSON(ctx, c.http, url, c.apiKey, "ocr", req, &out); err != nil {
 		return "", err
 	}
 	if out.Error != nil {
@@ -155,16 +117,4 @@ func (c *OCRClient) ExtractTextWithContext(ctx context.Context, imageDataURI str
 		return "", fmt.Errorf("ocr: no choices returned")
 	}
 	return out.Choices[0].Message.Content, nil
-}
-
-func truncate(s string, n int) string {
-	// Rune-bounded so a multi-byte UTF-8 rune is never split mid-character.
-	runes := []rune(s)
-	if n < 1 {
-		n = 1
-	}
-	if len(runes) <= n {
-		return s
-	}
-	return string(runes[:n]) + "..."
 }

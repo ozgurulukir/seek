@@ -9,6 +9,14 @@ All notable changes to `seek` are documented here. This follows
   and command coverage for `seek mcp`/`fields`/`doctor`/`uninstall`; correct default
   `max_tokens`, chunk size/overlap, and filter/query-syntax/service reference details.
 
+- **Shared embedding HTTP envelope** (`internal/embed`): the OpenAI-compatible request/response
+  envelope (marshal → POST → Bearer → capped error body → unmarshal → provider-error check) and
+  embedding reordering now live in one place behind the text, VL, OCR, and rerank clients. Loopback
+  endpoints get proxy/redirect isolation for every client (previously OCR-only), while OCR keeps its
+  unconditional never-follow-redirects policy on remote endpoints too; OCR errors use the
+  shared `ocr API <status>` format, and an empty API key no longer sends a degenerate `Bearer `
+  header.
+
 ### Security
 
 - **Windows service task creation** (`cmd`): quote and escape the resolved binary path using

@@ -45,15 +45,9 @@ func newTestVLClient(t *testing.T, texts *[]string) *VLClient {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(vlResponse{
 			Output: struct {
-				Embeddings []struct {
-					Embedding []float32 `json:"embedding"`
-					Index     int       `json:"index"`
-				} `json:"embeddings"`
+				Embeddings []indexedEmbedding `json:"embeddings"`
 			}{
-				Embeddings: []struct {
-					Embedding []float32 `json:"embedding"`
-					Index     int       `json:"index"`
-				}{{Embedding: []float32{0.5, 0.5}, Index: 0}},
+				Embeddings: []indexedEmbedding{{Embedding: []float32{0.5, 0.5}, Index: 0}},
 			},
 		})
 	}))
@@ -163,15 +157,9 @@ func TestNewVLClientOfflineAllowsLoopback(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(vlResponse{
 			Output: struct {
-				Embeddings []struct {
-					Embedding []float32 `json:"embedding"`
-					Index     int       `json:"index"`
-				} `json:"embeddings"`
+				Embeddings []indexedEmbedding `json:"embeddings"`
 			}{
-				Embeddings: []struct {
-					Embedding []float32 `json:"embedding"`
-					Index     int       `json:"index"`
-				}{{Embedding: []float32{0.5, 0.5}, Index: 0}},
+				Embeddings: []indexedEmbedding{{Embedding: []float32{0.5, 0.5}, Index: 0}},
 			},
 		})
 	}))

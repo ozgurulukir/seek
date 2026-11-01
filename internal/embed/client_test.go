@@ -25,10 +25,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 // in request-shape tests satisfy the response completeness contract.
 func writeEmbeddings(w http.ResponseWriter, n int) {
 	w.Header().Set("Content-Type", "application/json")
-	data := make([]struct {
-		Embedding []float32 `json:"embedding"`
-		Index     int       `json:"index"`
-	}, n)
+	data := make([]indexedEmbedding, n)
 	for i := range data {
 		data[i].Embedding = []float32{float32(i + 1), float32(i + 1)}
 		data[i].Index = i
@@ -72,10 +69,7 @@ func TestEmbedRequestShape(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(embeddingResponse{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-				Index     int       `json:"index"`
-			}{
+			Data: []indexedEmbedding{
 				{Embedding: []float32{0.1, 0.2}, Index: 0},
 			},
 		})
@@ -124,10 +118,7 @@ func TestEmbedReordersByIndex(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		// Return out of order to verify reordering by index.
 		json.NewEncoder(w).Encode(embeddingResponse{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-				Index     int       `json:"index"`
-			}{
+			Data: []indexedEmbedding{
 				{Embedding: []float32{3, 3}, Index: 2},
 				{Embedding: []float32{1, 1}, Index: 0},
 				{Embedding: []float32{2, 2}, Index: 1},
@@ -229,10 +220,7 @@ func TestEmbedQuery(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(embeddingResponse{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-				Index     int       `json:"index"`
-			}{
+			Data: []indexedEmbedding{
 				{Embedding: []float32{0.5, 0.5}, Index: 0},
 			},
 		})
@@ -267,10 +255,7 @@ func TestEmbedPartialResponseErrors(t *testing.T) {
 		// Two inputs but only one embedding back.
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(embeddingResponse{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-				Index     int       `json:"index"`
-			}{
+			Data: []indexedEmbedding{
 				{Embedding: []float32{1, 1}, Index: 0},
 			},
 		})
@@ -288,10 +273,7 @@ func TestEmbedDuplicateIndexErrors(t *testing.T) {
 		// Correct count, but a duplicate index leaves input 1 unanswered.
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(embeddingResponse{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-				Index     int       `json:"index"`
-			}{
+			Data: []indexedEmbedding{
 				{Embedding: []float32{1, 1}, Index: 0},
 				{Embedding: []float32{2, 2}, Index: 0},
 			},
@@ -315,16 +297,10 @@ func TestBatchEmbed(t *testing.T) {
 		// Return an embedding derived from the text content so cross-batch
 		// reassembly is verifiable (index restarts at 0 in each batch).
 		w.Header().Set("Content-Type", "application/json")
-		data := make([]struct {
-			Embedding []float32 `json:"embedding"`
-			Index     int       `json:"index"`
-		}, len(req.Input))
+		data := make([]indexedEmbedding, len(req.Input))
 		for i, txt := range req.Input {
 			v := float32(txt[0] - 'a')
-			data[i] = struct {
-				Embedding []float32 `json:"embedding"`
-				Index     int       `json:"index"`
-			}{Embedding: []float32{v, v}, Index: i}
+			data[i] = indexedEmbedding{Embedding: []float32{v, v}, Index: i}
 		}
 		json.NewEncoder(w).Encode(embeddingResponse{Data: data})
 	})
