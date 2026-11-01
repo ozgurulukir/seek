@@ -55,26 +55,20 @@ func (r *StoreSearchRepository) GetChunkContent(ctx context.Context, chunkID int
 	return r.store.GetChunkContentContext(ctx, chunkID)
 }
 
-func (r *StoreSearchRepository) ExecuteAggregation(ctx context.Context, aggregation search.Aggregation, filters *search.FilterSet) ([]search.Bucket, error) {
+func (r *StoreSearchRepository) ExecuteAggregation(ctx context.Context, spec search.AggregationSpec, filters *search.FilterSet) ([]search.Bucket, error) {
 	storeFilters, err := toStoreFilters(filters)
 	if err != nil {
 		return nil, err
 	}
-	spec := aggregation.Spec()
+	// ParseAggregation leaves an unset terms size at 0 so this adapter's
+	// configured limit (aggregations.default_bucket_limit) is the one default
+	// site; store re-applies its own fallback should the size stay unset.
 	size := spec.Size
-	if spec.Type == search.AggregationTerm {
-		if termAgg, ok := aggregation.(*search.TermAggregation); ok && termAgg.Size <= 0 {
-			if r != nil && r.defaultBucketLimit > 0 {
-				size = r.defaultBucketLimit
-			} else {
-				size = store.DefaultAggregationBucketLimit
-			}
-		} else if size <= 0 {
-			if r != nil && r.defaultBucketLimit > 0 {
-				size = r.defaultBucketLimit
-			} else {
-				size = store.DefaultAggregationBucketLimit
-			}
+	if spec.Type == search.AggregationTerm && size <= 0 {
+		if r.defaultBucketLimit > 0 {
+			size = r.defaultBucketLimit
+		} else {
+			size = store.DefaultAggregationBucketLimit
 		}
 	}
 	buckets, err := r.store.ExecuteAggregationContext(ctx, store.AggregationSpec{

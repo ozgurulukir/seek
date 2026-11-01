@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/config"
-	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
@@ -37,8 +36,8 @@ func TestRunAggs_TermsBounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunAggs: %v", err)
 	}
-	if got := len(aggs["path:terms"]); got != search.DefaultAggregationBucketLimit {
-		t.Fatalf("default path:terms buckets = %d, want %d", got, search.DefaultAggregationBucketLimit)
+	if got := len(aggs["path:terms"]); got != store.DefaultAggregationBucketLimit {
+		t.Fatalf("default path:terms buckets = %d, want %d", got, store.DefaultAggregationBucketLimit)
 	}
 
 	// 2. Explicit override smaller (3)

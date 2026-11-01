@@ -481,8 +481,8 @@ func TestRangeAggregation_CustomField(t *testing.T) {
 	_, _ = s.UpsertDocument(col.ID, "/tmp/doc2.md", "doc2", "hash2", 8.0, 100)
 	_, _ = s.UpsertDocument(col.ID, "/tmp/doc3.md", "doc3", "hash3", 25.0, 100)
 
-	// If RangeAggregation ignored field, all line_counts (100) would bucket together.
-	// But using mtime, 2.0 is in 0-5, 8.0 is in 5-20, 25.0 is in other.
+	// If the range aggregation ignored field, all line_counts (100) would
+	// bucket together. But using mtime, 2.0 is in 0-5, 8.0 is in 5-20, 25.0 is in other.
 	specs := []string{
 		"mtime:range:0-5,5-20",
 	}
