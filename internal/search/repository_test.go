@@ -43,14 +43,13 @@ func (r *testStoreRepository) GetChunkContent(ctx context.Context, chunkID int64
 	return r.store.GetChunkContentContext(ctx, chunkID)
 }
 
-func (r *testStoreRepository) ExecuteAggregation(ctx context.Context, aggregation Aggregation, filters *FilterSet) ([]Bucket, error) {
+func (r *testStoreRepository) ExecuteAggregation(ctx context.Context, spec AggregationSpec, filters *FilterSet) ([]Bucket, error) {
 	storeFilters, err := testStoreFilters(filters)
 	if err != nil {
 		return nil, err
 	}
-	spec := aggregation.Spec()
 	buckets, err := r.store.ExecuteAggregationContext(ctx, store.AggregationSpec{
-		Type: string(spec.Type), Field: spec.Field, Interval: spec.Interval, Ranges: spec.Ranges,
+		Type: string(spec.Type), Field: spec.Field, Interval: spec.Interval, Ranges: spec.Ranges, Size: spec.Size,
 	}, storeFilters)
 	if err != nil {
 		return nil, err
@@ -147,7 +146,7 @@ func (f *fakeSearchRepository) GetChunkContent(context.Context, int64) (string, 
 	return "", nil
 }
 
-func (f *fakeSearchRepository) ExecuteAggregation(_ context.Context, _ Aggregation, filters *FilterSet) ([]Bucket, error) {
+func (f *fakeSearchRepository) ExecuteAggregation(_ context.Context, _ AggregationSpec, filters *FilterSet) ([]Bucket, error) {
 	f.filters = filters
 	return []Bucket{{Key: "markdown", Count: 1}}, nil
 }
