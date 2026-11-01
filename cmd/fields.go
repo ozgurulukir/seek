@@ -120,7 +120,7 @@ func buildFieldsSummary(db *store.Store, collection string) (jsonSummaryResponse
 // by the `seek fields` command and the MCP seek_fields tool. The result is
 // non-nil so JSON emits [] for no values.
 func listFieldValues(ctx context.Context, db *store.Store, field, collection, prefix string, limit int) ([]store.FieldValueCount, error) {
-	field, err := app.ValidateFastField(ctx, db, field)
+	field, err := store.ValidateFilterField(ctx, db, field)
 	if err != nil {
 		return nil, err
 	}

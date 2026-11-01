@@ -82,28 +82,6 @@ func EffectiveAnalyzeLang(flagLang string, cfg *config.AppConfig) string {
 	return config.DefaultAnalyzeLang
 }
 
-// ValidateFastField resolves a fast-field name against the curated registry
-// plus the names physically present in the index. It is the one validation
-// seam shared by the search planner, `seek fields`, and MCP tools. The name
-// is lowercased/trimmed like every store-side field lookup.
-func ValidateFastField(ctx context.Context, db *store.Store, name string) (string, error) {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if db == nil {
-		if !store.ValidFastField(name) {
-			return "", fmt.Errorf("unknown fast field %q (%s)", name, store.FieldDiscoveryHint())
-		}
-		return name, nil
-	}
-	resolver, err := store.NewFastFieldResolver(ctx, db)
-	if err != nil {
-		return "", fmt.Errorf("resolve fast fields: %w", err)
-	}
-	if !resolver.Known(name) {
-		return "", fmt.Errorf("unknown fast field %q (%s)", name, store.FieldDiscoveryHint())
-	}
-	return name, nil
-}
-
 // planSearch compiles req against the runtime configuration: builds the
 // FilterSet (including "name:value" parsing and fast-field validation),
 // resolves the effective query mode and analyze language, constructs the
@@ -112,7 +90,20 @@ func ValidateFastField(ctx context.Context, db *store.Store, name string) (strin
 func (r *Runtime) planSearch(ctx context.Context, req SearchRequest) (search.Options, error) {
 	opts := search.Options{Limit: req.Limit}
 
-	filters, err := r.buildRequestFilters(ctx, req)
+	// One resolver snapshot (one DISTINCT query) serves every --field and
+	// --sort-by occurrence in this request; it is built only when the request
+	// actually carries field validation work. Without a store (degraded test
+	// runtime) only curated names validate.
+	known := store.FieldKnownFunc(store.ValidFastField)
+	if len(req.Fields) > 0 || req.SortBy != "" {
+		var err error
+		known, err = store.NewFieldKnownFunc(ctx, r.Store)
+		if err != nil {
+			return opts, err
+		}
+	}
+
+	filters, err := r.buildRequestFilters(known, req)
 	if err != nil {
 		return opts, err
 	}
@@ -138,7 +129,7 @@ func (r *Runtime) planSearch(ctx context.Context, req SearchRequest) (search.Opt
 
 	opts.SortBy = req.SortBy
 	if opts.SortBy != "" {
-		if err := r.validateSortField(ctx, opts.SortBy); err != nil {
+		if err := validateSortField(known, opts.SortBy); err != nil {
 			return opts, err
 		}
 	}
@@ -153,18 +144,11 @@ func (r *Runtime) planSearch(ctx context.Context, req SearchRequest) (search.Opt
 // documents-column pseudo-fields) and any fast field physically present in
 // the index, mirroring --field validation. Unknown names error instead of
 // silently degrading to relevance order.
-func (r *Runtime) validateSortField(ctx context.Context, field string) error {
+func validateSortField(known store.FieldKnownFunc, field string) error {
 	if store.SortableField(field) {
 		return nil
 	}
-	if r.Store == nil {
-		return fmt.Errorf("--sort-by: unknown field %q (%s)", field, store.FieldDiscoveryHint())
-	}
-	resolver, err := store.NewFastFieldResolver(ctx, r.Store)
-	if err != nil {
-		return fmt.Errorf("resolve sort field: %w", err)
-	}
-	if !resolver.Known(field) {
+	if !known(field) {
 		return fmt.Errorf("--sort-by: unknown field %q (%s)", field, store.FieldDiscoveryHint())
 	}
 	return nil
@@ -172,7 +156,7 @@ func (r *Runtime) validateSortField(ctx context.Context, field string) error {
 
 // buildRequestFilters maps the request's filter slots into the domain
 // FilterSet. A request with no filter set yields a nil FilterSet.
-func (r *Runtime) buildRequestFilters(ctx context.Context, req SearchRequest) (*search.FilterSet, error) {
+func (r *Runtime) buildRequestFilters(known store.FieldKnownFunc, req SearchRequest) (*search.FilterSet, error) {
 	colName := req.Collection
 	if colName == "" {
 		colName = req.Repo
@@ -228,20 +212,9 @@ func (r *Runtime) buildRequestFilters(ctx context.Context, req SearchRequest) (*
 		filters.Add(search.WorkspaceFilter(req.Workspace))
 	}
 	if len(req.Fields) > 0 {
-		// One resolver snapshot covers every --field occurrence in this
-		// request; it accepts curated fast fields plus any field physically
-		// present in the index. Without a store (degraded test runtime) only
-		// curated names validate.
-		var known func(string) bool
-		if r.Store != nil {
-			resolver, err := store.NewFastFieldResolver(ctx, r.Store)
-			if err != nil {
-				return nil, fmt.Errorf("resolve fast fields: %w", err)
-			}
-			known = resolver.Known
-		} else {
-			known = store.ValidFastField
-		}
+		// The per-request oracle accepts curated fast fields plus any field
+		// physically present in the index; planSearch built it once above so
+		// this loop, --sort-by, and one-off validation share the same rule.
 		for _, f := range req.Fields {
 			field, value, ok := strings.Cut(f, ":")
 			if !ok || field == "" || value == "" {
