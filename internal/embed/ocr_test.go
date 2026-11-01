@@ -85,6 +85,27 @@ func TestOCRClientDoesNotFollowRedirects(t *testing.T) {
 	}
 }
 
+// TestOCRClientRejectsRedirectsOnAnyEndpoint pins the no-redirect policy for
+// remote endpoints as well: the loopback isolation in newHTTPClient must not
+// be the only reason the OCR client refuses to follow redirects, because OCR
+// requests carry private document images.
+func TestOCRClientRejectsRedirectsOnAnyEndpoint(t *testing.T) {
+	endpoints := []string{
+		"http://127.0.0.1:8080/v1",
+		"https://ocr.example.com/compatible-mode/v1",
+	}
+	for _, ep := range endpoints {
+		client := NewOCRClient(ep, "k", "test-model", 0).http
+		if client.CheckRedirect == nil {
+			t.Errorf("endpoint %s: CheckRedirect is nil, want no-redirect policy", ep)
+			continue
+		}
+		if err := client.CheckRedirect(nil, nil); err != http.ErrUseLastResponse {
+			t.Errorf("endpoint %s: CheckRedirect = %v, want %v", ep, err, http.ErrUseLastResponse)
+		}
+	}
+}
+
 func TestOCRClientExtractTextWithContext(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

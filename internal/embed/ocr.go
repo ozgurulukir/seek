@@ -27,15 +27,20 @@ func NewOCRClient(baseURL, apiKey, model string, maxTokens int) *OCRClient {
 	if maxTokens <= 0 {
 		maxTokens = config.DefaultOCRMaxTokens
 	}
+	httpClient := newHTTPClient(config.DefaultEmbeddingTimeout, false, baseURL)
+	// OCR requests may carry private document images. Never follow a redirect
+	// automatically — for remote endpoints too, not just the loopback
+	// isolation the shared policy applies: a 3xx must not cause the payload
+	// to be re-sent to a different host.
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 	return &OCRClient{
 		baseURL:   baseURL,
 		apiKey:    apiKey,
 		model:     model,
 		maxTokens: maxTokens,
-		// The shared transport policy isolates loopback endpoints: they ride
-		// no environment proxy and may not redirect private document images
-		// to an external host.
-		http: newHTTPClient(config.DefaultEmbeddingTimeout, false, baseURL),
+		http:      httpClient,
 	}
 }
 
