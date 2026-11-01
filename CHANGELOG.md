@@ -5,6 +5,8 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-11-01
+
 - docs: refresh seek skill — canonical `--type`/`--agent` add selectors, `seek hooks doctor`,
   and command coverage for `seek mcp`/`fields`/`doctor`/`uninstall`; correct default
   `max_tokens`, chunk size/overlap, and filter/query-syntax/service reference details.
