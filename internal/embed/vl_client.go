@@ -1,13 +1,10 @@
 package embed
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -71,7 +68,7 @@ func newVLClient(apiKey, model string, dimensions int, endpoint string, taskPref
 		dimensions:    dimensions,
 		endpoint:      endpoint,
 		taskPrefix:    taskPrefix,
-		http:          newHTTPClient(config.DefaultVLTimeout, offline),
+		http:          newHTTPClient(config.DefaultVLTimeout, offline, endpoint),
 		refuseNetwork: refuseNetwork,
 	}
 }
@@ -96,10 +93,7 @@ type vlParams struct {
 // vlResponse is the DashScope multimodal embedding response format.
 type vlResponse struct {
 	Output struct {
-		Embeddings []struct {
-			Embedding []float32 `json:"embedding"`
-			Index     int       `json:"index"`
-		} `json:"embeddings"`
+		Embeddings []indexedEmbedding `json:"embeddings"`
 	} `json:"output"`
 	Usage struct {
 		InputTokens int `json:"input_tokens"`
@@ -264,65 +258,16 @@ func (c *VLClient) doRequestContext(ctx context.Context, items []EmbedItem) ([][
 		},
 	}
 
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.http.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("vl request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Non-2xx responses must not echo unbounded provider output back into the
-	// error path (maxErrorBody cap).
-	if resp.StatusCode != http.StatusOK {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		return nil, fmt.Errorf("vl API %d: %s", resp.StatusCode, string(snippet))
-	}
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
 	var vlResp vlResponse
-	if err := json.Unmarshal(respBody, &vlResp); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
+	if err := postJSON(ctx, c.http, c.endpoint, c.apiKey, "vl", req, &vlResp); err != nil {
+		return nil, err
 	}
 
 	if vlResp.Code != "" {
 		return nil, fmt.Errorf("vl API error [%s]: %s", vlResp.Code, vlResp.Message)
 	}
 
-	if len(vlResp.Output.Embeddings) != len(items) {
-		return nil, fmt.Errorf("vl API returned %d embeddings, expected %d", len(vlResp.Output.Embeddings), len(items))
-	}
-
-	// Re-order by index
-	result := make([][]float32, len(items))
-	for _, e := range vlResp.Output.Embeddings {
-		if e.Index < 0 || e.Index >= len(result) {
-			return nil, fmt.Errorf("vl API returned index %d out of range (expected 0..%d)", e.Index, len(result)-1)
-		}
-		result[e.Index] = e.Embedding
-	}
-	// Duplicate indexes would satisfy the count check while leaving nil holes.
-	for i, emb := range result {
-		if len(emb) == 0 {
-			return nil, fmt.Errorf("vl API returned no embedding for input %d", i)
-		}
-	}
-
-	return result, nil
+	return reorderEmbeddings("vl", vlResp.Output.Embeddings, len(items))
 }
 
 // ImageToDataURI reads an image file and returns a data URI string.

@@ -1,31 +1,13 @@
 package embed
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/ozgurulukir/seek/internal/config"
 )
-
-// maxErrorBody bounds how many bytes of a non-OK response body are read and
-// echoed into error messages. This prevents large or hostile responses from
-// being dumped verbatim into errors/logs (potential secret/response leakage).
-const maxErrorBody = 2 << 10 // 2KiB
-
-// boundedErrorSnippet returns at most the first maxErrorBody bytes of an
-// already-read response body, for safe inclusion in error messages.
-func boundedErrorSnippet(body []byte) string {
-	if len(body) > maxErrorBody {
-		body = body[:maxErrorBody]
-	}
-	return string(body)
-}
 
 // TaskPrefix holds model-specific input prefixes for asymmetric embedding
 // models (e.g. Nomic's "search_query: "/"search_document: "). The zero
@@ -91,31 +73,9 @@ func newClient(baseURL, apiKey, model string, dimensions int, taskPrefix TaskPre
 		model:      model,
 		dimensions: dimensions,
 		taskPrefix: taskPrefix,
-		http:       newHTTPClient(config.DefaultEmbeddingTimeout, offline),
+		http:       newHTTPClient(config.DefaultEmbeddingTimeout, offline, baseURL),
 		offline:    offline,
 	}
-}
-
-// newHTTPClient applies the additional transport restrictions required by
-// offline-only mode. The default path deliberately keeps Go's normal proxy
-// and redirect behavior for remote providers.
-func newHTTPClient(timeout time.Duration, offline bool) *http.Client {
-	client := &http.Client{Timeout: timeout}
-	if !offline {
-		return client
-	}
-	transport, ok := http.DefaultTransport.(*http.Transport)
-	if ok {
-		transport = transport.Clone()
-	} else {
-		transport = &http.Transport{}
-	}
-	transport.Proxy = nil
-	client.Transport = transport
-	client.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-	return client
 }
 
 type embeddingRequest struct {
@@ -125,10 +85,7 @@ type embeddingRequest struct {
 }
 
 type embeddingResponse struct {
-	Data []struct {
-		Embedding []float32 `json:"embedding"`
-		Index     int       `json:"index"`
-	} `json:"data"`
+	Data  []indexedEmbedding `json:"data"`
 	Usage struct {
 		TotalTokens int `json:"total_tokens"`
 	} `json:"usage"`
@@ -156,62 +113,14 @@ func (c *Client) embedContext(ctx context.Context, texts []string) ([][]float32,
 		req.Dimensions = c.dimensions
 	}
 
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/embeddings", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.http.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("embedding request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		return nil, fmt.Errorf("embedding API %d: %s", resp.StatusCode, string(snippet))
-	}
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
 	var embResp embeddingResponse
-	if err := json.Unmarshal(respBody, &embResp); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
+	if err := postJSON(ctx, c.http, c.baseURL+"/embeddings", c.apiKey, "embedding", req, &embResp); err != nil {
+		return nil, err
 	}
 	if embResp.Error != nil {
 		return nil, fmt.Errorf("embedding error: %s", embResp.Error.Message)
 	}
-
-	if len(embResp.Data) != len(texts) {
-		return nil, fmt.Errorf("embedding API returned %d embeddings, expected %d", len(embResp.Data), len(texts))
-	}
-
-	// Re-order by index
-	result := make([][]float32, len(texts))
-	for _, d := range embResp.Data {
-		if d.Index < 0 || d.Index >= len(result) {
-			return nil, fmt.Errorf("embedding API returned index %d out of range (expected 0..%d)", d.Index, len(result)-1)
-		}
-		result[d.Index] = d.Embedding
-	}
-	// Duplicate indexes would satisfy the count check while leaving nil holes.
-	for i, emb := range result {
-		if len(emb) == 0 {
-			return nil, fmt.Errorf("embedding API returned no embedding for input %d", i)
-		}
-	}
-
-	return result, nil
+	return reorderEmbeddings("embedding", embResp.Data, len(texts))
 }
 
 // EmbedDocuments embeds indexed document texts, prepending the configured

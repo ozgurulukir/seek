@@ -1,11 +1,8 @@
 package embed
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -55,7 +52,7 @@ func newRerankClient(baseURL, apiKey, model string, offline bool) *RerankClient 
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		model:   model,
-		http:    newHTTPClient(30*time.Second, offline),
+		http:    newHTTPClient(30*time.Second, offline, baseURL),
 	}
 }
 
@@ -92,44 +89,14 @@ func (c *RerankClient) Rerank(ctx context.Context, query string, documents []str
 		TopN:      topN,
 	}
 
-	body, err := json.Marshal(reqPayload)
-	if err != nil {
-		return nil, err
-	}
-
 	endpoint := c.baseURL
 	if !strings.HasSuffix(endpoint, "/rerank") {
 		endpoint += "/rerank"
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-
-	resp, err := c.http.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("rerank request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		return nil, fmt.Errorf("rerank API %d: %s", resp.StatusCode, string(snippet))
-	}
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
 	var parsedResp rerankResponse
-	if err := json.Unmarshal(respBody, &parsedResp); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
+	if err := postJSON(ctx, c.http, endpoint, c.apiKey, "rerank", reqPayload, &parsedResp); err != nil {
+		return nil, err
 	}
 	if parsedResp.Error != nil {
 		return nil, fmt.Errorf("rerank error: %s", parsedResp.Error.Message)
