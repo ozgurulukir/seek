@@ -18,5 +18,5 @@ type SearchRepository interface {
 	// the map (the engine sorts them last, preserving relative order).
 	SortValues(ctx context.Context, documentIDs []int64, field string) (map[int64]interface{}, error)
 	GetChunkContent(ctx context.Context, chunkID int64) (string, error)
-	ExecuteAggregation(ctx context.Context, aggregation Aggregation, filters *FilterSet) ([]Bucket, error)
+	ExecuteAggregation(ctx context.Context, spec AggregationSpec, filters *FilterSet) ([]Bucket, error)
 }

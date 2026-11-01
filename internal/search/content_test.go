@@ -33,7 +33,7 @@ func (m *mockContentRepository) GetChunkContent(ctx context.Context, chunkID int
 	return "", errors.New("chunk not found")
 }
 
-func (m *mockContentRepository) ExecuteAggregation(ctx context.Context, aggregation Aggregation, filters *FilterSet) ([]Bucket, error) {
+func (m *mockContentRepository) ExecuteAggregation(ctx context.Context, spec AggregationSpec, filters *FilterSet) ([]Bucket, error) {
 	return nil, nil
 }
 
