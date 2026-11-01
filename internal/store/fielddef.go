@@ -202,3 +202,45 @@ func FieldDiscoveryHint() string {
 	return "run 'seek fields' to list indexed fields (curated: " +
 		strings.Join(SupportedFastFields(), ", ") + ")"
 }
+
+// FieldKnownFunc reports whether a field name may be used as a --field
+// filter or --sort-by value: either a curated registry entry or a field
+// physically present in fast_fields.
+type FieldKnownFunc func(name string) bool
+
+// NewFieldKnownFunc snapshots the field names currently present in
+// fast_fields (one DISTINCT query) and returns the predicate every
+// request-path validation shares. A nil store degrades to curated-only
+// validation, which keeps degraded test runtimes deterministic. A field
+// written after the snapshot is simply not accepted until the next
+// snapshot — the same one-snapshot-per-invocation contract
+// FastFieldResolver documents.
+func NewFieldKnownFunc(ctx context.Context, s *Store) (FieldKnownFunc, error) {
+	if s == nil {
+		return ValidFastField, nil
+	}
+	resolver, err := NewFastFieldResolver(ctx, s)
+	if err != nil {
+		return nil, fmt.Errorf("resolve fast fields: %w", err)
+	}
+	return resolver.Known, nil
+}
+
+// ValidateFilterField resolves one filterable field name against the curated
+// registry plus the names physically present in fast_fields. It is the
+// single validation seam for one-off name checks (`seek fields`, MCP tools);
+// request planning uses NewFieldKnownFunc so one snapshot covers every
+// --field and --sort-by occurrence. The name is lowercased/trimmed like
+// every store-side field lookup. A nil store degrades to curated-only
+// validation.
+func ValidateFilterField(ctx context.Context, s *Store, name string) (string, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	known, err := NewFieldKnownFunc(ctx, s)
+	if err != nil {
+		return "", err
+	}
+	if !known(name) {
+		return "", fmt.Errorf("unknown fast field %q (%s)", name, FieldDiscoveryHint())
+	}
+	return name, nil
+}

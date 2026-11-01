@@ -220,24 +220,6 @@ func (idx *Indexer) ctx() context.Context {
 	return ctx
 }
 
-// writeFastFields is retained for package-level helpers and older callers;
-// production document paths use DocumentIndex.FastFields so metadata commits
-// in the same transaction as the document and chunks.
-func (idx *Indexer) writeFastFields(docID int64, label string, metadata map[string]string) {
-	for field, value := range metadata {
-		if value == "" {
-			continue
-		}
-		if err := idx.db.FastFields().Set(docID, field, value); err != nil {
-			if label != "" {
-				idx.warnf("  WARN: fastfield %s=%s %s: %v\n", field, value, label, err)
-			} else {
-				idx.warnf("  WARN: metadata %s=%s: %v\n", field, value, err)
-			}
-		}
-	}
-}
-
 func (idx *Indexer) WithLogger(l Logger) *Indexer {
 	if l == nil {
 		l = defaultLogger{}
