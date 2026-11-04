@@ -322,26 +322,34 @@ func (r ftsRepository) searchContext(ctx context.Context, query string, limit in
 		return nil, fmt.Errorf("search fts rows: %w", err)
 	}
 
-	// Populate line numbers from first chunk for all results in a single batch query
+	// Populate line numbers from first chunk for all results in batched
+	// queries (500 ids per query, per the repo-wide batching convention).
 	if len(docIDs) > 0 {
-		docArgs := make([]interface{}, len(docIDs))
-		for i, id := range docIDs {
-			docArgs[i] = id
+		type lineSpan struct {
+			start, end int
 		}
-		chunkQuery := `SELECT document_id, COALESCE(start_line, 0), COALESCE(end_line, 0)
-			FROM (
-				SELECT document_id, start_line, end_line,
-				       ROW_NUMBER() OVER (PARTITION BY document_id ORDER BY seq ASC) as rn
-				FROM chunks WHERE document_id IN (` + sqlPlaceholders(len(docIDs)) + `)
-			) WHERE rn = 1`
-		chunkRows, err := r.db.QueryContext(ctx, chunkQuery, docArgs...)
-		if err != nil {
-			return nil, fmt.Errorf("line-span query for %d documents: %w", len(docIDs), err)
-		} else {
-			type lineSpan struct {
-				start, end int
+		spans := make(map[int64]lineSpan, len(docIDs))
+		const chunkSize = 500
+		for start := 0; start < len(docIDs); start += chunkSize {
+			end := start + chunkSize
+			if end > len(docIDs) {
+				end = len(docIDs)
 			}
-			spans := make(map[int64]lineSpan, len(docIDs))
+			batch := docIDs[start:end]
+			chunkQuery := `SELECT document_id, COALESCE(start_line, 0), COALESCE(end_line, 0)
+				FROM (
+					SELECT document_id, start_line, end_line,
+					       ROW_NUMBER() OVER (PARTITION BY document_id ORDER BY seq ASC) as rn
+					FROM chunks WHERE document_id IN (` + sqlPlaceholders(len(batch)) + `)
+				) WHERE rn = 1`
+			docArgs := make([]interface{}, len(batch))
+			for i, id := range batch {
+				docArgs[i] = id
+			}
+			chunkRows, err := r.db.QueryContext(ctx, chunkQuery, docArgs...)
+			if err != nil {
+				return nil, fmt.Errorf("line-span query for %d documents: %w", len(docIDs), err)
+			}
 			for chunkRows.Next() {
 				var docID int64
 				var sLine, eLine int
@@ -358,13 +366,46 @@ func (r ftsRepository) searchContext(ctx context.Context, query string, limit in
 			if err := chunkRows.Close(); err != nil {
 				return nil, fmt.Errorf("close line-span rows: %w", err)
 			}
-			for i := range results {
-				if span, ok := spans[results[i].DocumentID]; ok {
-					results[i].StartLine = span.start
-					results[i].EndLine = span.end
-				}
+		}
+		for i := range results {
+			if span, ok := spans[results[i].DocumentID]; ok {
+				results[i].StartLine = span.start
+				results[i].EndLine = span.end
 			}
 		}
 	}
 	return results, nil
+}
+
+// CountFTSMatching returns the number of documents whose FTS row matches the
+// given MATCH expression. The joins mirror searchContext so rows whose
+// document or collection parents are gone stay invisible, and filters apply
+// with the same AND semantics as the search path.
+func (s *Store) CountFTSMatching(ctx context.Context, query string, filters *FilterSet) (int64, error) {
+	return s.repositories.fts.countMatchingContext(ctx, query, filters)
+}
+
+func (r ftsRepository) countMatchingContext(ctx context.Context, query string, filters *FilterSet) (int64, error) {
+	sqlQuery := `SELECT count(*)
+		 FROM documents_fts f
+		 JOIN documents d ON d.id = f.rowid
+		 JOIN collections c ON c.id = d.collection_id
+		 WHERE documents_fts MATCH ?`
+	var args []interface{}
+	args = append(args, query)
+	if filters != nil {
+		clause, fargs, err := filters.ToSQL()
+		if err != nil {
+			return 0, err
+		}
+		if clause != "" {
+			sqlQuery += " AND " + clause
+			args = append(args, fargs...)
+		}
+	}
+	var count int64
+	if err := r.db.QueryRowContext(ctx, sqlQuery, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count fts matches: %w", err)
+	}
+	return count, nil
 }

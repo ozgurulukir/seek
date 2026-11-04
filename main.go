@@ -32,6 +32,7 @@ var cli struct {
 	Uninstall  cmd.UninstallCmd  `cmd:"" help:"Remove seek service, hooks, cache, and config (--dry-run first)"`
 	Parsers    cmd.ParsersCmd    `cmd:"" help:"Manage schema-driven parser definitions"`
 	Fields     cmd.FieldsCmd     `cmd:"" help:"Discover fast-field values and taxonomy (tags, topics, entities, etc.)"`
+	Bench      cmd.BenchCmd      `cmd:"" help:"search-benchmark-game harness bridge (index, serve, report)"`
 	Mcp        cmd.McpCmd        `cmd:"" help:"Run MCP (Model Context Protocol) server on stdio for AI agents"`
 }
 

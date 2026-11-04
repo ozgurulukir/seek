@@ -1,0 +1,7 @@
+[
+  "Written in Go. SQLite FTS5 with the unicode61 tokenizer (no stemming) over doc-level FTS rows.",
+  "BM25 ranking via FTS5's bm25() (k1=1.2, b=0.75); the corpus ships no titles so the title column stays empty.",
+  "Top-K runs seek's real search path (bm25 rank, snippet, line spans); FTS5 has no lazy top-K pruning (no WAND), so every match is scored before ranking.",
+  "The corpus is additionally stored chunked by seek's retrieval chunker; hit counts remain document-level.",
+  "Index persists to SQLite (WAL) in the engine's index/ directory."
+]

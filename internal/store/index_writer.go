@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -56,9 +57,54 @@ func (s *Store) writeIndex(ctx context.Context, req DocumentIndex, replace bool)
 	}
 	defer tx.Rollback()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	docID, err := writeIndexInTx(ctx, tx, req, replace, s.compressionEnabled, s.compressionLevel, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit index transaction: %w", err)
+	}
+	return docID, nil
+}
+
+// UpsertAndReplaceIndexBatchContext replaces all searchable state for a batch
+// of documents, committing every batchSize documents in one transaction.
+// This keeps bulk loads (e.g. the benchmark corpus) from fsync-bound on one
+// commit per document while preserving the atomic-replace semantics within
+// each committed group. The first failure aborts the remaining batches;
+// batches committed before the failure stay committed.
+func (s *Store) UpsertAndReplaceIndexBatchContext(ctx context.Context, reqs []DocumentIndex, batchSize int) error {
+	if batchSize <= 0 {
+		batchSize = 500
+	}
+	for start := 0; start < len(reqs); start += batchSize {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end := start + batchSize
+		if end > len(reqs) {
+			end = len(reqs)
+		}
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin index transaction: %w", err)
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		for _, req := range reqs[start:end] {
+			if _, err := writeIndexInTx(ctx, tx, req, true, s.compressionEnabled, s.compressionLevel, now); err != nil {
+				return errors.Join(err, tx.Rollback())
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit index transaction: %w", err)
+		}
+	}
+	return nil
+}
+
+func writeIndexInTx(ctx context.Context, tx *sql.Tx, req DocumentIndex, replace bool, compressionEnabled bool, compressionLevel int, now string) (int64, error) {
 	var docID int64
-	err = tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		INSERT INTO documents (collection_id, path, title, content_hash, mtime, line_count, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(collection_id, path) DO UPDATE SET
@@ -121,7 +167,7 @@ func (s *Store) writeIndex(ctx context.Context, req DocumentIndex, replace bool)
 	}
 
 	for _, ch := range req.Chunks {
-		if err := insertIndexChunk(ctx, tx, docID, ch, s.compressionEnabled, s.compressionLevel, now); err != nil {
+		if err := insertIndexChunk(ctx, tx, docID, ch, compressionEnabled, compressionLevel, now); err != nil {
 			return 0, err
 		}
 	}
@@ -136,10 +182,6 @@ func (s *Store) writeIndex(ctx context.Context, req DocumentIndex, replace bool)
 		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO fast_fields (doc_id, field_name, field_value) VALUES (?, ?, ?)`, docID, field, encoded); err != nil {
 			return 0, fmt.Errorf("write fast field %q: %w", field, err)
 		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit index transaction: %w", err)
 	}
 	return docID, nil
 }
