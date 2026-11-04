@@ -43,17 +43,21 @@ func (c *BenchIndexCmd) Run(cfg *config.AppConfig) (err error) {
 		}
 	}
 
+	progressed := false
 	stats, err := bench.Ingest(context.Background(), os.Stdin, bench.IngestOptions{
 		DBPath:         dbPath,
 		CollectionName: c.Collection,
 		BatchSize:      c.BatchSize,
 	}, func(docs, bytes int64) {
+		progressed = true
 		fmt.Fprintf(os.Stderr, "\rindexed %d docs (%.1f MB)", docs, float64(bytes)/(1<<20))
 	})
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "\n")
+	if progressed {
+		fmt.Fprintf(os.Stderr, "\n")
+	}
 	secs := stats.Elapsed.Seconds()
 	rate := 0.0
 	if secs > 0 {

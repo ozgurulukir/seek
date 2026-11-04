@@ -115,6 +115,9 @@ func readGameClause(runes []rune, i int) (gameClause, int, error) {
 		if text == "" {
 			return gameClause{}, i, errors.New("empty phrase")
 		}
+		if err := checkGameClauseText(text); err != nil {
+			return gameClause{}, i, err
+		}
 		return gameClause{text: text}, end + 1, nil
 	}
 	j := i
@@ -125,7 +128,29 @@ func readGameClause(runes []rune, i int) (gameClause, int, error) {
 	if text == "" {
 		return gameClause{}, i, errors.New("empty term")
 	}
+	if err := checkGameClauseText(text); err != nil {
+		return gameClause{}, i, err
+	}
 	return gameClause{text: text}, j, nil
+}
+
+// checkGameClauseText rejects Lucene syntax the translator does not model.
+// Answering UNSUPPORTED is strictly safer than silently misinterpreting it:
+// a '-'-prefixed clause would invert semantics (match-for instead of
+// match-not), wildcard characters would lose their prefix semantics, and
+// uppercase AND/OR/NOT would be searched as literal terms.
+func checkGameClauseText(text string) error {
+	if strings.HasPrefix(text, "-") {
+		return fmt.Errorf("unsupported Lucene negation clause %q", text)
+	}
+	if strings.ContainsAny(text, "*?") {
+		return fmt.Errorf("unsupported Lucene wildcard clause %q", text)
+	}
+	switch text {
+	case "AND", "OR", "NOT":
+		return fmt.Errorf("unsupported Lucene boolean operator %q", text)
+	}
+	return nil
 }
 
 // fts5Clause renders one clause as a quoted FTS5 phrase. Single tokens become

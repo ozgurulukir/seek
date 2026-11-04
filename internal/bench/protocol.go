@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
@@ -32,6 +33,13 @@ type ServeOptions struct {
 // TOP_K commands so the numbers reflect what seek actually does, including
 // the absence of lazy top-K pruning (no WAND in FTS5).
 func Serve(ctx context.Context, in io.Reader, out io.Writer, opts ServeOptions) error {
+	// store.Open creates and migrates a fresh empty database when the file is
+	// missing. That would turn a typo'd --db path into a silent all-zero
+	// benchmark run, so refuse to serve from a database that is not already
+	// on disk (build one with `seek bench index` first).
+	if _, err := os.Stat(opts.DBPath); err != nil {
+		return fmt.Errorf("bench store %s: %w — run `seek bench index` first", opts.DBPath, err)
+	}
 	st, err := store.Open(opts.DBPath)
 	if err != nil {
 		return fmt.Errorf("open bench store: %w", err)

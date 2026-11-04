@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -67,19 +68,20 @@ func (s *Store) writeIndex(ctx context.Context, req DocumentIndex, replace bool)
 }
 
 // UpsertAndReplaceIndexBatchContext replaces all searchable state for a batch
-// of documents, committing every batch-index documents in one transaction.
+// of documents, committing every batchSize documents in one transaction.
 // This keeps bulk loads (e.g. the benchmark corpus) from fsync-bound on one
 // commit per document while preserving the atomic-replace semantics within
-// each committed group. The first failure aborts the remaining batches.
-func (s *Store) UpsertAndReplaceIndexBatchContext(ctx context.Context, reqs []DocumentIndex, batchIndex int) error {
-	if batchIndex <= 0 {
-		batchIndex = 500
+// each committed group. The first failure aborts the remaining batches;
+// batches committed before the failure stay committed.
+func (s *Store) UpsertAndReplaceIndexBatchContext(ctx context.Context, reqs []DocumentIndex, batchSize int) error {
+	if batchSize <= 0 {
+		batchSize = 500
 	}
-	for start := 0; start < len(reqs); start += batchIndex {
+	for start := 0; start < len(reqs); start += batchSize {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		end := start + batchIndex
+		end := start + batchSize
 		if end > len(reqs) {
 			end = len(reqs)
 		}
@@ -90,8 +92,7 @@ func (s *Store) UpsertAndReplaceIndexBatchContext(ctx context.Context, reqs []Do
 		now := time.Now().UTC().Format(time.RFC3339)
 		for _, req := range reqs[start:end] {
 			if _, err := writeIndexInTx(ctx, tx, req, true, s.compressionEnabled, s.compressionLevel, now); err != nil {
-				tx.Rollback()
-				return err
+				return errors.Join(err, tx.Rollback())
 			}
 		}
 		if err := tx.Commit(); err != nil {

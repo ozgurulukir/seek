@@ -40,6 +40,9 @@ func EmitQueries(resultsPath, outPath string) error {
 		return fmt.Errorf("no engines in %s", resultsPath)
 	}
 	queries := r.Results[commands[0]][engines[0]]
+	if len(queries) == 0 {
+		return fmt.Errorf("no queries in %s", resultsPath)
+	}
 
 	if dir := filepath.Dir(outPath); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {

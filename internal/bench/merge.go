@@ -207,6 +207,7 @@ type CountAgreement struct {
 	Command    string
 	Reference  string
 	Queries    int
+	Compared   int // queries answered by both sides (UNSUPPORTED excluded)
 	Matched    int
 	Mismatches []CountMismatch
 }
@@ -230,10 +231,17 @@ func CountAgreements(ours, published *BenchmarkResults, referenceEngine string) 
 		}
 		agreement := CountAgreement{Command: command, Reference: referenceEngine, Queries: len(seekResults)}
 		for _, qr := range seekResults {
-			refCount, ok := reference[qr.Query]
-			if !ok {
+			if qr.Count < 0 {
+				// UNSUPPORTED answers (count = -1, written by the patched
+				// client.py) were never answered — they neither match nor
+				// mismatch, so they must not deflate the agreement rate.
 				continue
 			}
+			refCount, ok := reference[qr.Query]
+			if !ok || refCount < 0 {
+				continue
+			}
+			agreement.Compared++
 			if qr.Count == refCount {
 				agreement.Matched++
 			} else if len(agreement.Mismatches) < 10 {
@@ -438,33 +446,12 @@ func renderCountAgreement(merged *BenchmarkResults, opts ReportOptions) string {
 	b.WriteString("seek's per-query hit counts are compared with the reference engine's published counts on the same corpus and queries. Agreement quantifies tokenizer differences (unicode61 vs Lucene's StandardTokenizer) instead of hiding them.\n\n")
 	b.WriteString("| Command | Reference | Queries | Exact matches | Agreement |\n|---|---|---|---|---|\n")
 	any := false
-	for _, command := range KnownCommands {
-		seekResults, ok := merged.Results[command][SeekEngineName]
-		if !ok {
-			continue
-		}
-		referenceResults, ok := merged.Results[command][reference]
-		if !ok {
-			continue
-		}
-		ref := make(map[string]int, len(referenceResults))
-		for _, qr := range referenceResults {
-			ref[qr.Query] = qr.Count
-		}
-		matched, compared := 0, 0
-		for _, qr := range seekResults {
-			if refCount, ok := ref[qr.Query]; ok {
-				compared++
-				if qr.Count == refCount {
-					matched++
-				}
-			}
-		}
-		if compared == 0 {
+	for _, agreement := range CountAgreements(merged, merged, reference) {
+		if agreement.Compared == 0 {
 			continue
 		}
 		any = true
-		fmt.Fprintf(&b, "| %s | %s | %d | %d | %.1f%% |\n", command, reference, compared, matched, 100*float64(matched)/float64(compared))
+		fmt.Fprintf(&b, "| %s | %s | %d | %d | %.1f%% |\n", agreement.Command, agreement.Reference, agreement.Compared, agreement.Matched, 100*float64(agreement.Matched)/float64(agreement.Compared))
 	}
 	if !any {
 		b.WriteString("| — | — | 0 | 0 | — |\n")
