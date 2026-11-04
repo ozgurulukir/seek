@@ -94,6 +94,15 @@ Commands:
   fields [<name>] [flags]
     Discover fast-field values and taxonomy (tags, topics, entities, etc.)
 
+  bench index [flags]
+    Index a search-benchmark-game corpus (JSONL {id,text} on stdin)
+
+  bench serve [flags]
+    Serve the search-benchmark-game query protocol (stdin/stdout)
+
+  bench report [flags]
+    Merge seek bench results with the published table into markdown
+
   mcp [flags]
     Run MCP (Model Context Protocol) server on stdio for AI agents
 

@@ -368,3 +368,36 @@ func (r ftsRepository) searchContext(ctx context.Context, query string, limit in
 	}
 	return results, nil
 }
+
+// CountFTSMatching returns the number of documents whose FTS row matches the
+// given MATCH expression. The joins mirror searchContext so rows whose
+// document or collection parents are gone stay invisible, and filters apply
+// with the same AND semantics as the search path.
+func (s *Store) CountFTSMatching(ctx context.Context, query string, filters *FilterSet) (int64, error) {
+	return s.repositories.fts.countMatchingContext(ctx, query, filters)
+}
+
+func (r ftsRepository) countMatchingContext(ctx context.Context, query string, filters *FilterSet) (int64, error) {
+	sqlQuery := `SELECT count(*)
+		 FROM documents_fts f
+		 JOIN documents d ON d.id = f.rowid
+		 JOIN collections c ON c.id = d.collection_id
+		 WHERE documents_fts MATCH ?`
+	var args []interface{}
+	args = append(args, query)
+	if filters != nil {
+		clause, fargs, err := filters.ToSQL()
+		if err != nil {
+			return 0, err
+		}
+		if clause != "" {
+			sqlQuery += " AND " + clause
+			args = append(args, fargs...)
+		}
+	}
+	var count int64
+	if err := r.db.QueryRowContext(ctx, sqlQuery, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count fts matches: %w", err)
+	}
+	return count, nil
+}

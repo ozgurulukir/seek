@@ -76,7 +76,17 @@
 - **Description:** Snowball stemmer port in Go for English and Turkish text analysis.
 
 ### Path & Pattern Matching (bmatcuk/doublestar)
-- **Project:** [github.com/bmatcuk/doublestar](https://github.com/bmatcuk/doublestar)
+- **Project:** [bmatcuk/doublestar](https://github.com/bmatcuk/doublestar)
 - **Author:** Bob Matcuk
 - **License:** MIT License
 - **Description:** Glob and pattern matching with `**` multi-directory support in Go.
+
+---
+
+## Tooling
+
+### search-benchmark-game (vendored harness)
+- **Project:** [quickwit-stuff/search-benchmark-game](https://github.com/quickwit-stuff/search-benchmark-game)
+- **Author:** Jason Wolfe and Quickwit contributors
+- **License:** MIT License
+- **Description:** The benchmark harness behind tantivy-search.github.io/bench; vendored under `third_party/search-benchmark-game/` (with documented patches) so seek's results are produced by the same harness, corpus, and query set as the published engines.

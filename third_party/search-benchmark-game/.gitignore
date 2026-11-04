@@ -1,0 +1,8 @@
+corpus.json
+results.json
+results-published.json
+queries.txt
+smoke/
+__pycache__/
+engines/*/index/
+.mimosa/

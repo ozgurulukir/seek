@@ -5,6 +5,19 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **search-benchmark-game bridge** (`seek bench`, `internal/bench`,
+  `third_party/search-benchmark-game`): seek now participates in the harness behind
+  tantivy-search.github.io/bench — `seek bench index` bulk-loads the game's
+  Wikipedia corpus JSONL, `seek bench serve` answers its COUNT/TOP_K/TOP_K_COUNT
+  line protocol via real FTS5 BM25 search, and `seek bench report` merges seek's
+  `results.json` with the published numbers into `docs/benchmarks.md` (per-query
+  minima tables, per-tag breakdowns, hit-count agreement) and a merged
+  site-viewer-compatible `docs/bench/results.json`. New store seams:
+  `CountFTSMatching` and batched `UpsertAndReplaceIndexBatchContext` (500-doc
+  transactions). The vendored MIT harness fork carries documented patches
+  (env-overridable warmup/iterations, engine/path validation, UNSUPPORTED key fix);
+  run the pipeline manually per `third_party/search-benchmark-game/README.md`.
+
 ## [0.6.7] - 2026-11-01
 
 - docs: refresh seek skill — canonical `--type`/`--agent` add selectors, `seek hooks doctor`,

@@ -1,0 +1,11 @@
+{"query": "the", "tags": ["term"]}
+{"query": "engine", "tags": ["term"]}
+{"query": "search engine", "tags": ["union", "union:num_tokens_2"]}
+{"query": "index text", "tags": ["union", "union:num_tokens_2"]}
+{"query": "+search +engine", "tags": ["intersection", "intersection:num_tokens_2"]}
+{"query": "+quick +brown +fox", "tags": ["intersection", "intersection:num_tokens_3"]}
+{"query": "+lord +rings", "tags": ["intersection", "intersection:num_tokens_2"]}
+{"query": "\"search engine\"", "tags": ["phrase", "phrase:num_tokens_2"]}
+{"query": "\"lazy dog\"", "tags": ["phrase", "phrase:num_tokens_2"]}
+{"query": "\"lord of the rings\"", "tags": ["phrase", "phrase:num_tokens_4"]}
+{"query": "+\"the lazy\" +dog", "tags": ["two-phase-critic"]}

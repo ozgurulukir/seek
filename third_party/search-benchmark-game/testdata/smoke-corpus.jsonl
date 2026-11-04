@@ -1,0 +1,15 @@
+{"id": "doc00", "text": "the quick brown fox jumps over the lazy dog near the quiet river bank"}
+{"id": "doc01", "text": "a search engine indexes text into an inverted index for fast query processing"}
+{"id": "doc02", "text": "the search engine ranks results by relevance using bm25 scoring over terms"}
+{"id": "doc03", "text": "the lazy dog sleeps while the quick fox runs across the open field"}
+{"id": "doc04", "text": "lord of the rings is a book about a long journey and a powerful ring"}
+{"id": "doc05", "text": "the inverted index stores term lists for every document in the collection"}
+{"id": "doc06", "text": "a query engine parses each query into terms and phrases before matching"}
+{"id": "doc07", "text": "the quick brown fox meets the lazy dog beside the old stone bridge"}
+{"id": "doc08", "text": "search engine benchmarks measure query latency percentiles and indexing throughput"}
+{"id": "doc09", "text": "the lord of the rings book follows fellowship members over mountains and rivers"}
+{"id": "doc10", "text": "bm25 weighs rare terms higher than common terms inside matching documents"}
+{"id": "doc11", "text": "the open field holds quiet grass while the wind moves over the river"}
+{"id": "doc12", "text": "an inverted index makes search engines fast for every kind of text query"}
+{"id": "doc13", "text": "the old stone bridge crosses the quiet river below the mountain road"}
+{"id": "doc14", "text": "a fast query engine answers search requests over large text collections"}
