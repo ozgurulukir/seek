@@ -50,37 +50,6 @@ func LoadBenchmarkResults(path string) (*BenchmarkResults, error) {
 	return &r, nil
 }
 
-// MergeResults unions the published results with ours; per command and
-// engine our entries override, details are merged the same way. The result
-// keeps the published schema so the same viewer could render it.
-func MergeResults(ours, published *BenchmarkResults) *BenchmarkResults {
-	merged := &BenchmarkResults{
-		Details: map[string][]string{},
-		Results: map[string]map[string][]QueryResult{},
-	}
-	for engine, lines := range published.Details {
-		merged.Details[engine] = lines
-	}
-	for engine, lines := range ours.Details {
-		merged.Details[engine] = lines
-	}
-	for command, engines := range published.Results {
-		merged.Results[command] = map[string][]QueryResult{}
-		for engine, qrs := range engines {
-			merged.Results[command][engine] = qrs
-		}
-	}
-	for command, engines := range ours.Results {
-		if merged.Results[command] == nil {
-			merged.Results[command] = map[string][]QueryResult{}
-		}
-		for engine, qrs := range engines {
-			merged.Results[command][engine] = qrs
-		}
-	}
-	return merged
-}
-
 // EngineStats summarizes one engine over one command (optionally one tag):
 // the published page computes AVERAGE/P50/P90/P99 over the per-query minima,
 // so we replicate exactly that math.
@@ -212,16 +181,18 @@ type CountAgreement struct {
 	Mismatches []CountMismatch
 }
 
-// CountAgreements computes hit-count agreement against referenceEngine for
-// every count-bearing command both sides report.
-func CountAgreements(ours, published *BenchmarkResults, referenceEngine string) []CountAgreement {
+// CountAgreements computes seek's hit-count agreement against referenceEngine
+// for every count-bearing command both sides report. Both engines must come
+// from the same results file — i.e. measured on the same machine in the same
+// run — which is exactly what makes the comparison meaningful.
+func CountAgreements(results *BenchmarkResults, referenceEngine string) []CountAgreement {
 	var agreements []CountAgreement
 	for _, command := range KnownCommands {
-		seekResults, ok := ours.Results[command][SeekEngineName]
+		seekResults, ok := results.Results[command][SeekEngineName]
 		if !ok {
 			continue
 		}
-		referenceResults, ok := published.Results[command][referenceEngine]
+		referenceResults, ok := results.Results[command][referenceEngine]
 		if !ok {
 			continue
 		}
@@ -257,19 +228,21 @@ func CountAgreements(ours, published *BenchmarkResults, referenceEngine string) 
 type ReportOptions struct {
 	GeneratedAt     time.Time
 	SeekVersion     string
-	SeekMachine     string // hardware disclosure for the machine that ran seek
-	PublishedSource string // where the published numbers came from
+	SeekMachine     string // hardware disclosure for the machine that ran the whole report
 	Commands        []string
 	TagCommands     []string // commands that get a per-tag P50 table
 	Tags            []string // tags covered by the per-tag tables
-	ReferenceEngine string   // published engine hit counts are checked against
+	ReferenceEngine string   // local engine seek's hit counts are checked against
 }
 
-// RenderMarkdown renders the merged benchmark tables as markdown for
-// docs/benchmarks.md. Tables follow the published page's aggregation: every
-// cell is derived from per-query minima, and the best engine per row is
-// bolded.
-func RenderMarkdown(merged *BenchmarkResults, opts ReportOptions) string {
+// RenderMarkdown renders the local-run benchmark tables as markdown for
+// docs/benchmarks.md. Every engine column comes from the one results.json
+// produced by a single harness run on one machine, so all columns are
+// directly comparable — cross-hardware numbers (the tantivy bench site's
+// published run) are deliberately never mixed in. Tables follow the
+// published page's aggregation: every cell is derived from per-query
+// minima, and the best engine per row is bolded.
+func RenderMarkdown(results *BenchmarkResults, opts ReportOptions) string {
 	var b strings.Builder
 	generatedAt := opts.GeneratedAt
 	if generatedAt.IsZero() {
@@ -289,35 +262,35 @@ func RenderMarkdown(merged *BenchmarkResults, opts ReportOptions) string {
 	}
 
 	fmt.Fprintf(&b, "# Search benchmark results\n\n")
-	fmt.Fprintf(&b, "Generated: %s. seek participates in the [search-benchmark-game](https://github.com/quickwit-stuff/search-benchmark-game) harness on the same corpus and query set as the engines published on the [tantivy bench page](https://tantivy-search.github.io/bench/).\n\n", generatedAt.Format("2006-01-02"))
+	fmt.Fprintf(&b, "Generated: %s. seek participates in the [search-benchmark-game](https://github.com/quickwit-stuff/search-benchmark-game) harness on the same corpus and query set as the engines published on the [tantivy bench page](https://tantivy-search.github.io/bench/). Every engine column in this report was measured on one machine in one harness run, so the columns are directly comparable; published numbers from different hardware are intentionally not mixed in.\n\n", generatedAt.Format("2006-01-02"))
 
-	b.WriteString(renderMethodology(merged, opts))
+	b.WriteString(renderMethodology(results, opts))
 	b.WriteString("\n## Overall latency (per-query minimum, µs)\n\n")
 	for _, command := range commands {
-		if len(merged.Results[command]) == 0 {
+		if len(results.Results[command]) == 0 {
 			continue
 		}
 		fmt.Fprintf(&b, "### %s\n\n", command)
-		b.WriteString(renderStatsTable(CommandTagStats(merged, command, "")))
+		b.WriteString(renderStatsTable(CommandTagStats(results, command, "")))
 		b.WriteString("\n")
 	}
 
 	b.WriteString("## Latency by query type (P50, per-query minimum, µs)\n\n")
 	for _, command := range tagCommands {
-		if len(merged.Results[command]) == 0 {
+		if len(results.Results[command]) == 0 {
 			continue
 		}
 		fmt.Fprintf(&b, "### %s\n\n", command)
-		b.WriteString(renderTagTables(merged, command, tags))
+		b.WriteString(renderTagTables(results, command, tags))
 		b.WriteString("\n")
 	}
 
-	b.WriteString(renderCountAgreement(merged, opts))
+	b.WriteString(renderCountAgreement(results, opts))
 	b.WriteString(renderLimitations())
 	return b.String()
 }
 
-func renderMethodology(merged *BenchmarkResults, opts ReportOptions) string {
+func renderMethodology(results *BenchmarkResults, opts ReportOptions) string {
 	var b strings.Builder
 	b.WriteString("## Methodology\n\n")
 	b.WriteString("- Corpus: English Wikipedia (`wiki-articles.json.bz2`), transformed by the harness (`corpus_transform.py`: lowercased, non-letter characters collapsed to spaces) and indexed as one document per article.\n")
@@ -325,26 +298,11 @@ func renderMethodology(merged *BenchmarkResults, opts ReportOptions) string {
 	b.WriteString("- Protocol: 10-minute warmup per command (`random.seed(2)` shuffle), then 10 measured passes; the per-query minimum of the 10 runs is what the tables aggregate (µs).\n")
 	b.WriteString("- seek engine: SQLite FTS5 (`unicode61 remove_diacritics 2`, no stemming) over doc-level FTS rows, bm25 ranking with the standard FTS5 k1=1.2/b=0.75, real top-K retrieval through seek's search path.\n")
 	if opts.SeekMachine != "" {
-		fmt.Fprintf(&b, "- seek ran on: %s.\n", opts.SeekMachine)
+		fmt.Fprintf(&b, "- All engine columns ran on this machine, measured by the same harness in the same run: %s.\n", opts.SeekMachine)
+	} else {
+		b.WriteString("- All engine columns were measured by the same harness in the same run on one machine.\n")
 	}
-	// Engine columns that are neither seek nor part of the published AWS run
-	// were fetched and measured on the same machine as seek — those columns
-	// are the apples-to-apples same-hardware reference.
-	publishedEngines := map[string]bool{"tantivy-0.25": true, "lucene-10.3.0": true, "lucene-10.3.0-bp": true, "pisa-0.8.2": true, "iresearch-26.03.1": true}
-	var localEngines []string
-	for engine := range merged.Results[KnownCommands[0]] {
-		if engine != SeekEngineName && !publishedEngines[engine] {
-			localEngines = append(localEngines, engine)
-		}
-	}
-	sort.Strings(localEngines)
-	if len(localEngines) > 0 {
-		fmt.Fprintf(&b, "- Locally measured reference engines (%s) ran on the same machine as seek, so those columns are directly comparable to the seek column; published-engine columns are not.\n", strings.Join(localEngines, ", "))
-	}
-	fmt.Fprintf(&b, "- Published engines ran on dedicated AWS hardware (see the [harness README](https://github.com/quickwit-stuff/search-benchmark-game)); cross-hardware rows indicate order-of-magnitude, not exact ranking. Seek version: %s.\n", opts.SeekVersion)
-	if opts.PublishedSource != "" {
-		fmt.Fprintf(&b, "- Published numbers source: %s.\n", opts.PublishedSource)
-	}
+	fmt.Fprintf(&b, "- Seek version: %s. Reference engines are fetched from the pinned upstream commit via `make fetch-engines` (see the [harness README](https://github.com/quickwit-stuff/search-benchmark-game)).\n", opts.SeekVersion)
 	b.WriteString("\n")
 	return b.String()
 }
@@ -450,17 +408,17 @@ func renderTagTables(r *BenchmarkResults, command string, tags []string) string 
 	return b.String()
 }
 
-func renderCountAgreement(merged *BenchmarkResults, opts ReportOptions) string {
+func renderCountAgreement(results *BenchmarkResults, opts ReportOptions) string {
 	reference := opts.ReferenceEngine
 	if reference == "" {
-		reference = "tantivy-0.25"
+		reference = "tantivy-0.22"
 	}
 	var b strings.Builder
 	b.WriteString("## Hit-count agreement vs reference engine\n\n")
-	b.WriteString("seek's per-query hit counts are compared with the reference engine's published counts on the same corpus and queries. Agreement quantifies tokenizer differences (unicode61 vs Lucene's StandardTokenizer) instead of hiding them.\n\n")
+	b.WriteString("seek's per-query hit counts are compared with the reference engine's counts, both measured in the same run on the same machine. Agreement quantifies tokenizer differences (unicode61 vs Lucene's StandardAnalyzer) instead of hiding them.\n\n")
 	b.WriteString("| Command | Reference | Queries | Exact matches | Agreement |\n|---|---|---|---|---|\n")
 	any := false
-	for _, agreement := range CountAgreements(merged, merged, reference) {
+	for _, agreement := range CountAgreements(results, reference) {
 		if agreement.Compared == 0 {
 			continue
 		}

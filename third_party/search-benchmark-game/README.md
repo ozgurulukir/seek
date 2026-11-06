@@ -62,14 +62,17 @@ Then build the docs:
 cd ../..
 bin/seek bench report \
   --results third_party/search-benchmark-game/results.json \
-  --published third_party/search-benchmark-game/results-published.json \
   --machine "CPU model, N cores, RAM, OS"   # hardware disclosure line
-# writes docs/bench/results.json (merged raw arrays) and docs/benchmarks.md
+# writes docs/benchmarks.md from the local run only
 ```
 
-`queries.txt` is derived from the published `results.json` (`seek bench
-report --emit-queries`), not from upstream's stale `queries.txt`, so every
-seek query has a published counterpart to compare hit counts against.
+The report renders **only the engines present in the local `results.json`**
+(all measured on one machine in one harness run, so the columns are directly
+comparable). Published numbers from the tantivy bench site run on different
+hardware and are deliberately never mixed into the tables; the published
+`results.json` is used solely as the source of the query set. The hit-count
+agreement table compares seek against the local reference engine
+(`--reference`, default `tantivy-0.22`).
 
 ## Disk / time expectations
 
