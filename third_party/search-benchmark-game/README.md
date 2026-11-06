@@ -86,6 +86,28 @@ Wikimedia dumps with the same `corpus_transform.py` transform — but note
 that hit counts will then differ from the published table, so the run is no
 longer count-comparable (disclose it in docs/benchmarks.md).
 
+## Running other engines locally (same-hardware reference)
+
+`make fetch-engines` downloads external engine sources from the pinned
+upstream commit (sparse git clone; gitignored, never vendored) so they can be
+indexed and benched on the same machine as seek:
+
+```sh
+make fetch-engines                                        # default: tantivy-0.22
+make index ENGINES="tantivy-0.22"                         # builds + indexes (~10-30 min)
+make bench ENGINES="tantivy-0.22 seek"                    # measures both in one run
+```
+
+Engine verification (fixture corpus, hand-checked counts): **tantivy-0.22**
+implements the full protocol correctly — its COUNT/TOP_K/phrase answers match
+seek's exactly. The other upstream engines are NOT suitable for the published
+comparison: **bleve-0.8.0-scorch** answers all commands but returns 0 for
+phrase queries (its `do_query.go` uses a raw QueryStringQuery), and
+**bluge-0.2.2** supports only TOP_10/TOP_10_COUNT (everything else answers
+UNSUPPORTED). They remain fetchable via
+`make fetch-engines EXTERNAL_ENGINES="bleve-0.8.0-scorch ..."` for
+experimentation.
+
 ## Smoke test
 
 `make smoke` runs the whole pipeline (index → harness → results.json shape

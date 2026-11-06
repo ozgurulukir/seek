@@ -291,7 +291,7 @@ func RenderMarkdown(merged *BenchmarkResults, opts ReportOptions) string {
 	fmt.Fprintf(&b, "# Search benchmark results\n\n")
 	fmt.Fprintf(&b, "Generated: %s. seek participates in the [search-benchmark-game](https://github.com/quickwit-stuff/search-benchmark-game) harness on the same corpus and query set as the engines published on the [tantivy bench page](https://tantivy-search.github.io/bench/).\n\n", generatedAt.Format("2006-01-02"))
 
-	b.WriteString(renderMethodology(opts))
+	b.WriteString(renderMethodology(merged, opts))
 	b.WriteString("\n## Overall latency (per-query minimum, µs)\n\n")
 	for _, command := range commands {
 		if len(merged.Results[command]) == 0 {
@@ -317,7 +317,7 @@ func RenderMarkdown(merged *BenchmarkResults, opts ReportOptions) string {
 	return b.String()
 }
 
-func renderMethodology(opts ReportOptions) string {
+func renderMethodology(merged *BenchmarkResults, opts ReportOptions) string {
 	var b strings.Builder
 	b.WriteString("## Methodology\n\n")
 	b.WriteString("- Corpus: English Wikipedia (`wiki-articles.json.bz2`), transformed by the harness (`corpus_transform.py`: lowercased, non-letter characters collapsed to spaces) and indexed as one document per article.\n")
@@ -327,7 +327,21 @@ func renderMethodology(opts ReportOptions) string {
 	if opts.SeekMachine != "" {
 		fmt.Fprintf(&b, "- seek ran on: %s.\n", opts.SeekMachine)
 	}
-	fmt.Fprintf(&b, "- Published engines ran on dedicated AWS hardware (see the [harness README](https://github.com/quickwit-stuff/search-benchmark-game)); seek's numbers come from a different machine, so cross-engine rows indicate order-of-magnitude, not exact ranking. Seek version: %s.\n", opts.SeekVersion)
+	// Engine columns that are neither seek nor part of the published AWS run
+	// were fetched and measured on the same machine as seek — those columns
+	// are the apples-to-apples same-hardware reference.
+	publishedEngines := map[string]bool{"tantivy-0.25": true, "lucene-10.3.0": true, "lucene-10.3.0-bp": true, "pisa-0.8.2": true, "iresearch-26.03.1": true}
+	var localEngines []string
+	for engine := range merged.Results[KnownCommands[0]] {
+		if engine != SeekEngineName && !publishedEngines[engine] {
+			localEngines = append(localEngines, engine)
+		}
+	}
+	sort.Strings(localEngines)
+	if len(localEngines) > 0 {
+		fmt.Fprintf(&b, "- Locally measured reference engines (%s) ran on the same machine as seek, so those columns are directly comparable to the seek column; published-engine columns are not.\n", strings.Join(localEngines, ", "))
+	}
+	fmt.Fprintf(&b, "- Published engines ran on dedicated AWS hardware (see the [harness README](https://github.com/quickwit-stuff/search-benchmark-game)); cross-hardware rows indicate order-of-magnitude, not exact ranking. Seek version: %s.\n", opts.SeekVersion)
 	if opts.PublishedSource != "" {
 		fmt.Fprintf(&b, "- Published numbers source: %s.\n", opts.PublishedSource)
 	}

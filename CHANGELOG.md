@@ -5,6 +5,17 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **bench: Lucene negation support + same-hardware reference column**
+  (`internal/bench`, `third_party/search-benchmark-game`): `GameQueryToFTS5` now
+  translates Lucene negation clauses (`+python -snake`) to FTS5 `NOT` (positive
+  group parenthesized; FTS5 binds NOT tighter than OR), taking the first full
+  run from 943/962 answered to 962/962 with **100.0% hit-count agreement** vs
+  published tantivy on the full corpus. `make fetch-engines` downloads external
+  engines from the pinned upstream commit for same-machine measurement; the
+  committed `docs/benchmarks.md` now carries a locally measured tantivy-0.22
+  column (verified protocol-correct; upstream bleve returns 0 for phrases and
+  bluge implements only TOP_10 — documented) alongside the published AWS numbers.
+
 - **search-benchmark-game bridge** (`seek bench`, `internal/bench`,
   `third_party/search-benchmark-game`): seek now participates in the harness behind
   tantivy-search.github.io/bench — `seek bench index` bulk-loads the game's
