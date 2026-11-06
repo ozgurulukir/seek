@@ -7,6 +7,7 @@ CORPUS := $(shell pwd)/corpus.json
 WIKI_SRC = "https://www.dropbox.com/s/wwnfnu441w1ec9p/wiki-articles.json.bz2"
 PUBLISHED_SRC = "https://tantivy-search.github.io/bench/results.json"
 PUBLISHED_FILE ?= results-published.json
+UPSTREAM = https://raw.githubusercontent.com/quickwit-stuff/search-benchmark-game/3c124e2823e27e2c425769ffac24c71085065502
 QUERIES ?= queries.txt
 ENGINES ?= seek
 COMMANDS ?= TOP_10 TOP_100 TOP_1000 TOP_100_COUNT COUNT
@@ -16,7 +17,29 @@ SMOKE_DIR ?= $(shell pwd)/smoke
 
 export CORPUS ENGINES COMMANDS SEEK
 
-.PHONY: corpus fetch-published queries index bench smoke smoke-clean
+.PHONY: corpus fetch-published queries fetch-engines index bench smoke smoke-clean
+
+# Download third-party engine sources (not vendored into the repo) from the
+# pinned upstream commit via sparse git clone: each engine lands in
+# engines/<name>/ complete (Makefile, sources, go.mod/Cargo.toml, details.json).
+# NOTE (verified on a fixture corpus): only tantivy-0.22 implements the full
+# protocol correctly. bleve-0.8.0-scorch returns 0 for phrase queries and
+# bluge-0.2.2 supports only TOP_10/TOP_10_COUNT — fetch them only for
+# experimentation, not for the published comparison.
+EXTERNAL_ENGINES ?= tantivy-0.22
+UPSTREAM_REPO = https://github.com/quickwit-stuff/search-benchmark-game
+PINNED_COMMIT = 3c124e2823e27e2c425769ffac24c71085065502
+fetch-engines:
+	@rm -rf .upstream
+	git clone --quiet --depth 1 --filter=blob:none --sparse $(UPSTREAM_REPO) .upstream
+	git -C .upstream fetch --quiet --depth 1 origin $(PINNED_COMMIT) && git -C .upstream checkout --quiet $(PINNED_COMMIT)
+	git -C .upstream sparse-checkout set $(addprefix engines/,$(EXTERNAL_ENGINES))
+	@for engine in $(EXTERNAL_ENGINES); do \
+		rm -rf engines/$$engine; \
+		mv .upstream/engines/$$engine engines/$$engine; \
+		echo "fetched engines/$$engine"; \
+	done
+	@rm -rf .upstream
 
 # One-time, ~20 GB download + transform → corpus.json (~6.5M articles).
 corpus:

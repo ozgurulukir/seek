@@ -62,14 +62,17 @@ Then build the docs:
 cd ../..
 bin/seek bench report \
   --results third_party/search-benchmark-game/results.json \
-  --published third_party/search-benchmark-game/results-published.json \
   --machine "CPU model, N cores, RAM, OS"   # hardware disclosure line
-# writes docs/bench/results.json (merged raw arrays) and docs/benchmarks.md
+# writes docs/benchmarks.md from the local run only
 ```
 
-`queries.txt` is derived from the published `results.json` (`seek bench
-report --emit-queries`), not from upstream's stale `queries.txt`, so every
-seek query has a published counterpart to compare hit counts against.
+The report renders **only the engines present in the local `results.json`**
+(all measured on one machine in one harness run, so the columns are directly
+comparable). Published numbers from the tantivy bench site run on different
+hardware and are deliberately never mixed into the tables; the published
+`results.json` is used solely as the source of the query set. The hit-count
+agreement table compares seek against the local reference engine
+(`--reference`, default `tantivy-0.22`).
 
 ## Disk / time expectations
 
@@ -85,6 +88,28 @@ seek query has a published counterpart to compare hit counts against.
 Wikimedia dumps with the same `corpus_transform.py` transform — but note
 that hit counts will then differ from the published table, so the run is no
 longer count-comparable (disclose it in docs/benchmarks.md).
+
+## Running other engines locally (same-hardware reference)
+
+`make fetch-engines` downloads external engine sources from the pinned
+upstream commit (sparse git clone; gitignored, never vendored) so they can be
+indexed and benched on the same machine as seek:
+
+```sh
+make fetch-engines                                        # default: tantivy-0.22
+make index ENGINES="tantivy-0.22"                         # builds + indexes (~10-30 min)
+make bench ENGINES="tantivy-0.22 seek"                    # measures both in one run
+```
+
+Engine verification (fixture corpus, hand-checked counts): **tantivy-0.22**
+implements the full protocol correctly — its COUNT/TOP_K/phrase answers match
+seek's exactly. The other upstream engines are NOT suitable for the published
+comparison: **bleve-0.8.0-scorch** answers all commands but returns 0 for
+phrase queries (its `do_query.go` uses a raw QueryStringQuery), and
+**bluge-0.2.2** supports only TOP_10/TOP_10_COUNT (everything else answers
+UNSUPPORTED). They remain fetchable via
+`make fetch-engines EXTERNAL_ENGINES="bleve-0.8.0-scorch ..."` for
+experimentation.
 
 ## Smoke test
 

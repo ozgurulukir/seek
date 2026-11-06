@@ -6,3 +6,9 @@ smoke/
 __pycache__/
 engines/*/index/
 .mimosa/
+.upstream/
+# External engines are fetched from the pinned upstream commit at build time
+# (make fetch-engines), never vendored; engines/seek is tracked.
+engines/tantivy-0.22/
+engines/bleve-0.8.0-scorch/
+engines/bluge-0.2.2/
