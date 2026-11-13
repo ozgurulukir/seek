@@ -167,9 +167,9 @@ type ReindexResult struct {
 // AllowVectorSpaceChange opts into the clear/reclaim contract) instead of
 // silently mixing two vector spaces, and refuses outright when other
 // collections still hold embedded chunks — the profile is store-global, so a
-// collection-scoped reindex can never safely clear it while they do. A config
-// without an embedding model skips profile validation — there is nothing to
-// embed, so a keyword-only reindex is never blocked.
+// collection-scoped reindex keeps its guard (checkOthers). A config without an
+// embedding model skips profile validation — there is nothing to embed, so a
+// keyword-only reindex is never blocked.
 //
 // For a store-wide recovery (e.g. after an embedding model/dimension change
 // across every collection) use ReindexAll, which re-syncs and re-embeds all
@@ -182,51 +182,14 @@ func (s *CollectionService) Reindex(ctx context.Context, name string, opts Reind
 	if err != nil {
 		return ReindexResult{}, err
 	}
-
-	vectorSpaceChanged := false
-	var backup *store.EmbeddingSpaceBackup
-	if s.cfg != nil && s.cfg.Config.Embedding.Model != "" && opts.AllowVectorSpaceChange {
-		needsReset, err := s.embeddingResetNeeded(ctx)
-		if err != nil {
-			return ReindexResult{}, err
-		}
-		if needsReset {
-			backup, err = s.store.BackupEmbeddingSpace(ctx)
-			if err != nil {
-				return ReindexResult{}, fmt.Errorf("backup embedding space: %w", err)
-			}
-		}
-	}
-	if s.cfg != nil && s.cfg.Config.Embedding.Model != "" {
-		changed, err := s.clearProfileOnMismatch(ctx, col.ID, name, opts.AllowVectorSpaceChange, true)
-		if err != nil {
-			return ReindexResult{VectorSpaceChanged: vectorSpaceChanged}, err
-		}
-		vectorSpaceChanged = changed
-	}
-
-	report, err := s.pipeline.Sync(ctx, col, pipeline.Options{
-		Force:       true,
-		VectorIndex: true,
-	}, log)
+	results, err := s.reindexCollections(ctx, []store.Collection{*col}, opts, true, log)
 	if err != nil {
-		if vectorSpaceChanged {
-			err = s.restoreEmbeddingSpace(ctx, backup, err)
+		if len(results) == 1 {
+			return results[0], err
 		}
-		return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, err
+		return ReindexResult{}, err
 	}
-	if vectorSpaceChanged {
-		pending, pendingErr := s.store.GetChunksWithoutEmbeddingForCollectionContext(ctx, col.ID, false)
-		required := s.requiredPendingEmbeddings(pending)
-		if pendingErr != nil || required > 0 {
-			if pendingErr == nil {
-				pendingErr = fmt.Errorf("%d supported chunks remain without embeddings", required)
-			}
-			rebuildErr := fmt.Errorf("embedding rebuild incomplete: %w", pendingErr)
-			return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, s.restoreEmbeddingSpace(ctx, backup, rebuildErr)
-		}
-	}
-	return ReindexResult{Report: report, VectorSpaceChanged: vectorSpaceChanged}, nil
+	return results[0], nil
 }
 
 // ReindexAll is the store-wide recovery pass: it re-syncs every collection
@@ -245,12 +208,25 @@ func (s *CollectionService) ReindexAll(ctx context.Context, opts ReindexOptions,
 	if err != nil {
 		return nil, fmt.Errorf("list collections: %w", err)
 	}
-	// One result per collection, each carrying its own sync report, so the CLI
-	// can print a per-collection summary.
+	return s.reindexCollections(ctx, cols, opts, false, log)
+}
+
+// reindexCollections is the shared reindex protocol behind Reindex and
+// ReindexAll: it validates the embedding profile, backs up the embedding space
+// when a reset is needed, clears the profile on mismatch per collection
+// (checkOthers=true for the collection-scoped path so it refuses while other
+// collections still hold embedded chunks), force-syncs, and verifies the
+// embedding rebuild completed — restoring the backup on every failure path
+// (restoreEmbeddingSpace is a no-op with a nil backup). The two wrappers
+// differ only in the collection list and the checkOthers guard; this keeps the
+// destructive vector-space swap in exactly one place.
+func (s *CollectionService) reindexCollections(ctx context.Context, cols []store.Collection, opts ReindexOptions, checkOthers bool, log pipeline.Logger) ([]ReindexResult, error) {
 	results := make([]ReindexResult, 0, len(cols))
 	var backup *store.EmbeddingSpaceBackup
 	resetApplied := false
-	if s.cfg != nil && s.cfg.Config.Embedding.Model != "" {
+	embedEnabled := s.cfg != nil && s.cfg.Config.Embedding.Model != ""
+
+	if embedEnabled && opts.AllowVectorSpaceChange {
 		needsReset, err := s.embeddingResetNeeded(ctx)
 		if err != nil {
 			return nil, err
@@ -262,15 +238,16 @@ func (s *CollectionService) ReindexAll(ctx context.Context, opts ReindexOptions,
 			}
 		}
 	}
-	for _, col := range cols {
+
+	for i := range cols {
+		col := &cols[i]
 		// A config without an embedding model skips profile validation — there
-		// is nothing to embed, so a keyword-only reindex is never blocked (the
-		// same guard the collection-scoped Reindex applies).
+		// is nothing to embed, so a keyword-only reindex is never blocked.
 		changed := false
-		if s.cfg != nil && s.cfg.Config.Embedding.Model != "" {
-			c, err := s.clearProfileOnMismatch(ctx, col.ID, col.Name, opts.AllowVectorSpaceChange, false)
+		if embedEnabled {
+			c, err := s.clearProfileOnMismatch(ctx, col.ID, col.Name, opts.AllowVectorSpaceChange, checkOthers)
 			if err != nil {
-				if len(results) > 0 {
+				if resetApplied {
 					err = s.restoreEmbeddingSpace(ctx, backup, err)
 				}
 				return results, err
@@ -278,20 +255,36 @@ func (s *CollectionService) ReindexAll(ctx context.Context, opts ReindexOptions,
 			changed = c
 			resetApplied = resetApplied || changed
 		}
-		syncReport, err := s.pipeline.Sync(ctx, &col, pipeline.Options{Force: true, VectorIndex: true}, log)
+
+		report, err := s.pipeline.Sync(ctx, col, pipeline.Options{
+			Force:       true,
+			VectorIndex: true,
+		}, log)
 		if err != nil {
+			// Surface the failed sync's report too (the old collection-scoped
+			// Reindex carried it back to the caller on failure).
+			results = append(results, ReindexResult{Report: report, VectorSpaceChanged: changed})
 			return results, s.restoreEmbeddingSpace(ctx, backup, err)
 		}
-		results = append(results, ReindexResult{Report: syncReport, VectorSpaceChanged: changed})
+		results = append(results, ReindexResult{Report: report, VectorSpaceChanged: changed})
 	}
+
 	if resetApplied {
-		pending, err := s.store.GetChunksWithoutEmbeddingContext(ctx, false)
+		var (
+			pending    []store.Chunk
+			pendingErr error
+		)
+		if checkOthers {
+			pending, pendingErr = s.store.GetChunksWithoutEmbeddingForCollectionContext(ctx, cols[0].ID, false)
+		} else {
+			pending, pendingErr = s.store.GetChunksWithoutEmbeddingContext(ctx, false)
+		}
 		required := s.requiredPendingEmbeddings(pending)
-		if err != nil || required > 0 {
-			if err == nil {
-				err = fmt.Errorf("%d supported chunks remain without embeddings", required)
+		if pendingErr != nil || required > 0 {
+			if pendingErr == nil {
+				pendingErr = fmt.Errorf("%d supported chunks remain without embeddings", required)
 			}
-			rebuildErr := fmt.Errorf("embedding rebuild incomplete: %w", err)
+			rebuildErr := fmt.Errorf("embedding rebuild incomplete: %w", pendingErr)
 			return results, s.restoreEmbeddingSpace(ctx, backup, rebuildErr)
 		}
 	}
