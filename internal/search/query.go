@@ -424,6 +424,7 @@ func (p *parser) parseNear() (Query, error) {
 		return nil, fmt.Errorf("expected '(' after NEAR at position %d", tok.pos)
 	}
 	var terms []string
+	lastTermPos := 0
 	closed := false
 	for {
 		tok = p.s.scanToken()
@@ -439,6 +440,7 @@ func (p *parser) parseNear() (Query, error) {
 		}
 		if tok.typ == tokenIdent || tok.typ == tokenString || tok.typ == tokenNumber {
 			terms = append(terms, tok.val)
+			lastTermPos = tok.pos
 		}
 		// skip comma
 		if tok.typ == tokenComma {
@@ -456,7 +458,7 @@ func (p *parser) parseNear() (Query, error) {
 	if last := terms[len(terms)-1]; isNumber(last) {
 		parsed, err := strconv.Atoi(last)
 		if err != nil || parsed < 1 {
-			return nil, fmt.Errorf("invalid NEAR proximity %q at position %d", last, tok.pos)
+			return nil, fmt.Errorf("invalid NEAR proximity %q at position %d", last, lastTermPos)
 		}
 		n = parsed
 		terms = terms[:len(terms)-1]
