@@ -338,22 +338,6 @@ func TestHookRuntimeBinaryPreservesAbsoluteArgv0(t *testing.T) {
 	}
 }
 
-func TestWithHookLockEnvReplacesExistingValue(t *testing.T) {
-	env := withLockEnv([]string{"PATH=/bin", LockEnv + "=0"})
-	count := 0
-	for _, value := range env {
-		if strings.HasPrefix(value, LockEnv+"=") {
-			count++
-			if value != LockEnv+"=1" {
-				t.Errorf("lock env = %q", value)
-			}
-		}
-	}
-	if count != 1 {
-		t.Errorf("lock env entries = %d, want 1", count)
-	}
-}
-
 func TestRecordHookSkip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "claude.json")
 	completed := time.Now().Add(-time.Minute).Round(0)

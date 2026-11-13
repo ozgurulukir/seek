@@ -5,6 +5,16 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **search: NEAR parser rejects unclosed and malformed proximity**
+  (`internal/search/query.go`): `NEAR(a b` without a closing parenthesis is now
+  a parse error instead of silently becoming a NEAR search, and a non-numeric
+  or overflowing final proximity value is rejected at parse time
+  (`strconv.Atoi`) rather than silently wrapping. Removed the hand-rolled
+  overflow-prone `atoi`.
+- **remove dead code**: unused `withLockEnv` (which also mutated the caller's
+  backing array via `env[:0]`), unused `updateEmbedding` in `internal/pipeline`,
+  and the never-referenced `ErrParse` sentinel in `internal/search`.
+
 - **bench: Lucene negation support + local-only report**
   (`internal/bench`, `third_party/search-benchmark-game`): `GameQueryToFTS5` now
   translates Lucene negation clauses (`+python -snake`) to FTS5 `NOT` (positive
