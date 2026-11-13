@@ -31,8 +31,11 @@ benchmark. This is the engine behind the `seek` column in
 - Query translation: the game's Lucene subset is translated per-query by
   `internal/bench` (`GameQueryToFTS5`): intersection (`+a +b`) → AND,
   union (`a b`) → OR (Lucene's default operator), phrases → FTS5 phrases,
-  mixed queries → AND of required clauses (optional clauses never restrict
-  Lucene's match set).
+  negation (`-a`) → FTS5 NOT applied to the positive match set in query
+  order (Lucene MUST_NOT; verified 19/19 exact count match against the
+  published tantivy-0.25 numbers on the full corpus), mixed queries → AND
+  of required clauses (optional clauses never restrict Lucene's match
+  set).
 - No WAND/lazy top-K: FTS5 scores every matching document for TOP_K before
   ranking, so TOP_1000 costs scale with match frequency rather than K.
 

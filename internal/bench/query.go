@@ -14,10 +14,12 @@ import (
 // gameClause is one parsed clause of a search-benchmark-game query.
 // The game's queries use a Lucene query language subset: bare terms are
 // optional clauses (union semantics, Lucene's default OR operator), terms
-// and phrases prefixed with '+' are required (intersection semantics), and
-// quoted strings are phrase clauses.
+// and phrases prefixed with '+' are required (intersection semantics), clauses
+// prefixed with '-' are prohibited (Lucene MUST_NOT), and quoted strings are
+// phrase clauses.
 type gameClause struct {
 	required bool
+	negated  bool
 	text     string
 }
 
@@ -28,23 +30,30 @@ type gameClause struct {
 //   - when the query has any required ('+') clause, the match set is the AND
 //     of the required clauses — optional clauses only contribute score in
 //     Lucene, so they are dropped from the match condition;
-//   - when every clause is optional, the match set is the OR of all clauses
-//     (Lucene's default operator is OR, and the game's "union" queries rely
-//     on it);
+//   - when every positive clause is optional, the match set is the OR of all
+//     positive clauses (Lucene's default operator is OR, and the game's
+//     "union" queries rely on it);
+//   - prohibited ('-') clauses exclude their matches via FTS5 NOT, applied
+//     to the positive match set in query order (Lucene MUST_NOT semantics);
 //   - quoted clauses stay phrases ("the who" must match adjacently).
 //
-// Every clause is emitted as a quoted phrase, which makes the output immune
-// to FTS5 operator characters in the query text.
+// A query with only prohibited clauses stays unsupported — FTS5 MATCH cannot
+// express "everything except" without matching the whole corpus. Every
+// clause is emitted as a quoted phrase, which makes the output immune to
+// FTS5 operator characters in the query text.
 func GameQueryToFTS5(query string) (string, error) {
 	clauses, err := parseGameQuery(query)
 	if err != nil {
 		return "", err
 	}
-	var required, optional []string
+	var required, optional, negated []string
 	for _, cl := range clauses {
-		if cl.required {
+		switch {
+		case cl.negated:
+			negated = append(negated, fts5Clause(cl.text))
+		case cl.required:
 			required = append(required, fts5Clause(cl.text))
-		} else {
+		default:
 			optional = append(optional, fts5Clause(cl.text))
 		}
 	}
@@ -55,7 +64,15 @@ func GameQueryToFTS5(query string) (string, error) {
 	case len(optional) > 0:
 		expr = strings.Join(optional, " OR ")
 	default:
-		return "", fmt.Errorf("bench query %q: no clauses", query)
+		return "", fmt.Errorf("bench query %q: only negated clauses", query)
+	}
+	if len(negated) > 0 {
+		// FTS5 binds NOT tighter than OR, so the positive match set needs
+		// its own group: (a OR b) NOT c, not a OR b NOT c.
+		expr = "(" + expr + ")"
+		for _, neg := range negated {
+			expr += " NOT " + neg
+		}
 	}
 	return "(" + expr + ")", nil
 }
@@ -79,6 +96,18 @@ func parseGameQuery(query string) ([]gameClause, error) {
 				return nil, fmt.Errorf("bench query %q: %w", query, err)
 			}
 			cl.required = true
+			clauses = append(clauses, cl)
+			i = next
+		case '-':
+			i++
+			if i >= len(runes) {
+				return nil, fmt.Errorf("bench query %q: dangling '-'", query)
+			}
+			cl, next, err := readGameClause(runes, i)
+			if err != nil {
+				return nil, fmt.Errorf("bench query %q: %w", query, err)
+			}
+			cl.negated = true
 			clauses = append(clauses, cl)
 			i = next
 		default:
@@ -136,12 +165,13 @@ func readGameClause(runes []rune, i int) (gameClause, int, error) {
 
 // checkGameClauseText rejects Lucene syntax the translator does not model.
 // Answering UNSUPPORTED is strictly safer than silently misinterpreting it:
-// a '-'-prefixed clause would invert semantics (match-for instead of
-// match-not), wildcard characters would lose their prefix semantics, and
-// uppercase AND/OR/NOT would be searched as literal terms.
+// wildcard characters would lose their prefix semantics, and uppercase
+// AND/OR/NOT would be searched as literal terms. Negation ('-') is handled
+// upstream as a clause marker, so a '-' here means something like a bare
+// "-x" after quote stripping and stays rejected.
 func checkGameClauseText(text string) error {
 	if strings.HasPrefix(text, "-") {
-		return fmt.Errorf("unsupported Lucene negation clause %q", text)
+		return fmt.Errorf("unsupported leading '-' in clause %q", text)
 	}
 	if strings.ContainsAny(text, "*?") {
 		return fmt.Errorf("unsupported Lucene wildcard clause %q", text)
