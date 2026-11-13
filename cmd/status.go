@@ -19,7 +19,9 @@ func (c *StatusCmd) Run(cfg *config.AppConfig) (err error) {
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
 
-	collections, err := db.ListCollections()
+	// Route through the shared CollectionService request path (one store
+	// query) instead of the N+1 ListCollections + per-collection counts.
+	collections, err := app.NewCollectionServiceFromStore(db).List(context.Background())
 	if err != nil {
 		return err
 	}
@@ -36,17 +38,8 @@ func (c *StatusCmd) Run(cfg *config.AppConfig) (err error) {
 	}
 
 	for _, col := range collections {
-		docs, err := db.CountDocuments(col.ID)
-		if err != nil {
-			return fmt.Errorf("count documents for %q: %w", col.Name, err)
-		}
-		chunks, err := db.CountChunks(col.ID)
-		if err != nil {
-			return fmt.Errorf("count chunks for %q: %w", col.Name, err)
-		}
-
 		fmt.Printf("%-25s  type=%-10s  docs=%-5d  chunks=%-5d\n",
-			col.Name, col.Type, docs, chunks)
+			col.Name, col.Type, col.Documents, col.Chunks)
 		fmt.Printf("  → %s\n", formatRelPath(col.Path))
 	}
 

@@ -21,6 +21,12 @@ All notable changes to `seek` are documented here. This follows
   error names what is missing, replacing the per-method "store is nil" vs
   "not configured" drift. `ReindexAll` previously had no nil-dependency guard
   at all; it now refuses on a missing store/pipeline like `Reindex`.
+- **refactor(cmd): one collection-listing path**
+  (`cmd/status.go`, `cmd/mcp.go`): `seek status` and the MCP `seek_status`
+  tool no longer run their own N+1 `ListCollections` + per-collection
+  `CountDocuments`/`CountChunks` loops; both route through
+  `CollectionService.List` (a single `CollectionDetails` store query), the
+  same path `seek collection list` already uses.
 - **search: NEAR parser rejects unclosed and malformed proximity**
   (`internal/search/query.go`): `NEAR(a b` without a closing parenthesis is now
   a parse error instead of silently becoming a NEAR search, and a non-numeric
