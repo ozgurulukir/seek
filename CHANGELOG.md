@@ -14,6 +14,14 @@ All notable changes to `seek` are documented here. This follows
 - **remove dead code**: unused `withLockEnv` (which also mutated the caller's
   backing array via `env[:0]`), unused `updateEmbedding` in `internal/pipeline`,
   and the never-referenced `ErrParse` sentinel in `internal/search`.
+- **refactor(app): one shared reindex protocol**
+  (`internal/app/collection.go`): `Reindex` and `ReindexAll` no longer carry
+  parallel copies of the destructive embedding-space protocol (backup →
+  profile clear → forced sync → rebuild-completeness verification → restore on
+  failure). A single `reindexCollections` runs it over a collection list; the
+  two entry points differ only in the list and the store-global-profile guard
+  (`checkOthers`). Behavior-preserving; existing `internal/app` tests constrain
+  the refactor.
 
 - **bench: Lucene negation support + local-only report**
   (`internal/bench`, `third_party/search-benchmark-game`): `GameQueryToFTS5` now
