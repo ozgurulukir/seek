@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/ozgurulukir/seek/internal/config"
-	"github.com/ozgurulukir/seek/internal/embed"
 )
 
 // EmbeddingProfile describes the single active vector space persisted in
@@ -69,7 +68,7 @@ func ProfileFromConfig(cfg *config.AppConfig) EmbeddingProfile {
 	}
 	q, d := cfg.Config.Embedding.TaskPrefixes()
 	return EmbeddingProfile{
-		ProviderKind:       embed.DetectProviderKind(cfg).String(),
+		ProviderKind:       config.DetectProviderKind(cfg).String(),
 		Model:              cfg.Config.Embedding.Model,
 		Dimensions:         cfg.Config.Embedding.Dimensions,
 		DocumentTaskPrefix: d,

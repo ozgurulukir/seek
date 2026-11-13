@@ -145,6 +145,8 @@ func TestImportGraphRemainsAcyclicAndLayered(t *testing.T) {
 					violation = "internal must not import cmd or root"
 				case layer(from) == "cmd" && layer(to) == "root":
 					violation = "cmd must not import root"
+				case from == modulePath+"/internal/store" && to == modulePath+"/internal/embed":
+					violation = "store must not import embed (provider-kind detection lives in internal/config, #190)"
 				case strings.HasPrefix(from, modulePath) && layer(from) == "third_party":
 					violation = "main-module package outside root/cmd/internal must be classified in layer()"
 				}
