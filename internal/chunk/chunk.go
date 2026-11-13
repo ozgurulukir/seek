@@ -5,9 +5,13 @@ import (
 	"unicode/utf8"
 )
 
+// Size budgets are measured in BYTES (len / strings.Builder.Len), not
+// characters: UTF-8 multibyte content (Turkish, CJK) counts more bytes per
+// character, so multibyte chunks carry fewer characters than these numbers
+// suggest — never more (#192).
 const (
-	DefaultMaxChunkSize = 1000 // chars
-	DefaultOverlap      = 100  // chars
+	DefaultMaxChunkSize = 1000 // bytes
+	DefaultOverlap      = 100  // bytes
 )
 
 // ChunkType distinguishes text chunks from image chunks.
