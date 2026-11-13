@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "mimosa-hook-status/v1",
+  "recordedAt": "2026-11-13T20:35:55.703Z",
+  "sessionId": "sess_40928084-46b6-41fb-beeb-24945e6d942d",
+  "event": "PostToolUse",
+  "toolName": "Edit",
+  "file": "/home/aristo/.zcode/cli/memories/projects/seek-3a220643fd4d4027/memory/seek-audit-implementation-2026-11-13.md",
+  "outcome": "clear",
+  "coverage": "complete",
+  "findingCount": 0,
+  "durationMs": 5,
+  "hostState": "hook_complete",
+  "reportHint": ".mimosa/reports/"
+}

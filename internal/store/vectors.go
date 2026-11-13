@@ -25,10 +25,6 @@ func (s *Store) SyncVectorIndexContext(ctx context.Context) error {
 	return err
 }
 
-func (s *Store) syncVectorIndexFull() (int, error) {
-	return s.syncVectorIndexFullContext(context.Background())
-}
-
 // pendingEmbedding is a scanned row whose BLOB is decoded after its cursor is
 // closed, so vector work does not run against an open SQLite read cursor.
 type pendingEmbedding struct {
@@ -391,11 +387,6 @@ func scanChunkRows(rows *sql.Rows, wantEmbedding bool) ([]chunkRow, [][]byte, er
 	return out, embBlobs, nil
 }
 
-// linearSearchVector performs a linear scan over all embedded chunks with optional filters.
-func (s *Store) linearSearchVector(queryEmb []float32, limit int, filters *FilterSet) ([]SearchResult, error) {
-	return s.linearSearchVectorContext(context.Background(), queryEmb, limit, filters)
-}
-
 func (s *Store) linearSearchVectorContext(ctx context.Context, queryEmb []float32, limit int, filters *FilterSet) ([]SearchResult, error) {
 	sqlQuery := `SELECT ` + chunkRowColumns + `, ch.embedding
 		 FROM chunks ch
@@ -461,12 +452,8 @@ func (s *Store) linearSearchVectorContext(ctx context.Context, queryEmb []float3
 	return results, nil
 }
 
-// fetchSearchResults fetches full SearchResult data for HNSW results.
+// fetchSearchResultsContext fetches full SearchResult data for HNSW results.
 // Filters are pushed into the SQL WHERE clause so the DB handles filtering.
-func (s *Store) fetchSearchResults(results []VectorResult, filters *FilterSet) ([]SearchResult, error) {
-	return s.fetchSearchResultsContext(context.Background(), results, filters)
-}
-
 func (s *Store) fetchSearchResultsContext(ctx context.Context, results []VectorResult, filters *FilterSet) ([]SearchResult, error) {
 	if len(results) == 0 {
 		return nil, nil

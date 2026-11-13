@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "posttooluse-19a09a58948701f1ce51fd059ff9cd1b",
+  "runId": null,
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "PostToolUse"
+  },
+  "revision": null,
+  "diffHash": null,
+  "rulesVersion": null,
+  "sessionHash": "1e3674f3402336a4142fe7ad26b695f401b3e144e05e8d83f379020ff8895ed0",
+  "reportRef": null,
+  "events": [
+    {
+      "eventId": "hook-b41dc948b6288f6773f370918afbf0d2",
+      "findingId": "mimosa-0404c910bf4fe7041e886fc7",
+      "type": "static_fix_verified",
+      "at": "2026-11-04T10:31:08.231Z",
+      "identity": {
+        "projectRelativeFile": "tools/search-benchmark-game/src/client.py",
+        "ruleId": "security",
+        "codeEvidenceHash": "a48f12ae0dec817e778ee02bda310938c57c9e23917dd72b2c1fa6e567bcfdf6",
+        "confidence": "stable"
+      },
+      "scope": "direct",
+      "line": 67,
+      "endLine": 67,
+      "reasonCode": "static_rescan_passed",
+      "reportedToAgent": false,
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "evidenceHash": "a48f12ae0dec817e778ee02bda310938c57c9e23917dd72b2c1fa6e567bcfdf6"
+      },
+      "sequence": 0
+    }
+  ],
+  "observedFindingIds": [],
+  "verifiedFiles": [],
+  "recordedAt": "2026-11-04T10:31:08.714Z"
+}

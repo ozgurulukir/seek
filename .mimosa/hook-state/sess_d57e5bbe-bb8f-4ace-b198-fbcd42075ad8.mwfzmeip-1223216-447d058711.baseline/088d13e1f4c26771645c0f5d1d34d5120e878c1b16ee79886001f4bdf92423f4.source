@@ -1,0 +1,411 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+)
+
+// FTS5 keyword index: schema lifecycle (initFTS/ftsNeedsRebuild/
+// rebuildFTSFromDocuments) and CRUD/search over documents_fts. Extracted
+// from store.go as part of the god-object decomposition — a mechanical
+// move, no changes.
+
+func (s *Store) initFTS() error {
+	// FTS5 table: rebuild if the tokenizer config changed (e.g. upgrading from
+	// the old "unicode61" to the Turkish-aware "unicode61 remove_diacritics 2").
+	// A tokenizer change requires re-indexing all content, so we drop and
+	// recreate the virtual table, then repopulate it from chunk contents.
+	needRebuild, err := s.ftsNeedsRebuild()
+	if err != nil {
+		return fmt.Errorf("check fts tokenize: %w", err)
+	}
+	// Wrap the whole rebuild (DROP + CREATE + repopulate) in a real *sql.Tx:
+	// raw BEGIN/COMMIT through the shared pool do not guarantee a single
+	// connection, so the statements would run in autocommit and a crash
+	// mid-rebuild could leave documents_fts dropped or empty while
+	// sqlite_master already records the new tokenizer — the migration would
+	// never re-trigger and BM25 search would silently return nothing.
+	var tx *sql.Tx
+	if needRebuild {
+		if tx, err = s.db.Begin(); err != nil {
+			return fmt.Errorf("begin fts rebuild tx: %w", err)
+		}
+		if _, err := tx.Exec(`DROP TABLE IF EXISTS documents_fts_vocab`); err != nil {
+			return fmt.Errorf("drop documents_fts_vocab: %w", rollbackFTS(tx, err))
+		}
+		if _, err := tx.Exec(`DROP TABLE IF EXISTS documents_fts`); err != nil {
+			return fmt.Errorf("drop documents_fts: %w", rollbackFTS(tx, err))
+		}
+	}
+	runner := statementRunner(s.db)
+	if tx != nil {
+		runner = tx
+	}
+	// NOTE: FTS5 requires the tokenize argument as a literal in the DDL —
+	// it rejects bound parameters ("tokenize=?") with a parse error. FTSTokenize
+	// is a package constant we control, so formatting it in is safe.
+	ftsDDL := fmt.Sprintf(
+		`CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+			title, content,
+			content_rowid='id',
+			tokenize='%s')`,
+		FTSTokenize,
+	)
+	if _, err := runner.Exec(ftsDDL); err != nil {
+		if tx != nil {
+			err = rollbackFTS(tx, err)
+		}
+		return fmt.Errorf("create documents_fts: %w", err)
+	}
+	// Create vocab table for zero-memory, instant prefix autocompletion
+	vocabDDL := `CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts_vocab USING fts5vocab(documents_fts, 'row')`
+	if _, err := runner.Exec(vocabDDL); err != nil {
+		// Non-fatal if sqlite environment lacks fts5vocab
+		_ = err
+	}
+	if tx != nil {
+		if err := rebuildFTSFromDocuments(runner); err != nil {
+			return fmt.Errorf("rebuild fts: %w", rollbackFTS(tx, err))
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit fts rebuild: %w", err)
+		}
+	}
+	return nil
+}
+
+// rollbackFTS rolls the rebuild transaction back, joining the rollback error
+// onto the cause so the original failure is not masked.
+func rollbackFTS(tx *sql.Tx, cause error) error {
+	return errors.Join(cause, tx.Rollback())
+}
+
+// statementRunner is satisfied by both *sql.DB and *sql.Tx, letting the FTS
+// rebuild stream its SELECT and run its INSERTs over the transaction's single
+// connection.
+type statementRunner interface {
+	Exec(query string, args ...interface{}) (sql.Result, error)
+	Query(query string, args ...interface{}) (*sql.Rows, error)
+}
+
+// ftsNeedsRebuild reports whether documents_fts is missing or was created
+// with a tokenizer different from the current FTSTokenize config.
+func (s *Store) ftsNeedsRebuild() (bool, error) {
+	var ddlSQL string
+	err := s.db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type='table' AND name='documents_fts'`,
+	).Scan(&ddlSQL)
+	if err == sql.ErrNoRows {
+		// Table missing (fresh database, or damaged state): rebuild
+		// unconditionally. On a fresh database there are no chunks yet, so
+		// the repopulate pass is a no-op; on a damaged database it restores
+		// BM25 content instead of leaving an empty table that would silently
+		// return no keyword results forever.
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !strings.Contains(ddlSQL, FTSTokenize), nil
+}
+
+// rebuildFTSFromDocuments repopulates documents_fts from the chunks table.
+//
+// Fidelity note: the original document body is not retained after chunking,
+// so we reconstruct each document's searchable text by concatenating its
+// chunks in seq order. This is a lossy approximation of the source —
+// ChunkMarkdown drops empty sections and adds overlap, ChunkConversation
+// rejoins lines — but for BM25 (a bag-of-words model) term coverage is
+// essentially preserved. Snippet rendering may differ slightly from a fresh
+// index. Ordering is done in Go (not via SQL GROUP_CONCAT, whose row order
+// under an inner subquery ORDER BY is not guaranteed by SQLite).
+func rebuildFTSFromDocuments(runner statementRunner) error {
+	// One pass: stream (doc_id, title, chunk_seq, chunk_content) ordered so
+	// all chunks of a document arrive together and in seq order.
+	rows, err := runner.Query(
+		`SELECT d.id, d.title, ch.seq, ch.content, ch.content_zstd
+		   FROM documents d
+		   LEFT JOIN chunks ch ON ch.document_id = d.id
+		  ORDER BY d.id, ch.seq`,
+	)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var (
+		curID    int64
+		curTitle string
+		started  bool
+		b        strings.Builder
+	)
+	// flush inserts the accumulated content for the previous document.
+	flush := func() error {
+		if !started {
+			return nil
+		}
+		_, err := runner.Exec(
+			`INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`,
+			curID, curTitle, b.String(),
+		)
+		b.Reset()
+		return err
+	}
+
+	for rows.Next() {
+		var (
+			id          int64
+			title       string
+			seq         sql.NullInt64
+			content     sql.NullString
+			contentZstd []byte
+		)
+		if err := rows.Scan(&id, &title, &seq, &content, &contentZstd); err != nil {
+			return err
+		}
+		if !started || id != curID {
+			if err := flush(); err != nil {
+				return err
+			}
+			curID, curTitle, started = id, title, true
+		}
+		text := ""
+		if len(contentZstd) > 0 {
+			decomp, err := DecompressString(contentZstd)
+			switch {
+			case err == nil:
+				text = decomp
+			case content.Valid && content.String != "":
+				// A corrupt zstd blob must not silently drop the chunk from
+				// the reconstructed FTS document; fall back to the raw
+				// content column when it survived (review 2026-09-17 L4).
+				text = content.String
+			default:
+				return fmt.Errorf("decompress chunk seq %d of document %d: %w", seq.Int64, curID, err)
+			}
+		} else if content.Valid {
+			text = content.String
+		}
+		if text != "" {
+			if b.Len() > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(text)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return flush()
+}
+
+// execIgnoreDuplicate executes an ALTER TABLE statement and ignores "duplicate column" errors.
+// Other errors are logged to stderr so migration failures are not silently lost.
+
+// --- FTS ---
+
+func (s *Store) UpsertFTS(docID int64, title, content string) error {
+	return s.UpsertFTSContext(context.Background(), docID, title, content)
+}
+
+func (s *Store) UpsertFTSContext(ctx context.Context, docID int64, title, content string) error {
+	return s.repositories.fts.upsertContext(ctx, docID, title, content)
+}
+
+func (r ftsRepository) upsertContext(ctx context.Context, docID int64, title, content string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
+		return fmt.Errorf("delete fts entry: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, title, content); err != nil {
+		return fmt.Errorf("insert fts entry: %w", err)
+	}
+	return tx.Commit()
+}
+
+// AppendFTS appends content to an existing FTS entry, preserving earlier text and title.
+func (s *Store) AppendFTS(docID int64, newContent string) error {
+	return s.AppendFTSContext(context.Background(), docID, newContent)
+}
+
+func (s *Store) AppendFTSContext(ctx context.Context, docID int64, newContent string) error {
+	return s.repositories.fts.appendContext(ctx, docID, newContent)
+}
+
+func (r ftsRepository) appendContext(ctx context.Context, docID int64, newContent string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var existingTitle, existingContent string
+	err = tx.QueryRowContext(ctx, `SELECT title, content FROM documents_fts WHERE rowid = ?`, docID).Scan(&existingTitle, &existingContent)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("read existing fts entry: %w", err)
+		}
+		// No existing entry — just insert.
+		if _, err := tx.ExecContext(ctx, `INSERT INTO documents_fts (rowid, title, content) VALUES (?, '', ?)`, docID, newContent); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	combined := existingContent + "\n" + newContent
+	if _, err := tx.ExecContext(ctx, `DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
+		return fmt.Errorf("delete fts entry: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO documents_fts (rowid, title, content) VALUES (?, ?, ?)`, docID, existingTitle, combined); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]SearchResult, error) {
+	return s.SearchFTSContext(context.Background(), query, limit, filters)
+}
+
+// SearchFTSContext is the context-aware search seam used by the search
+// repository adapter. The legacy SearchFTS method remains for callers that do
+// not yet own a context.
+func (s *Store) SearchFTSContext(ctx context.Context, query string, limit int, filters *FilterSet) ([]SearchResult, error) {
+	return s.repositories.fts.searchContext(ctx, query, limit, filters)
+}
+
+func (r ftsRepository) searchContext(ctx context.Context, query string, limit int, filters *FilterSet) ([]SearchResult, error) {
+	// bm25 column weights follow the table's column order (title, content),
+	// so title matches (FTSTitleWeight=10.0) rank above body matches (1.0).
+	sqlQuery := `SELECT d.id, d.title, d.path, c.name, snippet(documents_fts, 1, '>>>', '<<<', '...', 40) as snip, bm25(documents_fts, ?, 1.0)
+		 FROM documents_fts f
+		 JOIN documents d ON d.id = f.rowid
+		 JOIN collections c ON c.id = d.collection_id
+		 WHERE documents_fts MATCH ?`
+	var args []interface{}
+	args = append(args, FTSTitleWeight, query)
+	if filters != nil {
+		clause, fargs, err := filters.ToSQL()
+		if err != nil {
+			return nil, err
+		}
+		if clause != "" {
+			sqlQuery += " AND " + clause
+			args = append(args, fargs...)
+		}
+	}
+	sqlQuery += " ORDER BY bm25(documents_fts, ?, 1.0) LIMIT ?"
+	args = append(args, FTSTitleWeight, limit)
+
+	rows, err := r.db.QueryContext(ctx, sqlQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var results []SearchResult
+	var docIDs []int64
+	for rows.Next() {
+		var r SearchResult
+		if err := rows.Scan(&r.DocumentID, &r.Title, &r.Path, &r.Collection, &r.Content, &r.Score); err != nil {
+			return nil, err
+		}
+		results = append(results, r)
+		docIDs = append(docIDs, r.DocumentID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("search fts rows: %w", err)
+	}
+
+	// Populate line numbers from first chunk for all results in batched
+	// queries (500 ids per query, per the repo-wide batching convention).
+	if len(docIDs) > 0 {
+		type lineSpan struct {
+			start, end int
+		}
+		spans := make(map[int64]lineSpan, len(docIDs))
+		const chunkSize = 500
+		for start := 0; start < len(docIDs); start += chunkSize {
+			end := start + chunkSize
+			if end > len(docIDs) {
+				end = len(docIDs)
+			}
+			batch := docIDs[start:end]
+			chunkQuery := `SELECT document_id, COALESCE(start_line, 0), COALESCE(end_line, 0)
+				FROM (
+					SELECT document_id, start_line, end_line,
+					       ROW_NUMBER() OVER (PARTITION BY document_id ORDER BY seq ASC) as rn
+					FROM chunks WHERE document_id IN (` + sqlPlaceholders(len(batch)) + `)
+				) WHERE rn = 1`
+			docArgs := make([]interface{}, len(batch))
+			for i, id := range batch {
+				docArgs[i] = id
+			}
+			chunkRows, err := r.db.QueryContext(ctx, chunkQuery, docArgs...)
+			if err != nil {
+				return nil, fmt.Errorf("line-span query for %d documents: %w", len(docIDs), err)
+			}
+			for chunkRows.Next() {
+				var docID int64
+				var sLine, eLine int
+				if err := chunkRows.Scan(&docID, &sLine, &eLine); err != nil {
+					chunkRows.Close()
+					return nil, fmt.Errorf("line-span row scan: %w", err)
+				}
+				spans[docID] = lineSpan{start: sLine, end: eLine}
+			}
+			if err := chunkRows.Err(); err != nil {
+				chunkRows.Close()
+				return nil, fmt.Errorf("line-span query iteration: %w", err)
+			}
+			if err := chunkRows.Close(); err != nil {
+				return nil, fmt.Errorf("close line-span rows: %w", err)
+			}
+		}
+		for i := range results {
+			if span, ok := spans[results[i].DocumentID]; ok {
+				results[i].StartLine = span.start
+				results[i].EndLine = span.end
+			}
+		}
+	}
+	return results, nil
+}
+
+// CountFTSMatching returns the number of documents whose FTS row matches the
+// given MATCH expression. The joins mirror searchContext so rows whose
+// document or collection parents are gone stay invisible, and filters apply
+// with the same AND semantics as the search path.
+func (s *Store) CountFTSMatching(ctx context.Context, query string, filters *FilterSet) (int64, error) {
+	return s.repositories.fts.countMatchingContext(ctx, query, filters)
+}
+
+func (r ftsRepository) countMatchingContext(ctx context.Context, query string, filters *FilterSet) (int64, error) {
+	sqlQuery := `SELECT count(*)
+		 FROM documents_fts f
+		 JOIN documents d ON d.id = f.rowid
+		 JOIN collections c ON c.id = d.collection_id
+		 WHERE documents_fts MATCH ?`
+	var args []interface{}
+	args = append(args, query)
+	if filters != nil {
+		clause, fargs, err := filters.ToSQL()
+		if err != nil {
+			return 0, err
+		}
+		if clause != "" {
+			sqlQuery += " AND " + clause
+			args = append(args, fargs...)
+		}
+	}
+	var count int64
+	if err := r.db.QueryRowContext(ctx, sqlQuery, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count fts matches: %w", err)
+	}
+	return count, nil
+}

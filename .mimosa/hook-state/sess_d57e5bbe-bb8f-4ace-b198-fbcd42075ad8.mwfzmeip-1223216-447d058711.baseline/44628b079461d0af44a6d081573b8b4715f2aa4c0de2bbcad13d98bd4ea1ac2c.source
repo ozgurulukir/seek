@@ -1,0 +1,485 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
+)
+
+// Chunk CRUD and content access. Extracted from store.go as part of the
+// god-object decomposition — a mechanical move, no changes.
+
+// --- Chunks ---
+
+func (s *Store) DeleteChunksForDocument(docID int64) error {
+	_, err := s.db.Exec(`DELETE FROM chunks WHERE document_id = ?`, docID)
+	return err
+}
+
+// MaxChunkSeq returns the highest seq among a document's chunks, or 0 when the
+// document has no chunks. Callers inserting new chunks (e.g. incremental
+// conversation sync) use MaxChunkSeq+1 to continue the sequence instead of
+// restarting at 0 and colliding with earlier chunks.
+func (s *Store) MaxChunkSeq(docID int64) (int, error) {
+	return s.MaxChunkSeqContext(context.Background(), docID)
+}
+
+func (s *Store) MaxChunkSeqContext(ctx context.Context, docID int64) (int, error) {
+	var seq sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT MAX(seq) FROM chunks WHERE document_id = ?`, docID).Scan(&seq); err != nil {
+		return 0, err
+	}
+	if !seq.Valid {
+		return 0, nil
+	}
+	return int(seq.Int64), nil
+}
+
+// ListChunksForDocument returns every chunk of one document in seq order with
+// decompressed content. It is the read side of the semantic backfill: the
+// backfill re-enriches already-indexed content without re-reading source
+// files, so it needs exactly the chunks the FTS index holds.
+func (s *Store) ListChunksForDocument(docID int64) ([]IndexChunk, error) {
+	return s.ListChunksForDocumentContext(context.Background(), docID)
+}
+
+// ListChunksForDocumentContext is the cancellation-aware variant of
+// ListChunksForDocument. Chunk content is decompressed transparently
+// (mirroring GetChunksWithoutEmbedding*), so callers see the same text the
+// FTS and embedding paths search on.
+func (s *Store) ListChunksForDocumentContext(ctx context.Context, docID int64) ([]IndexChunk, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT seq, content, content_zstd, COALESCE(chunk_type, ?), COALESCE(image_path, ''),
+		 COALESCE(start_line, 0), COALESCE(end_line, 0)
+		 FROM chunks WHERE document_id = ? ORDER BY seq ASC`,
+		ChunkTypeText, docID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chunks []IndexChunk
+	for rows.Next() {
+		var c IndexChunk
+		var contentZstd []byte
+		if err := rows.Scan(&c.Seq, &c.Content, &contentZstd, &c.ChunkType, &c.ImagePath, &c.StartLine, &c.EndLine); err != nil {
+			return nil, err
+		}
+		if len(contentZstd) > 0 {
+			c.Content, err = DecompressString(contentZstd)
+			if err != nil {
+				return nil, fmt.Errorf("decompress chunk %d: %w", c.Seq, err)
+			}
+		}
+		chunks = append(chunks, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return chunks, nil
+}
+
+func (s *Store) InsertChunk(docID int64, seq int, content string, embedding []float32) error {
+	return s.InsertChunkWithLines(docID, seq, content, 0, 0, embedding)
+}
+
+// InsertChunkWithLines inserts a chunk with line range metadata.
+func (s *Store) InsertChunkWithLines(docID int64, seq int, content string, startLine, endLine int, embedding []float32) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	var contentZstd []byte
+	var err error
+	if s.compressionEnabled {
+		contentZstd, err = CompressString(content, s.compressionLevel)
+		if err != nil {
+			return fmt.Errorf("compress chunk: %w", err)
+		}
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO chunks (document_id, seq, content, content_zstd, embedding, chunk_type, image_path, start_line, end_line, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+		docID, seq, content, contentZstd, encodeEmbedding(embedding), ChunkTypeText, startLine, endLine, now,
+	)
+	return err
+}
+
+// GetSurroundingContext fetches adjacent chunks within radius for a document and returns the combined content with expanded line span.
+func (s *Store) GetSurroundingContext(docID int64, seq int, radius int) (string, int, int, error) {
+	return s.GetSurroundingContextWithContext(context.Background(), docID, seq, radius)
+}
+
+// GetSurroundingContextWithContext fetches adjacent chunks with cancellation.
+func (s *Store) GetSurroundingContextWithContext(ctx context.Context, docID int64, seq int, radius int) (string, int, int, error) {
+	if radius <= 0 {
+		radius = 0
+	}
+	minSeq := seq - radius
+	if minSeq < 0 {
+		minSeq = 0
+	}
+	maxSeq := seq + radius
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT seq, content, content_zstd, COALESCE(start_line, 0), COALESCE(end_line, 0)
+		 FROM chunks
+		 WHERE document_id = ? AND seq >= ? AND seq <= ?
+		 ORDER BY seq ASC`,
+		docID, minSeq, maxSeq,
+	)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	defer rows.Close()
+
+	var contents []string
+	startLine := 0
+	endLine := 0
+
+	for rows.Next() {
+		var (
+			sNum         int
+			content      string
+			contentZstd  []byte
+			sLine, eLine int
+		)
+		if err := rows.Scan(&sNum, &content, &contentZstd, &sLine, &eLine); err != nil {
+			return "", 0, 0, fmt.Errorf("scan surrounding chunk: %w", err)
+		}
+		if len(contentZstd) > 0 {
+			decomp, err := DecompressString(contentZstd)
+			switch {
+			case err == nil:
+				content = decomp
+			case content != "":
+				// Corrupt zstd blob: keep the raw content column rather than
+				// silently dropping the chunk from the context window;
+				// without a usable fallback, fail loudly — mirroring the FTS
+				// rebuild path (review 2026-09-17 L4 follow-up).
+			default:
+				return "", 0, 0, fmt.Errorf("decompress chunk seq %d: %w", sNum, err)
+			}
+		}
+		if content != "" {
+			contents = append(contents, content)
+		}
+		if startLine == 0 || (sLine > 0 && sLine < startLine) {
+			startLine = sLine
+		}
+		if eLine > endLine {
+			endLine = eLine
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", 0, 0, fmt.Errorf("get surrounding context rows: %w", err)
+	}
+	return strings.Join(contents, "\n\n"), startLine, endLine, nil
+}
+
+// InsertImageChunk inserts an image chunk with type=1 and an image path.
+func (s *Store) InsertImageChunk(docID int64, seq int, context string, imagePath string, embedding []float32) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	var contentZstd []byte
+	var err error
+	if s.compressionEnabled {
+		contentZstd, err = CompressString(context, s.compressionLevel)
+		if err != nil {
+			return fmt.Errorf("compress image chunk: %w", err)
+		}
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO chunks (document_id, seq, content, content_zstd, embedding, chunk_type, image_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		docID, seq, context, contentZstd, encodeEmbedding(embedding), ChunkTypeImage, imagePath, now,
+	)
+	return err
+}
+
+// GetChunkContent returns the content of a chunk, decompressing if necessary.
+func (s *Store) GetChunkContent(chunkID int64) (string, error) {
+	return s.GetChunkContentContext(context.Background(), chunkID)
+}
+
+// GetChunkContentContext returns a chunk body while honoring cancellation.
+func (s *Store) GetChunkContentContext(ctx context.Context, chunkID int64) (string, error) {
+	content, err := s.repositories.chunks.contentContext(ctx, chunkID)
+	if err != nil {
+		return "", fmt.Errorf("get chunk content %d: %w", chunkID, err)
+	}
+	return content, nil
+}
+
+// ChunkEmbeddingUpdate holds a chunk ID and its vector embedding for batch persistence.
+type ChunkEmbeddingUpdate struct {
+	ChunkID   int64
+	Embedding []float32
+}
+
+func (s *Store) UpdateChunkEmbedding(chunkID int64, embedding []float32) error {
+	return s.UpdateChunkEmbeddingContext(context.Background(), chunkID, embedding)
+}
+
+func (s *Store) UpdateChunkEmbeddingContext(ctx context.Context, chunkID int64, embedding []float32) error {
+	return s.UpdateChunkEmbeddingsBatchContext(ctx, []ChunkEmbeddingUpdate{{ChunkID: chunkID, Embedding: embedding}}, false)
+}
+
+// PersistChunkEmbeddingContext updates SQLite without touching the live
+// vector index. Forced embedding passes use it and publish one complete graph
+// after all vectors have been persisted.
+func (s *Store) PersistChunkEmbeddingContext(ctx context.Context, chunkID int64, embedding []float32) error {
+	return s.PersistChunkEmbeddingsBatchContext(ctx, []ChunkEmbeddingUpdate{{ChunkID: chunkID, Embedding: embedding}})
+}
+
+// PersistChunkEmbeddingsBatchContext updates multiple chunk embeddings in SQLite within a single transaction
+// without touching the live vector index.
+func (s *Store) PersistChunkEmbeddingsBatchContext(ctx context.Context, updates []ChunkEmbeddingUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction for batch embedding update: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`)
+	if err != nil {
+		return fmt.Errorf("prepare statement for batch embedding update: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, u := range updates {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(u.Embedding) == 0 {
+			continue
+		}
+		if _, err := stmt.ExecContext(ctx, encodeEmbedding(u.Embedding), u.ChunkID); err != nil {
+			return fmt.Errorf("update chunk %d embedding: %w", u.ChunkID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit batch embedding update: %w", err)
+	}
+	return nil
+}
+
+// UpdateChunkEmbeddingsBatchContext updates chunk embeddings in SQLite in a single transaction
+// and updates or rebuilds the live vector index.
+func (s *Store) UpdateChunkEmbeddingsBatchContext(ctx context.Context, updates []ChunkEmbeddingUpdate, deferVectorUpdate bool) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	if deferVectorUpdate {
+		return s.PersistChunkEmbeddingsBatchContext(ctx, updates)
+	}
+
+	vector := s.vector()
+	var replacedIDs []int64
+	var previousEmbeddings [][]byte
+
+	if vector != nil {
+		seen := make(map[int64]bool, len(updates))
+		var candidateIDs []int64
+		for _, u := range updates {
+			if vector.Contains(u.ChunkID) && !seen[u.ChunkID] {
+				seen[u.ChunkID] = true
+				candidateIDs = append(candidateIDs, u.ChunkID)
+			}
+		}
+
+		if len(candidateIDs) > 0 {
+			prevMap := make(map[int64][]byte, len(candidateIDs))
+			const batchSize = 500
+
+			for i := 0; i < len(candidateIDs); i += batchSize {
+				end := i + batchSize
+				if end > len(candidateIDs) {
+					end = len(candidateIDs)
+				}
+				chunkIDs := candidateIDs[i:end]
+
+				args := make([]any, len(chunkIDs))
+				for j, id := range chunkIDs {
+					args[j] = id
+				}
+
+				query := "SELECT id, embedding FROM chunks WHERE id IN (" + sqlPlaceholders(len(chunkIDs)) + ")"
+				rows, err := s.db.QueryContext(ctx, query, args...)
+				if err != nil {
+					return fmt.Errorf("read previous chunk embeddings batch: %w", err)
+				}
+
+				for rows.Next() {
+					var id int64
+					var prev []byte
+					if err := rows.Scan(&id, &prev); err != nil {
+						rows.Close()
+						return fmt.Errorf("scan previous chunk embedding: %w", err)
+					}
+					prevMap[id] = prev
+				}
+				if err := rows.Err(); err != nil {
+					rows.Close()
+					return fmt.Errorf("read previous chunk embeddings batch rows: %w", err)
+				}
+				rows.Close()
+			}
+
+			for _, u := range updates {
+				if vector.Contains(u.ChunkID) {
+					prev, ok := prevMap[u.ChunkID]
+					if !ok {
+						return fmt.Errorf("read previous chunk embedding for %d: %w", u.ChunkID, sql.ErrNoRows)
+					}
+					replacedIDs = append(replacedIDs, u.ChunkID)
+					previousEmbeddings = append(previousEmbeddings, prev)
+				}
+			}
+		}
+	}
+
+	if err := s.PersistChunkEmbeddingsBatchContext(ctx, updates); err != nil {
+		return err
+	}
+
+	if vector == nil {
+		return nil
+	}
+
+	if len(replacedIDs) > 0 {
+		if err := s.SyncVectorIndexContext(ctx); err != nil {
+			var restoreErr error
+			for i, id := range replacedIDs {
+				if _, e := s.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`, previousEmbeddings[i], id); e != nil && restoreErr == nil {
+					restoreErr = e
+				}
+			}
+			if restoreErr != nil {
+				return fmt.Errorf("rebuild vector index after embedding update: %w (restore previous embeddings: %v)", err, restoreErr)
+			}
+			return fmt.Errorf("rebuild vector index after embedding update: %w", err)
+		}
+		return nil
+	}
+
+	for _, u := range updates {
+		if len(u.Embedding) == 0 {
+			continue
+		}
+		if err := vector.Add(u.ChunkID, u.Embedding); err != nil {
+			return fmt.Errorf("update vector index for chunk %d: %w", u.ChunkID, err)
+		}
+	}
+	return nil
+}
+
+// GetChunksWithoutEmbedding returns chunks that don't have embeddings yet.
+// If force is true, returns all chunks.
+func (s *Store) GetChunksWithoutEmbedding(force bool) ([]Chunk, error) {
+	return s.GetChunksWithoutEmbeddingContext(context.Background(), force)
+}
+
+func (s *Store) GetChunksWithoutEmbeddingContext(ctx context.Context, force bool) ([]Chunk, error) {
+	return s.getChunksWithoutEmbeddingContext(ctx, force, "", false)
+}
+
+// GetChunksWithoutEmbeddingForCollectionType returns chunks from collections
+// of typ whose embeddings are missing (or all chunks when force is true).
+func (s *Store) GetChunksWithoutEmbeddingForCollectionType(typ CollectionType, force bool) ([]Chunk, error) {
+	return s.GetChunksWithoutEmbeddingForCollectionTypeContext(context.Background(), typ, force)
+}
+
+func (s *Store) GetChunksWithoutEmbeddingForCollectionTypeContext(ctx context.Context, typ CollectionType, force bool) ([]Chunk, error) {
+	return s.getChunksWithoutEmbeddingContext(ctx, force, typ, true)
+}
+
+// GetChunksWithoutEmbeddingForCollectionContext returns pending chunks for
+// exactly one collection. Collection type is intentionally not used here:
+// multiple collections may share a type, while sync(collection) must not
+// embed another collection's pending work.
+func (s *Store) GetChunksWithoutEmbeddingForCollectionContext(ctx context.Context, collectionID int64, force bool) ([]Chunk, error) {
+	query := `SELECT chunks.id, chunks.document_id, chunks.seq, chunks.content, chunks.content_zstd,
+		COALESCE(chunks.chunk_type, ?), COALESCE(chunks.image_path, '')
+		FROM chunks JOIN documents d ON d.id = chunks.document_id
+		WHERE d.collection_id = ?`
+	args := []interface{}{ChunkTypeText, collectionID}
+	if !force {
+		query += " AND chunks.embedding IS NULL"
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var chunks []Chunk
+	for rows.Next() {
+		var c Chunk
+		var contentZstd []byte
+		if err := rows.Scan(&c.ID, &c.DocumentID, &c.Seq, &c.Content, &contentZstd, &c.ChunkType, &c.ImagePath); err != nil {
+			return nil, err
+		}
+		if len(contentZstd) > 0 {
+			c.Content, err = DecompressString(contentZstd)
+			if err != nil {
+				return nil, fmt.Errorf("decompress chunk %d: %w", c.ID, err)
+			}
+		}
+		chunks = append(chunks, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return chunks, nil
+}
+
+func (s *Store) getChunksWithoutEmbedding(force bool, typ CollectionType, filterType bool) ([]Chunk, error) {
+	return s.getChunksWithoutEmbeddingContext(context.Background(), force, typ, filterType)
+}
+
+func (s *Store) getChunksWithoutEmbeddingContext(ctx context.Context, force bool, typ CollectionType, filterType bool) ([]Chunk, error) {
+	query := `SELECT chunks.id, chunks.document_id, chunks.seq, chunks.content, chunks.content_zstd, COALESCE(chunks.chunk_type, ?), COALESCE(chunks.image_path, '') FROM chunks`
+	args := []interface{}{ChunkTypeText}
+	if filterType {
+		query += " JOIN documents d ON d.id = chunks.document_id JOIN collections c ON c.id = d.collection_id"
+	}
+	if !force {
+		query += " WHERE chunks.embedding IS NULL"
+	}
+	if filterType {
+		if force {
+			query += " WHERE"
+		} else {
+			query += " AND"
+		}
+		query += " c.type = ?"
+		args = append(args, typ)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var chunks []Chunk
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var ch Chunk
+		var contentZstd []byte
+		if err := rows.Scan(&ch.ID, &ch.DocumentID, &ch.Seq, &ch.Content, &contentZstd, &ch.ChunkType, &ch.ImagePath); err != nil {
+			return nil, err
+		}
+		if len(contentZstd) > 0 {
+			ch.Content, err = DecompressString(contentZstd)
+			if err != nil {
+				return nil, fmt.Errorf("decompress chunk %d: %w", ch.ID, err)
+			}
+		}
+		chunks = append(chunks, ch)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get chunks without embedding rows: %w", err)
+	}
+	return chunks, nil
+}

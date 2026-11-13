@@ -1,0 +1,123 @@
+package config
+
+import "time"
+
+const (
+	// DefaultEmbeddingBaseURL is the fallback endpoint for text embeddings.
+	DefaultEmbeddingBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	// DefaultEmbeddingModel is the fallback model for text embeddings.
+	DefaultEmbeddingModel = "text-embedding-v4"
+	// DefaultEmbeddingDimensions is the fallback dimension count for text embeddings.
+	DefaultEmbeddingDimensions = 1024
+
+	// DefaultVLBaseURL is the DashScope multimodal embedding endpoint.
+	DefaultVLBaseURL = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+
+	// DefaultEmbeddingTimeout is the default timeout for text embedding requests.
+	DefaultEmbeddingTimeout = 60 * time.Second
+	// DefaultVLTimeout is the default timeout for multimodal embedding requests.
+	DefaultVLTimeout = 120 * time.Second
+)
+
+// Embedding mode selection. "auto" (the default) resolves to realtime
+// embeddings; "realtime" forces the synchronous /embeddings path; "batch"
+// forces the async provider batch (Files + Batch API) and requires a provider
+// that declares async batch support.
+const (
+	ModeAuto     = "auto"
+	ModeRealtime = "realtime"
+	ModeBatch    = "batch"
+)
+
+const (
+	// DefaultDirPerms is the default permission for created directories.
+	DefaultDirPerms = 0755
+	// DefaultFilePerms is the default permission for created files.
+	DefaultFilePerms = 0644
+
+	// DefaultPrivateDirPerms is the permission for directories holding private
+	// data (seek's config dir, cache/index dir): owner-only access. The index
+	// contains the searchable text of every note, conversation, and code file.
+	DefaultPrivateDirPerms = 0700
+	// DefaultPrivateFilePerms is the permission for private data files (the
+	// SQLite index, config.yaml, state files): owner read/write only.
+	DefaultPrivateFilePerms = 0600
+
+	// DefaultTextSnippetLen is the length for text results in search.
+	DefaultTextSnippetLen = 200
+	// DefaultImageSnippetLen is the length for image context results in search.
+	DefaultImageSnippetLen = 150
+
+	// DefaultChunkMaxSize is the default max chunk size in characters.
+	DefaultChunkMaxSize = 1000
+	// DefaultChunkOverlap is the default overlap in characters.
+	DefaultChunkOverlap = 100
+
+	// DefaultEmbeddingBatchSize is the default batch size for text embeddings.
+	DefaultEmbeddingBatchSize = 6
+	// DefaultVLMaxContents is the max contents per multimodal request.
+	DefaultVLMaxContents = 20
+	// DefaultVLMaxImages is the max images per multimodal request.
+	DefaultVLMaxImages = 5
+	// DefaultBatchPollInterval is the time between polling batch job status.
+	DefaultBatchPollInterval = 5 * time.Second
+
+	// DefaultPDFDPI is the default DPI for PDF rasterization.
+	DefaultPDFDPI = 150.0
+	// DefaultOCRModel is the default model for OCR extraction.
+	DefaultOCRModel = "qwen-vl-ocr"
+	// DefaultOCRMaxTokens bounds OCR output so a vision model cannot generate
+	// unbounded commentary instead of returning the extracted page text.
+	DefaultOCRMaxTokens = 2048
+
+	// DefaultRerankModel is the default model for cross-encoder reranking.
+	DefaultRerankModel = "bge-reranker-large"
+
+	// DefaultQueryMode is the default query parsing mode.
+	DefaultQueryMode = "parsed"
+	// DefaultSearchLimit is the default search result limit when neither the
+	// CLI (-l) nor an MCP limit argument specifies one.
+	DefaultSearchLimit = 10
+	// DefaultAggregationBucketLimit is the default max bucket count for terms aggregations.
+	DefaultAggregationBucketLimit = 10
+	// DefaultAnalyzeLang is the default query analysis language (English).
+	DefaultAnalyzeLang = "en"
+	// DefaultRRFK is the default RRF constant.
+	DefaultRRFK = 60
+
+	// DefaultVectorIndexBackend is the default vector index backend.
+	DefaultVectorIndexBackend = "hnsw"
+	// DefaultHNSWM is the default HNSW M parameter.
+	DefaultHNSWM = 16
+	// DefaultHNSEFConstruction is the default HNSW efConstruction.
+	DefaultHNSEFConstruction = 100
+	// DefaultHNSEFSearch is the default HNSW efSearch.
+	DefaultHNSEFSearch = 50
+
+	// DefaultCompressionAlgorithm is the default compression algorithm.
+	DefaultCompressionAlgorithm = "zstd"
+	// DefaultCompressionLevel is the default compression level.
+	DefaultCompressionLevel = 3
+
+	// DefaultExtractorBackend selects the extraction domain backend.
+	// "builtin" uses native Go extractors (go-fitz PDF rasterization, markdown
+	// text read). "xberg" delegates to a remote xberg serve HTTP API that
+	// handles 100+ document formats.
+	DefaultExtractorBackend = "builtin"
+	// DefaultXbergBaseURL is the default xberg serve endpoint. Must match the
+	// port tools/xberg_server/server.py binds (8001); 8000 is flashrank_server.
+	DefaultXbergBaseURL = "http://127.0.0.1:8001"
+	// DefaultXbergTimeout is the default timeout for xberg extraction requests.
+	// Document extraction (esp. OCR) can be slow, so this is generous.
+	DefaultXbergTimeout = 180 * time.Second
+	// DefaultSemanticBaseURL is the default semantic tag service endpoint
+	// (tools/semantic). The service binds to 127.0.0.1:8003.
+	DefaultSemanticBaseURL = "http://127.0.0.1:8003"
+	// DefaultSemanticMaxTags caps the number of semantic tags per document.
+	DefaultSemanticMaxTags = 5
+	// DefaultSemanticTimeout is the default timeout for semantic tag requests.
+	DefaultSemanticTimeout = 60 * time.Second
+	// DefaultExtractorOutputFormat is the text format requested from xberg.
+	// "markdown" preserves structure (headings, tables, lists) which chunks well.
+	DefaultExtractorOutputFormat = "markdown"
+)

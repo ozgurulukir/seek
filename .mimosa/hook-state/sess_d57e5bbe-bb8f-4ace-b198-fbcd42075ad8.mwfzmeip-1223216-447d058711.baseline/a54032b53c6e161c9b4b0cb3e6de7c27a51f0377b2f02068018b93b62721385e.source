@@ -1,0 +1,233 @@
+package search
+
+import (
+	"strings"
+	"sync"
+
+	"github.com/blevesearch/snowballstem"
+	"github.com/blevesearch/snowballstem/english"
+	"github.com/blevesearch/snowballstem/turkish"
+)
+
+// Analyzer performs text analysis: tokenization, lowercasing, stop-word removal, and stemming.
+type Analyzer struct {
+	lang            string
+	enableStopWords bool
+	enableStemmer   bool
+	stopWords       map[string]bool
+	stemmer         func(string) string
+}
+
+// englishStopWords is a minimal set of common English stop words.
+var englishStopWords = map[string]bool{
+	"the": true, "and": true, "or": true, "but": true, "a": true, "an": true,
+	"is": true, "are": true, "was": true, "were": true, "be": true, "been": true,
+	"being": true, "have": true, "has": true, "had": true, "do": true, "does": true,
+	"did": true, "will": true, "would": true, "could": true, "should": true, "may": true,
+	"might": true, "must": true, "shall": true, "can": true, "to": true, "of": true,
+	"in": true, "for": true, "on": true, "with": true, "at": true, "by": true,
+	"from": true, "up": true, "about": true, "into": true, "through": true,
+	"during": true, "before": true, "after": true, "above": true, "below": true,
+	"between": true, "out": true, "off": true, "over": true, "under": true,
+	"again": true, "further": true, "then": true, "once": true, "here": true,
+	"there": true, "when": true, "where": true, "why": true, "how": true,
+	"all": true, "each": true, "every": true, "both": true, "few": true,
+	"more": true, "most": true, "other": true, "some": true, "such": true,
+	"no": true, "nor": true, "not": true, "only": true, "own": true,
+	"same": true, "so": true, "than": true, "too": true, "very": true,
+	"s": true, "t": true, "just": true, "don": true, "now": true,
+}
+
+// turkishStopWords is a minimal set of common Turkish stop words.
+var turkishStopWords = map[string]bool{
+	"ve": true, "veya": true, "ama": true, "fakat": true, "ancak": true,
+	"çünkü": true, "zira": true, "eğer": true, "ise": true, "ki": true,
+	"de": true, "da": true, "den": true, "dan": true, "ile": true,
+	"gibi": true, "kadar": true, "için": true, "olarak": true, "göre": true,
+	"bu": true, "şu": true, "o": true, "bir": true, "her": true,
+	"bazı": true, "tüm": true, "çok": true, "az": true, "fazla": true,
+	"en": true, "daha": true, "mi": true, "mı": true, "mu": true, "mü": true,
+	"ne": true, "nasıl": true, "neden": true, "kim": true, "hangi": true,
+}
+
+// NewAnalyzer creates a new text analyzer for the given language.
+// lang: "en" (English) or "tr" (Turkish). Unsupported languages fall back to no-op stemming.
+// enableStopWords: if true, common stop words are removed.
+// enableStemmer: if true, words are stemmed using Snowball.
+func NewAnalyzer(lang string, enableStopWords, enableStemmer bool) *Analyzer {
+	a := &Analyzer{
+		lang:            strings.ToLower(lang),
+		enableStopWords: enableStopWords,
+		enableStemmer:   enableStemmer,
+	}
+
+	if enableStopWords {
+		switch a.lang {
+		case "en", "english":
+			a.stopWords = englishStopWords
+		case "tr", "turkish":
+			a.stopWords = turkishStopWords
+		}
+	}
+
+	if enableStemmer {
+		switch a.lang {
+		case "en", "english":
+			// PERF: reuse snowballstem.Env via sync.Pool and check EqS for unstemmed words to avoid env.AssignTo() allocations.
+			a.stemmer = func(s string) string {
+				env := envPool.Get().(*snowballstem.Env)
+				env.SetCurrent(s)
+				english.Stem(env)
+				var res string
+				if env.EqS(s) {
+					res = s
+				} else {
+					res = env.AssignTo()
+				}
+				env.SetCurrent("")
+				envPool.Put(env)
+				return res
+			}
+		case "tr", "turkish":
+			// PERF: reuse snowballstem.Env via sync.Pool and check EqS for unstemmed words to avoid env.AssignTo() allocations.
+			a.stemmer = func(s string) string {
+				env := envPool.Get().(*snowballstem.Env)
+				env.SetCurrent(s)
+				turkish.Stem(env)
+				var res string
+				if env.EqS(s) {
+					res = s
+				} else {
+					res = guardedTurkishStem(s, env.AssignTo())
+				}
+				env.SetCurrent("")
+				envPool.Put(env)
+				return res
+			}
+		}
+	}
+
+	return a
+}
+
+// guardedTurkishStem protects against the Turkish snowball stemmer corrupting
+// non-Turkish ASCII tokens (e.g. "config" -> "configi", "launchd" -> "launchdu",
+// "service" -> "servi\u00e7"). Those bogus stems add letters or alter the ending
+// such that the result is neither a prefix of the token nor shorter, and a "*"
+// prefix query on them therefore never matches the original word — silently
+// zeroing search results (FTS5 queries are implicit AND).
+//
+// A stem is accepted only when it is still usable as a search prefix of the
+// token (the normal suffix-stripping case) or when it is strictly shorter
+// (genuine Turkish root reconstruction, e.g. "kitabı" -> "kitap"). Anything
+// else — same length but rewritten, or longer than the input — is discarded in
+// favour of the original token, mirroring how the English stemmer never grows
+// words. Returns the original token when the stem is unusable.
+func guardedTurkishStem(token, stem string) string {
+	if stem == "" {
+		return token
+	}
+	prefix := len(stem) <= len(token) && token[:len(stem)] == stem
+	if prefix || len(stem) < len(token) {
+		return stem
+	}
+	return token
+}
+
+// Analyze processes text through the analyzer pipeline:
+// tokenization → lowercase → stop-word filter → stemming.
+// It returns the analyzed tokens (without FTS5 prefix expansion).
+// PERF: uses AnalyzeTokenFunc to stream tokens directly into the pipeline without allocating an intermediate token slice.
+func (a *Analyzer) Analyze(text string) []string {
+	capEst := len(text)/5 + 1
+	if capEst > 64 {
+		capEst = 64
+	}
+	result := make([]string, 0, capEst)
+	AnalyzeTokenFunc(text, func(rawToken string) {
+		token := LowerToken(rawToken)
+		if token == "" {
+			return
+		}
+		if a.enableStopWords && a.stopWords != nil && a.stopWords[token] {
+			return
+		}
+		if a.enableStemmer && a.stemmer != nil {
+			result = append(result, a.stemmer(token))
+		} else {
+			result = append(result, token)
+		}
+	})
+	return result
+}
+
+var envPool = sync.Pool{
+	New: func() any {
+		return snowballstem.NewEnv("")
+	},
+}
+
+// minFTS5PrefixLen is the minimum length of a stemmed term that gets `*` prefix
+// expansion. Terms shorter than this skip the wildcard to avoid slow FTS5 suffix scans.
+const minFTS5PrefixLen = 3
+
+// AnalyzeForQuery is like Analyze but adds a `*` prefix expansion for stemmed terms.
+// This allows FTS5 to match both the stemmed form and its suffixes (e.g., "kitap*" matches "kitap" and "kitaplar").
+// Terms shorter than minFTS5PrefixLen skip the wildcard to avoid expensive FTS5 suffix scans.
+//
+// The FTS5 index is unstemmed (unicode61), so it stores the surface token. A
+// `stem*` query can only match when the stem is genuinely a prefix of that
+// surface form. Porter rewrites the endings of words like "body"->"bodi" and
+// "city"->"citi", producing a same-length stem that is not a prefix; `bodi*`
+// then matches nothing and silently drops the term. Such unusable stems fall
+// back to the surface token. Stems that are shorter than the token are still
+// honored for root reconstruction (the Turkish "kitabı"->"kitap" case).
+// PERF: uses AnalyzeTokenFunc to stream tokens directly into the pipeline without allocating an intermediate token slice.
+func (a *Analyzer) AnalyzeForQuery(text string) []string {
+	capEst := len(text)/5 + 1
+	if capEst > 64 {
+		capEst = 64
+	}
+	result := make([]string, 0, capEst)
+	AnalyzeTokenFunc(text, func(rawToken string) {
+		token := LowerToken(rawToken)
+		if token == "" {
+			return
+		}
+		if a.enableStopWords && a.stopWords != nil && a.stopWords[token] {
+			return
+		}
+		if a.enableStemmer && a.stemmer != nil {
+			stemmed := a.stemmer(token)
+			usable := stemmed != token && (strings.HasPrefix(token, stemmed) || len(stemmed) < len(token))
+			switch {
+			case !usable:
+				result = append(result, token)
+			case len(stemmed) >= minFTS5PrefixLen:
+				result = append(result, stemmed+"*")
+			default:
+				result = append(result, stemmed)
+			}
+		} else {
+			result = append(result, token)
+		}
+	})
+	return result
+}
+
+// Stem stems a single word using the analyzer's stemmer.
+// Returns the original word if stemming is disabled or the language is unsupported.
+func (a *Analyzer) Stem(word string) string {
+	if a.enableStemmer && a.stemmer != nil {
+		return a.stemmer(word)
+	}
+	return word
+}
+
+// IsStopWord reports whether the word is a stop word for the analyzer's language.
+func (a *Analyzer) IsStopWord(word string) bool {
+	if !a.enableStopWords || a.stopWords == nil {
+		return false
+	}
+	return a.stopWords[strings.ToLower(word)]
+}

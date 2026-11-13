@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "mimosa-finding-history/v1",
+  "runId": "20261104T164812984Z-27981-dbbf411ad13a",
+  "runStatus": "inconclusive",
+  "errors": [
+    "candidate-select:internal/search/content_test.go: candidate_limit_exceeded: 26 changed reviewable file(s) were not scanned because the limit is 20",
+    "baseline-read:third_party/search-benchmark-game/corpus_transform.py: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:third_party/search-benchmark-game/src/client.py: baseline_snapshot_unreadable: file is missing from task baseline"
+  ],
+  "target": ".",
+  "revision": "67b56c5bebcb35ca3272b182d08ba898afa7ed8c",
+  "diffHash": "778d87935d85537dae20f88f2c3dab1c28d46a841c41191bc3f13d1dfef1af3c",
+  "rulesVersion": "unavailable",
+  "recordedAt": "2026-11-04T16:48:12.984Z",
+  "timing": {
+    "startedAt": "2026-11-04T16:48:10.849Z",
+    "completedAt": "2026-11-04T16:48:12.984Z",
+    "durationMs": 2135
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "modelCalls": 0,
+    "measurement": "known-zero"
+  },
+  "findings": {
+    "total": 2,
+    "bySeverity": {
+      "high": 2
+    },
+    "byStatus": {
+      "candidate": 2
+    }
+  },
+  "coverage": {
+    "status": "partial",
+    "reasonCounts": {
+      "candidate_limit_exceeded": 1,
+      "baseline_snapshot_unreadable": 2,
+      "project_check_failed": 3
+    }
+  },
+  "evidenceBoundary": "static_only",
+  "immutableReport": ".mimosa/reports/task-review-sess_d3da436e-caa2-4975-996c-8bbb6d777b81-20261104T164812984Z-27981-dbbf411ad13a.json"
+}

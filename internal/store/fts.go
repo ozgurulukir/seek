@@ -231,11 +231,7 @@ func (r ftsRepository) upsertContext(ctx context.Context, docID int64, title, co
 	return tx.Commit()
 }
 
-// AppendFTS appends content to an existing FTS entry, preserving earlier text and title.
-func (s *Store) AppendFTS(docID int64, newContent string) error {
-	return s.AppendFTSContext(context.Background(), docID, newContent)
-}
-
+// AppendFTSContext appends content to an existing FTS entry, preserving earlier text and title.
 func (s *Store) AppendFTSContext(ctx context.Context, docID int64, newContent string) error {
 	return s.repositories.fts.appendContext(ctx, docID, newContent)
 }

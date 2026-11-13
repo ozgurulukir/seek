@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "mimosa-hook-status/v1",
+  "recordedAt": "2026-11-06T07:26:51.558Z",
+  "sessionId": "sess_66fbfc4c-39cf-42dc-b5c4-a4a37aa79a6a",
+  "event": "PostToolUse",
+  "toolName": "Edit",
+  "file": "/home/aristo/.zcode/cli/memories/projects/seek-3a220643fd4d4027/memory/seek-benchmark-game-bridge.md",
+  "outcome": "clear",
+  "coverage": "complete",
+  "findingCount": 0,
+  "durationMs": 2,
+  "hostState": "hook_complete",
+  "reportHint": ".mimosa/reports/"
+}

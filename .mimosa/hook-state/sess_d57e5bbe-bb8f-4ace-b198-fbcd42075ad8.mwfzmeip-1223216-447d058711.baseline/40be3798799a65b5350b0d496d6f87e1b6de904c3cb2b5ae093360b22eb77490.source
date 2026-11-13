@@ -1,0 +1,173 @@
+package embed
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/ozgurulukir/seek/internal/config"
+)
+
+// TaskPrefix holds model-specific input prefixes for asymmetric embedding
+// models (e.g. Nomic's "search_query: "/"search_document: "). The zero
+// value applies no prefixes.
+type TaskPrefix struct {
+	Query    string
+	Document string
+}
+
+func (p TaskPrefix) applyQuery(text string) string {
+	if p.Query != "" && !strings.HasPrefix(text, p.Query) {
+		return p.Query + text
+	}
+	return text
+}
+
+// applyDocuments returns texts with the document prefix prepended. When no
+// prefix is configured or texts already start with the prefix, it is not duplicated.
+func (p TaskPrefix) applyDocuments(texts []string) []string {
+	if p.Document == "" {
+		return texts
+	}
+	out := make([]string, len(texts))
+	for i, t := range texts {
+		if !strings.HasPrefix(t, p.Document) {
+			out[i] = p.Document + t
+		} else {
+			out[i] = t
+		}
+	}
+	return out
+}
+
+type Client struct {
+	baseURL    string
+	apiKey     string
+	model      string
+	dimensions int
+	taskPrefix TaskPrefix
+	http       *http.Client
+	// offline marks a client that must not perform any network call
+	// (search.privacy.offline_only). Requests fail fast, before any chunk,
+	// query, or image text leaves the machine.
+	offline bool
+}
+
+// NewClient builds a client for any OpenAI-compatible embeddings endpoint.
+// Set offline to refuse all network calls (config privacy.offline_only).
+func NewClient(baseURL, apiKey, model string, dimensions int, taskPrefix TaskPrefix) *Client {
+	return newClient(baseURL, apiKey, model, dimensions, taskPrefix, false)
+}
+
+// NewOfflineClient returns a client whose every request fails immediately
+// with a clear error — used when privacy.offline_only is set.
+func NewOfflineClient(model string) *Client {
+	return newClient("", "", model, 0, TaskPrefix{}, true)
+}
+
+func newClient(baseURL, apiKey, model string, dimensions int, taskPrefix TaskPrefix, offline bool) *Client {
+	return &Client{
+		baseURL:    baseURL,
+		apiKey:     apiKey,
+		model:      model,
+		dimensions: dimensions,
+		taskPrefix: taskPrefix,
+		http:       newHTTPClient(config.DefaultEmbeddingTimeout, offline, baseURL),
+		offline:    offline,
+	}
+}
+
+type embeddingRequest struct {
+	Model      string   `json:"model"`
+	Input      []string `json:"input"`
+	Dimensions int      `json:"dimensions,omitempty"`
+}
+
+type embeddingResponse struct {
+	Data  []indexedEmbedding `json:"data"`
+	Usage struct {
+		TotalTokens int `json:"total_tokens"`
+	} `json:"usage"`
+	Error *struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error"`
+}
+
+// embed sends the raw texts to the embeddings endpoint without any
+// task-prefix transformation. Public methods layer prefixes on top.
+func (c *Client) embed(texts []string) ([][]float32, error) {
+	return c.embedContext(context.Background(), texts)
+}
+
+func (c *Client) embedContext(ctx context.Context, texts []string) ([][]float32, error) {
+	if c.offline {
+		return nil, fmt.Errorf("offline_only is enabled: refusing to send %d text(s) to %q", len(texts), c.model)
+	}
+	req := embeddingRequest{
+		Model: c.model,
+		Input: texts,
+	}
+	if c.dimensions > 0 {
+		req.Dimensions = c.dimensions
+	}
+
+	var embResp embeddingResponse
+	if err := postJSON(ctx, c.http, c.baseURL+"/embeddings", c.apiKey, "embedding", req, &embResp); err != nil {
+		return nil, err
+	}
+	if embResp.Error != nil {
+		return nil, fmt.Errorf("embedding error: %s", embResp.Error.Message)
+	}
+	return reorderEmbeddings("embedding", embResp.Data, len(texts))
+}
+
+// EmbedDocuments embeds indexed document texts, prepending the configured
+// document task prefix (e.g. "search_document: " for Nomic models).
+func (c *Client) EmbedDocuments(texts []string) ([][]float32, error) {
+	return c.embed(c.taskPrefix.applyDocuments(texts))
+}
+
+func (c *Client) EmbedDocumentsContext(ctx context.Context, texts []string) ([][]float32, error) {
+	return c.embedContext(ctx, c.taskPrefix.applyDocuments(texts))
+}
+
+// EmbedQuery embeds a search query, prepending the configured query task
+// prefix (e.g. "search_query: " for Nomic models).
+func (c *Client) EmbedQuery(text string) ([]float32, error) {
+	return c.EmbedQueryContext(context.Background(), text)
+}
+
+func (c *Client) EmbedQueryContext(ctx context.Context, text string) ([]float32, error) {
+	results, err := c.embedContext(ctx, []string{c.taskPrefix.applyQuery(text)})
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no embedding returned")
+	}
+	return results[0], nil
+}
+
+// BatchEmbed handles document texts in batches of batchSize, applying the
+// document task prefix like EmbedDocuments.
+func (c *Client) BatchEmbed(texts []string, batchSize int) ([][]float32, error) {
+	if batchSize <= 0 {
+		batchSize = config.DefaultEmbeddingBatchSize
+	}
+
+	all := make([][]float32, len(texts))
+	for i := 0; i < len(texts); i += batchSize {
+		end := i + batchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+		batch, err := c.EmbedDocuments(texts[i:end])
+		if err != nil {
+			return nil, fmt.Errorf("batch %d-%d: %w", i, end, err)
+		}
+		copy(all[i:end], batch)
+	}
+	return all, nil
+}

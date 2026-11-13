@@ -1,0 +1,223 @@
+# AGENTS.md — seek
+
+Guidance for AI coding agents working in this repository.
+
+## What this is
+
+`seek` is a personal hybrid search engine (BM25 full-text + vector semantic search) for markdown notes, Claude Code conversations, and Codex conversations. It stores data in SQLite (via `mattn/go-sqlite3` with FTS5) and generates embeddings through a configurable provider (default DashScope).
+
+Go 1.25 module `github.com/ozgurulukir/seek`. ~25,000 LOC across a root package plus `cmd/`, `internal/`, and `third_party/`.
+
+## Build / test / verify (always run these)
+
+```bash
+# Build the real binary (FTS5 tag is REQUIRED):
+# Linux / macOS:
+CGO_ENABLED=1 go build -tags "fts5 sqlite_fts5" -o /dev/null .     # or: make build
+
+# Windows (PowerShell): use Zig for local builds. The Scoop GCC 15.x
+# toolchain cannot link go-fitz's bundled MuPDF archives (see note below).
+$env:CC="zig cc"; $env:CXX="zig c++"; $env:CGO_ENABLED="1"
+go build -tags "fts5 sqlite_fts5" -o seek.exe .
+
+# Test — requires the fts5 and sqlite_fts5 tags (mattn/go-sqlite3 with FTS5). `make test` already
+# includes it; the store tests open a real SQLite DB that needs FTS5.
+go test -tags "fts5 sqlite_fts5" ./...        # or: make test
+
+# Sanity:
+go vet -tags "fts5 sqlite_fts5" ./...        # clean
+gofmt -l cmd internal main.go third_party   # must print nothing (fix with gofmt -w)
+```
+
+- `mattn/go-sqlite3` is **cgo** — `CGO_ENABLED=1` is required to build.
+- FTS5 requires both the project `fts5` tag and go-sqlite3’s `sqlite_fts5` tag. Without them, `store.Open` errors out at migrate time. This is why **every** build/test invocation needs `-tags "fts5 sqlite_fts5"`.
+- The `Makefile` `test` target runs `go test -tags "fts5 sqlite_fts5" ./...`.
+- **Windows local build toolchain:** prefer `CC="zig cc"` and
+  `CXX="zig c++"` for every full build/test that links `go-fitz`. Scoop's
+  GCC 15.x fails against go-fitz's prebuilt MuPDF Windows archives with
+  `undefined reference to '__intrinsic_setjmpex'`. This is a toolchain/archive
+  ABI mismatch, not an FTS5 failure. Zig 0.16 has been verified with the root
+  binary, SQLite FTS5 runtime, and `internal/extractor/builtin` PDF tests. The
+  GitHub release workflow uses its separately provisioned MSYS2 MinGW compiler,
+  which is also verified by the release smoke test.
+
+## Releasing
+
+Releases are cut from `main` with one command:
+
+```bash
+make release VERSION=X.Y.Z                          # or: scripts/release.sh X.Y.Z
+make release VERSION=X.Y.Z RELEASE_ARGS=--dry-run   # preview; changes nothing
+```
+
+`scripts/release.sh` validates the version, branch, clean tracked tree, and tag
+uniqueness; runs the same quality gate as `.github/workflows/release.yml`
+(build, vet, gofmt, tests); bumps `plugin.json`, `.claude-plugin/plugin.json`,
+and `.codex-plugin/plugin.json`; promotes the top `## [Unreleased]` CHANGELOG
+heading to `## [<version>] - <date>` (reopening a fresh `[Unreleased]` above
+it); then commits, creates an annotated `v<version>` tag, and pushes the branch
+and tag. Pushing the tag triggers the Release workflow. Untracked files do not
+block a release; only staged/unstaged tracked changes do. The script is POSIX sh
+(macOS/Linux) and is not runnable from the Windows dev shell.
+
+**Version convention:** `plugin.json`, `.claude-plugin/plugin.json`,
+`.codex-plugin/plugin.json`, and the CHANGELOG headings carry the bare
+version (`X.Y.Z`) — `make release` writes all three. The git tag, release archive
+names, and the binary's `--version` string use the `vX.Y.Z` form;
+`scripts/release.sh` accepts either and strips a leading `v`.
+
+**CHANGELOG discipline:** add a bullet under the top `## [Unreleased]` section as
+each user-facing change lands; `make release` moves those bullets under the new
+version heading. `plugin.json`, `.claude-plugin/plugin.json`, and
+`.codex-plugin/plugin.json` mirror the released version. A root-package test
+(`TestReleaseVersionConsistency`) fails if any manifest drifts from the newest
+released CHANGELOG heading, or if the CHANGELOG does not open with exactly one
+`[Unreleased]` section.
+
+## Architecture (layered, no cycles)
+
+```
+root (main.go) ──> cmd ──> internal/{agenthooks,app,buildinfo,chunk,config,embed,extractor,indexer,jsonl,pipeline,search,semantic,source,store}
+```
+
+Keep the layering: `cmd/` orchestrates; `internal/` has no imports from `cmd/` or `root`. Do not introduce cross-boundary imports.
+
+### External / optional services (monorepo principle)
+
+Some capabilities (currently `semantic` tag enrichment, and the `xberg` rich-document
+extractor) are served by an **external process that this repo does not fully own**.
+Treat every such integration the same way:
+
+- **Monorepo** — the service's code and setup live *inside this repo* (see the
+  existing `tools/xberg_server/` and `tools/semantic/`),
+  not in a separate repository. A capability's absence must never break `seek`; it is
+  always **optional**.
+- **Contract-first** — `seek` talks to the service via a stable JSON envelope (see
+  `internal/extractor` and `internal/semantic`),
+  never its internal model/runtime formats. Switch backend via config (`backend` +
+  `base_url`), not code; producers may change without touching consumers.
+- **We do not host the model/LLM runtime.** `seek` does not embed or run the heavy
+  inference runtime. We ship:
+  - **docs** — how a user or agent brings up the endpoint themselves (wiki),
+  - **scripts** — setup/bootstrap that downloads & launches the service,
+  - **vendored deps** — only where the license permits (MIT/Apache-2.0/BSD). Copyleft
+    (GPL/AGPL) deps are never vendored, only referenced.
+- **Local-first** — default target is a loopback endpoint (`127.0.0.0/8`, `[::1]`),
+  aligned with `privacy.offline_only`. Remote/cloud backends remain possible via
+  `backend`/`base_url` but are never the default or a hard dependency.
+- User/agent brings the endpoint up from the docs; `seek` degrades gracefully while it
+  is down (warn + no tags, keyword search unaffected).
+
+- `internal/agenthooks` — the agent-hook domain: hook target registry (Claude Code, Codex), agent settings JSON surgery (backup-once-per-run, permission preservation, surgical seek-only edits), hook command identity matching (regexes over installed command strings — a compatibility surface, pinned by golden tests; never change output format), the multi-process writer lock + sync state shared by `seek sync`/`seek embed`/`seek add`/`seek rm`, and the `seek hooks sync|context` subprocess entry points. `cmd/hooks.go` is only kong structs + delegations.
+- `internal/app` — composition root: one `Runtime` owns Store, vector index, search Engine, Indexer and Pipeline; commands open it, get warnings, and `Close()` in reverse order. Also owns the search request planner (`SearchRequest` → filters/analyzer/dispatch) and the SQLite `SearchRepository` adapter, so `internal/search` stays persistence-neutral and the CLI/MCP surfaces share one request path. `NewCollectionService` is the collection lifecycle boundary (list/show/rename/reindex/backfill/sync --path) between commands and persistence; rename/reindex/backfill manage the index only and never touch source files.
+- `internal/bench` — the search-benchmark-game engine contract (the harness behind tantivy-search.github.io/bench, vendored at `third_party/search-benchmark-game/`): bulk corpus JSONL ingestion via `Ingest` (stdin → `UpsertAndReplaceIndexBatchContext`), the COUNT/TOP_K/TOP_K_COUNT stdin/stdout line protocol via `Serve` (query translation `GameQueryToFTS5`: game's Lucene subset → FTS5 MATCH with Lucene-compatible boolean semantics), and results merging/report rendering (`merge.go`, `emit.go`) for `docs/benchmarks.md`. Benchmarks open their own `store.Open` DB under `~/.cache/seek/bench/`, never the user's index.
+- `internal/store` — SQLite persistence: collections, documents, chunks, embeddings, FTS5 index, vector search. Fast fields are governed by the registry in `fielddef.go` (curated field names + match modes + documents-column sort fields; `seek fields` also discovers non-curated names physically present in `fast_fields`). **All SQL lives here** (incl. `fastfield.go`, `vector_index.go`, `compression.go`, `placeholders.go`). Multi-ID operations batch in 500-item chunks using the precomputed zero-alloc `sqlPlaceholders` helper. Vector search uses an HNSW index (`VectorIndex` interface, `coder/hnsw`) or the explicitly configured linear-scan backend; unknown backend names are configuration errors. Cosine uses SIMD via `viterin/vek`. FTS5 tokenizer is `unicode61 remove_diacritics 2` (Turkish-aware); BM25 weights title 10× content. Migrate-time logic auto-rebuilds the FTS table when the tokenizer config changes.
+- `internal/indexer` — orchestrates per-format sync: scans sources, upserts documents/chunks/FTS, writes fast-field metadata, runs orphan cleanup. This is the layer that knows about collection types (markdown/code/claude/codex/images/pdf/parser/documents); `store` and `source` stay format-agnostic. Semantic fast-field enrichment is centralized behind a `DocumentEnricher` seam (`enrich.go`, gated by `semanticEligible` — conversations/PDF/documents enrich during sync) with a collection-scoped semantic backfill (`backfill.go`, `BackfillSemantic` — the `reindex --semantic-only` path that also reaches markdown/code) for stale/absent documents.
+- `internal/extractor` — file extraction domain (`builtin` for native markdown/PDF/images and `xberg` for 100+ rich document formats via remote service).
+- `internal/embed` — providers: `Client` (any OpenAI-compatible text embeddings), `VLClient` (multimodal image+text), `OCRClient` (vision/OCR), and `RerankClient` (OpenAI/Cohere/Jina/DashScope cross-encoder reranking). The VL endpoint is configurable via `embedding.vl_base_url`, defaulting to DashScope's qwen3-vl-embedding.
+- `internal/search` — BM25 + vector + RRF hybrid fusion + optional Cross-Encoder reranking, plus structured query parser (`query.go`), aggregations (`aggregation.go`), autocomplete (`autocomplete.go`), and stemming analyzer (`tokenizer.go`).
+- `internal/source` — per-format parsers (code/claude/codex/markdown/images) plus `pdf.go`, which rasterizes PDF pages to PNG via `go-fitz` (bundled static MuPDF, cgo) and extracts text (embedded via `doc.Text`, or OCR via the `TextExtractor` interface for scanned pages). `source/parserdef/` holds the schema-driven parser engine (YAML schemas → SQLite/JSONL drivers) for opencode/copilot-cli/zed/hermes/zcode and schema-mode claude/codex; the JSONL driver also has a sliding-window mode (`messages_path` + `offset_field`) for model-I/O rollout logs like ZCode's (`~/.zcode/cli/rollout`), where each line carries a cumulative conversation window deduped by global index. Hermes Agent transcripts live in per-profile SQLite `state.db` files (`~/.hermes/state.db`, `~/.hermes/profiles/*/state.db`) — not JSONL.
+- `internal/chunk` — text chunking with 1-based start/end line span tracking (`StartLine`, `EndLine` for markdown, code, and conversations).
+- `internal/config` — `~/.config/seek/config.yaml`, provider selection, `IsMultimodal()` logic, reranker configuration (`RerankConfig`), and typed defaults (`defaults.go`).
+- `third_party/renameio` — platform-gated drop-in replacement for `github.com/google/renameio` (`tempfile_windows.go` with Win32 `MoveFileExW` / `tempfile_posix.go` with `fsync`+`os.Rename`) providing atomic file writes across Linux, macOS, and Windows.
+
+## Embedding provider configuration
+
+Config lives at `~/.config/seek/config.yaml`:
+
+```yaml
+embedding:
+  base_url: https://api.openai.com/v1   # any OpenAI-compatible endpoint
+  api_key: ${OPENAI_API_KEY}
+  model: text-embedding-3-small
+  dimensions: 1024
+  # multimodal: true                    # force image+text (VL) embedding
+  # vl_base_url: https://...            # VL endpoint; unset → DashScope default
+```
+
+- Text embeddings go to `base_url + /v1/embeddings` (OpenAI-compatible).
+- Multimodal (image+text) uses `VLClient`. It is enabled when `IsMultimodal()` is true — i.e. `multimodal: true`, or the model name contains `vl-embedding`/`multimodal`.
+- `dimensions` is **fixed at index time** (stored per-chunk). Changing model or dimensions requires re-indexing (`seek collection reindex <collection> --allow-vector-space-change`).
+- **Never hardcode a provider endpoint** — everything must route through `base_url`/`vl_base_url` from config. The only exception is `DefaultVLEndpoint` as the DashScope fallback.
+
+### OCR config (`ocr`)
+
+```yaml
+ocr:
+  enabled: true
+  # base_url/api_key/model default to the embedding provider; model defaults to qwen-vl-ocr
+  # base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  # api_key: ${DASHSCOPE_API_KEY}
+  # model: qwen-vl-ocr
+  # max_tokens: 2048
+```
+
+- OCR runs only for PDF pages with no embedded text (scanned docs), during `seek add --pdf` / `seek sync`.
+- Uses the OpenAI-compatible chat-completions vision format (`POST {base_url}/chat/completions`), with `stream: false` and a configurable `max_tokens` limit (default 2048), so any vision/OCR model works. With `privacy.offline_only: true`, only numeric loopback OCR endpoints (`127.0.0.0/8` or `::1`) are allowed and environment HTTP proxies are bypassed; remote/private-network endpoints are refused. The local OCR server remains a trusted boundary and may have its own forwarding behavior.
+- Extracted text is written to the chunk `content` and indexed via `UpsertFTS`, making scanned PDFs keyword-searchable.
+- `source.TextExtractor` is the interface; `embed.OCRClient` implements it. Keep `source` decoupled from `embed`.
+
+## Testing conventions
+
+- Test files exist across the internal packages (`internal/{agenthooks,app,chunk,config,embed,indexer,pipeline,search,semantic,source,store}` and `internal/source/parserdef`), including comprehensive tests for embedding clients and batching.
+- `internal/store` tests open a **real temp SQLite DB** via `t.TempDir()` and require the `fts5 sqlite_fts5` tags.
+- For new store tests, follow `internal/store/store_test.go` (uses `newTestStore(t)` helper + `t.Cleanup`).
+- Benchmarks live in `internal/store/store_test.go` — run with `go test -tags "fts5 sqlite_fts5" -bench . ./internal/store/`.
+
+## Performance notes (things already optimized / to keep in mind)
+
+- Cosine similarity uses SIMD via `github.com/viterin/vek/vek32`. The hand-rolled `cosineSimilarity` wrapper keeps guards against empty/mismatched/zero vectors (vek panics on degenerate input), so preserve those.
+- Do not reintroduce O(n²) sorts — use `sort.Slice` (the old bubble sorts were replaced).
+- Vector search uses an HNSW index (`coder/hnsw`) when `vector_index.backend = hnsw` (default), or a linear scan + in-memory sort when `vector_index.backend = linear` is explicitly selected. Other backend values fail configuration instead of silently changing performance characteristics. The HNSW index persists to `vector_index.hnsw.persist_path` (default `~/.cache/seek/hnsw.index`); `dimension` is fixed from `embedding.dimensions` at index build time.
+- Full vector sync (`syncVectorIndexFullContext`) **builds a candidate index off to the side and atomically publishes it** — the previous graph survives malformed/dimension-mismatched rows, cancellation, and mid-rebuild crashes (custom backends keep legacy clear-and-rebuild). `Clear()` is part of the `VectorIndex` interface and is memory-only; the persisted file is rewritten by `Flush` (at `Store.Close`). When adding a new index backend, implement `Clear()`.
+- Chunk content can be Zstd-compressed (`compression.algorithm`); `GetChunkContent`/`SearchVector` transparently decompress. Compression is backward-compatible (uncompressed content still readable).
+- **SQL IN-clause placeholders and batching (`sqlPlaceholders`)** — always use `sqlPlaceholders(n)` from `internal/store` for parameter placeholder lists in `IN (...)` or `NOT IN (...)` queries instead of `strings.Join` or `strings.Builder`. `sqlPlaceholders` is precomputed up to 2000 placeholders and returns a subslice with 0 heap allocations.
+- **SQLite parameter limits and chunking (`batchSize = 500`)** — batch multi-ID queries (`DeleteOrphansContext`, `UpdateChunkEmbeddingsBatchContext`, `SyncVectorIndexIncrementalContext`, `FastFieldStore.BatchGetContext`, FTS orphan purges) in chunks of 500. This guarantees compatibility with SQLite's host parameter limit (`SQLITE_LIMIT_VARIABLE_NUMBER`, default 999 in SQLite < 3.32) and keeps memory flat and query plans predictable on large collections.
+
+## Gotchas
+
+- `os.UserHomeDir()` / `os.Stat` errors are often intentionally ignored (`home, _ := ...`) in `internal/source` — benign, but the `filepath.Walk` callback swallows traversal errors silently; don't copy that pattern for new critical paths.
+- Keep `main.go` and all files `gofmt`-clean. Field-alignment drift is a recurring cosmetic issue in `main.go` and `internal/embed/vl_client.go`.
+- SQLite is accessed through `database/sql`; connection strings use `_journal_mode=WAL&_foreign_keys=on`.
+- **Parameterized IN-clauses over string interpolation** — never format dynamically built ID lists or values directly into SQL query strings with `fmt.Sprintf`; use parameterized queries with `sqlPlaceholders(len(batch))` and pass IDs via `args...`.
+- **FTS5 tokenizer is fixed at CREATE time** — the constant `store.FTSTokenize` (`unicode61 remove_diacritics 2`) cannot be a bound parameter; it is formatted into the DDL. `migrate()` detects a tokenize change via `sqlite_master` and atomically drops + recreates + repopulates `documents_fts` from chunk contents (lossy reconstruction — see `rebuildFTSFromDocuments` comment). Don't change `FTSTokenize` casually; it triggers a full FTS rebuild for every user on next open.
+- **FTS5 bm25 weighting** — `store.FTSTitleWeight` (10.0) boosts the title column over content. If you add columns to `documents_fts`, update the weight list in `SearchFTS` (SELECT and ORDER BY) — column weights are positional.
+- **`expandEnv` uses `os.ExpandEnv`** — it substitutes `$VAR` and `${VAR}` anywhere in the value (e.g. `"Bearer ${TOKEN}"`), not just whole-value matches. Set undefined vars are left empty.
+- The indexer logs `WARN:` lines and counts `failed` files per sync; previously these errors were silently dropped. New sync code paths should follow this pattern (count failures, surface them in the summary line).
+- **Cross-platform background service (`cmd/service.go`)** — automatically routes to Windows Task Scheduler (`schtasks.exe`) on Windows, `systemd` user timer (`systemctl --user`) on Linux, and `launchd` plist on macOS. It schedules a single `seek sync` invocation; embedding runs in-process as part of sync (no separate `embed` schedule).
+- **Agent hooks (`cmd/hooks.go`)** — Claude Code (`~/.claude/settings.json`) and Codex (`~/.codex/hooks.json`) share the *same* JSON hook schema; `hookTarget` is the single source of truth — add new agents to that list, not as parallel code paths. ZCode is not a registry target: its Stop hook is configured manually in `~/.zcode/cli/config.json` (`hooks.events.Stop`, `enabled: true`) and runs the same `seek hooks sync` subprocess entry without `--agent` (whole-index sync). Stop hooks run agent-scoped `seek sync` and can optionally run realtime `embed` when installed with `--embed`; the binary is resolved via `exec.LookPath` with a PATH-dependent fallback (`"seek"`), never `os.Executable()`.
+- **Optional service scripts have one canonical home** — `tools/{semantic,xberg_server,flashrank_server,embed_server}` own the sources; `skills/seek/scripts/services/` holds generated copies bundled into the standalone skill. Edit the `tools/` side, then run `make skill-services`; never hand-edit the mirror. `TestSkillServiceBundleIsSynchronized` (root package; parses its file list from `scripts/sync-skill-services.py`, so add new files there) fails on stale copies, mirror hand-edits, and unlisted files; CI runs it via `test.yml`, and `skill-services.yml` re-checks stale/missing copies without the Go toolchain. Both trees are pinned `eol=lf` in `.gitattributes` because the comparison is byte-based.
+- **The benchmark harness is a vendored upstream** — `third_party/search-benchmark-game/` is a pinned fork of `quickwit-stuff/search-benchmark-game` (MIT; provenance + patch list in its README), *not* part of the `make skill-services` mirror. Generated benchmark artifacts (`corpus.json`, `results.json`, `queries.txt`, `smoke/`, engine `index/` dirs) are gitignored; only sources and `testdata/` fixtures are committed. Full benchmark runs are manual (`make corpus|index|bench` there) and take hours + tens of GB — never wire them into CI.
+
+## Commands surface (for reference)
+
+```
+seek add <path> --name <n>   # add markdown/notes collection
+seek add <path> --code       # add source code collection (Go, Rust, Python, TS/JS, etc.)
+seek add --claude | --codex | --images <path> | --pdf <path>
+seek add --opencode | --copilot | --zed | --hermes | --parser <name>   # schema-driven parser collections
+seek sync                    # incremental sync
+seek sync <collection> --path <p>   # security guard: validate <p> inside the collection, then sync the WHOLE collection (not a scope filter)
+seek embed                   # generate embeddings (realtime or batch)
+seek search "<query>" [--lex] [--vec] [-l N] [--collection ...] [--aggs ...]
+seek advanced analyze "<text>"  # tokenize + stem
+seek collection list         # list collections with semantic coverage
+seek collection show <name>  # detail view (type, path, pattern, counts, semantic coverage)
+seek collection rename <old> <new>   # index label only; source path unchanged
+seek collection reindex <name> [--semantic-only]   # full rebuild, or semantic fast-field backfill
+seek advanced schema --show|--validate
+seek advanced parsers list   # list parser schemas + detection status
+seek config                  # show/edit config
+seek auth login|status       # configure/show embedding provider
+seek service|hooks           # periodic sync+embed service management
+seek status                  # standalone top-level listing (same data as `seek collection list`, its own implementation)
+seek rm <collection>         # standalone top-level remove (index only; source files untouched)
+seek bench index|serve|report   # search-benchmark-game engine contract (corpus ingest, query protocol, docs report); manual runs per third_party/search-benchmark-game/README.md
+```
+
+**Source-file guarantee:** no `seek` management command — `add`, `sync` (incl.
+`sync <collection> --path`), `embed`, `collection rename`/`reindex`, the
+`--semantic-only` backfill, `status`, or `rm` — ever modifies, deletes, or
+renames source files. Every command only reads your files and manages the
+local index (SQLite/FTS/fast fields/vector index); source files remain the
+source of truth (plan §1, §3.4).

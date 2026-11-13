@@ -1,0 +1,370 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"sync"
+
+	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/ozgurulukir/seek/internal/config"
+)
+
+type Store struct {
+	db                 *sql.DB
+	repositories       storeRepositories
+	compressionEnabled bool
+	compressionLevel   int
+	// desiredProfile is the embedding profile derived from the current config.
+	// It is set by the composition root (app.ConfigureVectorIndex) and used to
+	// fail fast on vector search when the persisted embeddings were produced by
+	// a different vector space. Nil means no validation is enforced (e.g. the
+	// lightweight OpenStore path used by status/add/rm).
+	desiredProfile *EmbeddingProfile
+	closeOnce      sync.Once
+	closeErr       error
+}
+
+// maxSQLiteConns bounds the connection pool: enough for parallel readers,
+// few enough that writers queue on the busy_timeout instead of stampeding
+// the single SQLite write lock.
+const maxSQLiteConns = 4
+
+func Open(dbPath string) (*Store, error) {
+	// The index holds the searchable text of the user's notes, conversations,
+	// and code — a private file. Databases created by older seek versions are
+	// 0644 (umask-dependent); tighten on every open (idempotent, no-op when
+	// already 0600). Best effort: a read-only mount must not break startup.
+	if fi, err := os.Stat(dbPath); err == nil && !fi.IsDir() {
+		_ = os.Chmod(dbPath, config.DefaultPrivateFilePerms)
+	}
+	// SQLite DSNs pass options after a '?' in the connection string, so a
+	// literal '?' in the path would be swallowed as the parameter separator
+	// and silently corrupt the open. Reject it up front — fail fast at the
+	// boundary instead (review 2026-09-17 M4).
+	if strings.ContainsRune(dbPath, '?') {
+		return nil, fmt.Errorf("invalid db path %q: must not contain '?'", dbPath)
+	}
+	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000")
+	if err != nil {
+		return nil, fmt.Errorf("open db: %w", err)
+	}
+	// WAL allows concurrent readers alongside one writer, but an unbounded
+	// pool lets connections stampede the single write lock while `seek
+	// service` syncs and the user searches. Bound the pool; write contention
+	// resolves through the DSN busy_timeout (review 2026-09-17 M4).
+	db.SetMaxOpenConns(maxSQLiteConns)
+	db.SetMaxIdleConns(maxSQLiteConns)
+	fastFields := NewFastFieldStore(db)
+	s := &Store{db: db, repositories: newStoreRepositories(db, fastFields)}
+	if err := s.migrate(); err != nil {
+		return nil, fmt.Errorf("migrate: %w", errors.Join(err, db.Close()))
+	}
+	return s, nil
+}
+
+func (s *Store) Close() error {
+	s.closeOnce.Do(func() {
+		var errs []error
+		if err := s.FlushVectorIndex(context.Background()); err != nil {
+			errs = append(errs, err)
+		}
+		if s.db != nil {
+			if err := s.db.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close database: %w", err))
+			}
+		}
+		s.closeErr = errors.Join(errs...)
+	})
+	return s.closeErr
+}
+
+func (s *Store) vector() VectorIndex {
+	return s.repositories.vectors.current()
+}
+
+// FlushVectorIndex publishes the vector graph and its manifest before the
+// database is closed. The generation is calculated from the persisted
+// embeddings so a restart can reject a stale graph instead of returning ghost
+// vector hits.
+func (s *Store) FlushVectorIndex(ctx context.Context) error {
+	if s.vector() == nil {
+		return nil
+	}
+	var errs []error
+	if metadata, ok := s.vector().(VectorIndexMetadata); ok {
+		generation, err := s.vectorGenerationContext(ctx)
+		if err != nil {
+			return fmt.Errorf("calculate vector generation: %w", err)
+		} else {
+			metadata.SetManifestGeneration(generation)
+		}
+	}
+	if flusher, ok := s.vector().(VectorIndexFlusher); ok {
+		if err := flusher.Flush(); err != nil {
+			errs = append(errs, fmt.Errorf("flush vector index: %w", err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// SetVectorIndex sets the vector index backend (HNSW or linear scan).
+func (s *Store) SetVectorIndex(idx VectorIndex) {
+	s.repositories.vectors.set(idx)
+}
+
+// RecoverVectorIndex validates the loaded manifest against the current
+// persisted embeddings. A mismatch is a safe stale state: clear the graph,
+// rebuild from SQLite, and expose the repair through the warning interface.
+func (s *Store) RecoverVectorIndex(ctx context.Context) error {
+	metadata, ok := s.vector().(VectorIndexMetadata)
+	if !ok {
+		return nil
+	}
+	// Cross-validate the manifest fingerprint against the SQLite embedding
+	// profile before any recovery decision. A divergence is surfaced as a
+	// warning so the user can reindex; data is never deleted automatically.
+	if err := s.crossValidateManifestProfile(ctx, metadata); err != nil {
+		return err
+	}
+	recovery, needsRecovery := s.vector().(VectorIndexRecovery)
+	needsRebuild := needsRecovery && recovery.NeedsRebuild()
+	if !needsRebuild && metadata.ManifestGeneration() == "" {
+		return nil
+	}
+	current, err := s.vectorGenerationContext(ctx)
+	if err != nil {
+		return fmt.Errorf("read vector generation: %w", err)
+	}
+	if !needsRebuild && current == metadata.ManifestGeneration() {
+		return nil
+	}
+	previous := metadata.ManifestGeneration()
+	if err := s.vector().Clear(); err != nil {
+		return fmt.Errorf("clear stale vector index: %w", err)
+	}
+	if needsRebuild {
+		metadata.SetWarning(fmt.Sprintf("vector index rebuilt from persisted embeddings: %s", recoveryReason(previous)))
+	} else {
+		metadata.SetWarning(fmt.Sprintf("vector index rebuilt because persisted embeddings changed (generation %s -> %s)", previous, current))
+	}
+	if _, err := s.syncVectorIndexFullContext(ctx); err != nil {
+		return fmt.Errorf("rebuild stale vector index: %w", err)
+	}
+	metadata.SetManifestGeneration(current)
+	if needsRecovery {
+		recovery.SetNeedsRebuild(false)
+	}
+	return nil
+}
+
+// crossValidateManifestProfile verifies the HNSW manifest's vector-space
+// fingerprint against the SQLite embedding profile. The manifest is a cache
+// copy of the profile; a divergence means the persisted graph was built from
+// embeddings that no longer match the active vector space. It is surfaced as a
+// warning (never an auto-delete) so the user can reindex safely.
+func (s *Store) crossValidateManifestProfile(ctx context.Context, metadata VectorIndexMetadata) error {
+	fp := metadata.ConfigFingerprint()
+	if fp == "" {
+		return nil
+	}
+	stored, err := s.GetEmbeddingProfile(ctx)
+	if err != nil {
+		return err
+	}
+	if stored == nil || stored.Fingerprint == fp {
+		return nil
+	}
+	has, err := s.HasEmbeddedChunks(ctx)
+	if err != nil {
+		return err
+	}
+	if !has {
+		return nil
+	}
+	metadata.SetWarning(fmt.Sprintf("vector index fingerprint does not match embedding profile %s; reindex with: seek collection reindex --all --allow-vector-space-change", profileLabel(stored)))
+	return nil
+}
+
+func recoveryReason(previous string) string {
+	if previous == "" {
+		return "persisted graph is missing or has no trusted manifest"
+	}
+	return "persisted graph metadata was invalid"
+}
+
+// FastFields returns the fast field store for sorting and aggregation.
+func (s *Store) FastFields() *FastFieldStore {
+	return s.repositories.fastFields
+}
+
+// SetCompression configures chunk content compression.
+// enabled: if true, new chunks are compressed with Zstd.
+// level: Zstd compression level (1-22); 0 means default (3).
+func (s *Store) SetCompression(enabled bool, level int) {
+	s.compressionEnabled = enabled
+	if level <= 0 {
+		level = 3
+	}
+	s.compressionLevel = level
+}
+
+// ConfigureCompression applies the persisted compression setting using one
+// consistent interpretation of the empty and "none" values.
+func (s *Store) ConfigureCompression(cfg config.CompressionConfig) {
+	algorithm := strings.ToLower(strings.TrimSpace(cfg.Algorithm))
+	s.SetCompression(algorithm != "" && algorithm != "none", cfg.Level)
+}
+
+// SyncVectorIndex adds all embedded chunks to the vector index.
+// It clears the index first to ensure consistency — otherwise repeated
+// syncs (e.g. after each `seek embed`) would accumulate duplicate/stale
+// entries and grow the HNSW graph indefinitely.
+func (s *Store) migrate() error {
+	if err := s.verifyFTS5(); err != nil {
+		return err
+	}
+
+	if err := s.initCoreSchema(); err != nil {
+		return err
+	}
+
+	if err := s.applyAlterStatements(); err != nil {
+		return err
+	}
+
+	if err := s.initFTS(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// verifyFTS5 checks the capability itself instead of relying on
+// pragma_compile_options metadata. The latter is not a capability contract and
+// previously caused every query error (including transient SQLite errors) to be
+// misreported as a build without FTS5.
+func (s *Store) verifyFTS5() error {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("verify SQLite FTS5 capability: acquire connection: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `CREATE VIRTUAL TABLE temp.__seek_fts5_probe USING fts5(content)`); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such module: fts5") {
+			return fmt.Errorf("SQLite FTS5 not enabled. Build with: make build (or: go build -tags \"fts5 sqlite_fts5\"): %w", err)
+		}
+		return fmt.Errorf("verify SQLite FTS5 capability: create probe table: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `DROP TABLE temp.__seek_fts5_probe`); err != nil {
+		return fmt.Errorf("verify SQLite FTS5 capability: drop probe table: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) initCoreSchema() error {
+	const schema = `
+		CREATE TABLE IF NOT EXISTS collections (
+			id INTEGER PRIMARY KEY,
+			name TEXT UNIQUE NOT NULL,
+			type TEXT NOT NULL,
+			path TEXT NOT NULL,
+			pattern TEXT DEFAULT '**/*.md',
+			created_at TEXT,
+			updated_at TEXT
+		);
+		CREATE TABLE IF NOT EXISTS documents (
+			id INTEGER PRIMARY KEY,
+			collection_id INTEGER REFERENCES collections(id) ON DELETE CASCADE,
+			path TEXT NOT NULL,
+			title TEXT,
+			content_hash TEXT,
+			mtime REAL,
+			line_count INTEGER,
+			created_at TEXT,
+			updated_at TEXT,
+			UNIQUE(collection_id, path)
+		);
+		CREATE TABLE IF NOT EXISTS chunks (
+			id INTEGER PRIMARY KEY,
+			document_id INTEGER REFERENCES documents(id) ON DELETE CASCADE,
+			seq INTEGER,
+			content TEXT,
+			embedding BLOB,
+			created_at TEXT
+		);
+		CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id);
+		CREATE TABLE IF NOT EXISTS embedding_profile (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			provider_kind TEXT NOT NULL,
+			model TEXT NOT NULL,
+			dimensions INTEGER NOT NULL,
+			document_task_prefix TEXT NOT NULL,
+			query_task_prefix TEXT NOT NULL,
+			normalization TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS fast_fields (
+			doc_id INTEGER NOT NULL,
+			field_name TEXT NOT NULL,
+			field_value TEXT,
+			PRIMARY KEY (doc_id, field_name)
+		);
+		CREATE INDEX IF NOT EXISTS idx_fast_fields_name_value ON fast_fields (field_name, field_value);`
+	if _, err := s.db.Exec(schema); err != nil {
+		return fmt.Errorf("init core schema: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) applyAlterStatements() error {
+	// Add new columns for multimodal support (backward compat via ALTER TABLE)
+	alterStmts := []string{
+		`ALTER TABLE chunks ADD COLUMN chunk_type INTEGER DEFAULT 0`,
+		`ALTER TABLE chunks ADD COLUMN image_path TEXT`,
+		`ALTER TABLE documents ADD COLUMN metadata TEXT DEFAULT '{}'`,
+		`ALTER TABLE chunks ADD COLUMN content_zstd BLOB`,
+		`ALTER TABLE collections ADD COLUMN parser_name TEXT`,
+		`ALTER TABLE collections ADD COLUMN parser_version INTEGER DEFAULT 0`,
+		`ALTER TABLE collections ADD COLUMN backend TEXT`,
+		`ALTER TABLE chunks ADD COLUMN start_line INTEGER DEFAULT 0`,
+		`ALTER TABLE chunks ADD COLUMN end_line INTEGER DEFAULT 0`,
+		// Document-scoped semantic enrichment state (card S2). NULL fingerprint
+		// means no enrichment has been recorded for the document.
+		`ALTER TABLE documents ADD COLUMN semantic_fingerprint TEXT`,
+		`ALTER TABLE documents ADD COLUMN semantic_status TEXT`,
+		// Fingerprint split into two SQL-comparable columns (card R3 / P2a):
+		// semantic_basis is the identity-only part (service/capability/schema)
+		// used as the coarse stale-selection key; semantic_source_hash mirrors
+		// documents.content_hash so a content change is detected SQL-side
+		// without reading chunks. NULL means never enriched (re-selected once).
+		`ALTER TABLE documents ADD COLUMN semantic_basis TEXT`,
+		`ALTER TABLE documents ADD COLUMN semantic_source_hash TEXT`,
+	}
+	for _, stmt := range alterStmts {
+		if err := s.execIgnoreDuplicate(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) execIgnoreDuplicate(stmt string) error {
+	_, err := s.db.Exec(stmt)
+	if err == nil {
+		return nil
+	}
+	// SQLite returns "duplicate column name" when column already exists.
+	if strings.Contains(err.Error(), "duplicate column") {
+		return nil
+	}
+	return fmt.Errorf("migration statement %q: %w", stmt, err)
+}
