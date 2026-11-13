@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -356,5 +358,76 @@ func TestStdoutLogger_Printf(t *testing.T) {
 				t.Errorf("logger output = %q, want %q", got, tt.expected)
 			}
 		})
+	}
+}
+
+type fakeBatchEmbedder struct{}
+
+func (fakeBatchEmbedder) BatchEmbedAsync(texts []string, onProgress func(string, time.Duration)) ([][]float32, error) {
+	return nil, fmt.Errorf("non-Context path should not be used")
+}
+
+func (fakeBatchEmbedder) BatchEmbedAsyncContext(ctx context.Context, texts []string, onProgress func(string, time.Duration)) ([][]float32, error) {
+	embeddings := make([][]float32, len(texts))
+	for i := range embeddings {
+		embeddings[i] = []float32{0.1, 0.2, 0.3}
+	}
+	return embeddings, nil
+}
+
+// TestEmbedBatchContext_CanceledCtx guards the persist step against canceled
+// contexts: even when the embedder itself ignores ctx, the embeddings→persist
+// loop must honor cancellation instead of writing to the store.
+func TestEmbedBatchContext_CanceledCtx(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "seek_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
+			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
+		}
+		t.Fatalf("failed to open store: %v", err)
+	}
+	defer db.Close()
+
+	col, err := db.CreateCollection("test_col", store.CollectionTypeMarkdown, tmpDir, "*.md")
+	if err != nil {
+		t.Fatalf("failed to create collection: %v", err)
+	}
+
+	docID, err := db.UpsertDocument(col.ID, "doc1.md", "Doc 1", "hash1", 123.0, 1)
+	if err != nil {
+		t.Fatalf("failed to upsert document: %v", err)
+	}
+	if err := db.InsertChunk(docID, 0, "Chunk 1", nil); err != nil {
+		t.Fatalf("failed to insert chunk: %v", err)
+	}
+	chunks, err := db.GetChunksWithoutEmbedding(false)
+	if err != nil {
+		t.Fatalf("failed to get chunks: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	updated, err := embedBatchContext(ctx, db, fakeBatchEmbedder{}, chunks, []string{"Chunk 1"}, testLogger{}, false)
+	if err == nil {
+		t.Fatalf("expected error for canceled context, got none (updated=%d)", updated)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+
+	remaining, err := db.GetChunksWithoutEmbedding(false)
+	if err != nil {
+		t.Fatalf("failed to get chunks without embedding: %v", err)
+	}
+	if len(remaining) != len(chunks) {
+		t.Errorf("persisted embeddings despite canceled context: %d of %d chunks still pending", len(remaining), len(chunks))
 	}
 }
