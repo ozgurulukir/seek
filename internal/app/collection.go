@@ -261,6 +261,9 @@ func (s *CollectionService) reindexCollections(ctx context.Context, cols []store
 			VectorIndex: true,
 		}, log)
 		if err != nil {
+			// Surface the failed sync's report too (the old collection-scoped
+			// Reindex carried it back to the caller on failure).
+			results = append(results, ReindexResult{Report: report, VectorSpaceChanged: changed})
 			return results, s.restoreEmbeddingSpace(ctx, backup, err)
 		}
 		results = append(results, ReindexResult{Report: report, VectorSpaceChanged: changed})
