@@ -3,6 +3,7 @@ package search
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -423,9 +424,15 @@ func (p *parser) parseNear() (Query, error) {
 		return nil, fmt.Errorf("expected '(' after NEAR at position %d", tok.pos)
 	}
 	var terms []string
+	lastTermPos := 0
+	closed := false
 	for {
 		tok = p.s.scanToken()
-		if tok.typ == tokenEOF || tok.typ == tokenRParen {
+		if tok.typ == tokenRParen {
+			closed = true
+			break
+		}
+		if tok.typ == tokenEOF {
 			break
 		}
 		if tok.typ == tokenInvalid {
@@ -433,11 +440,15 @@ func (p *parser) parseNear() (Query, error) {
 		}
 		if tok.typ == tokenIdent || tok.typ == tokenString || tok.typ == tokenNumber {
 			terms = append(terms, tok.val)
+			lastTermPos = tok.pos
 		}
 		// skip comma
 		if tok.typ == tokenComma {
 			continue
 		}
+	}
+	if !closed {
+		return nil, fmt.Errorf("expected ')' after NEAR at position %d", tok.pos)
 	}
 	if len(terms) < 2 {
 		return nil, fmt.Errorf("NEAR requires at least 2 terms")
@@ -445,7 +456,11 @@ func (p *parser) parseNear() (Query, error) {
 	// Last term might be N
 	n := 5
 	if last := terms[len(terms)-1]; isNumber(last) {
-		n = atoi(last)
+		parsed, err := strconv.Atoi(last)
+		if err != nil || parsed < 1 {
+			return nil, fmt.Errorf("invalid NEAR proximity %q at position %d", last, lastTermPos)
+		}
+		n = parsed
 		terms = terms[:len(terms)-1]
 	}
 	return &NearQuery{Terms: terms, N: n}, nil
@@ -458,14 +473,6 @@ func isNumber(s string) bool {
 		}
 	}
 	return len(s) > 0
-}
-
-func atoi(s string) int {
-	n := 0
-	for _, r := range s {
-		n = n*10 + int(r-'0')
-	}
-	return n
 }
 
 // --- Public API ---
@@ -706,5 +713,3 @@ func LowerToken(s string) string {
 }
 
 // --- Error types ---
-
-var ErrParse = errors.New("parse error")

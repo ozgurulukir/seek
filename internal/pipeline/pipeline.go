@@ -570,10 +570,6 @@ func embedRealtimeContext(ctx context.Context, db *store.Store, client embed.Doc
 	return updated, nil
 }
 
-func updateEmbedding(ctx context.Context, db *store.Store, chunkID int64, embedding []float32, deferVectorUpdate bool) error {
-	return db.UpdateChunkEmbeddingsBatchContext(ctx, []store.ChunkEmbeddingUpdate{{ChunkID: chunkID, Embedding: embedding}}, deferVectorUpdate)
-}
-
 // stdoutLogger is the production Logger backed by a writer (io.Discard in
 // hooks, os.Stdout in the CLI).
 type stdoutLogger struct{ w io.Writer }

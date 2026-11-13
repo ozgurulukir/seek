@@ -30,6 +30,11 @@ func TestParseQuery(t *testing.T) {
 		{`tags:go`, true, ""},
 		{`nosuchcol:x`, true, ""},
 		{`NEAR(hello world, 5)`, false, "*search.NearQuery"},
+		// An unclosed NEAR must be a parse error, not a silently
+		// truncated NEAR search (matches the paren enforcement in
+		// parsePrimary).
+		{`NEAR(hello world`, true, ""},
+		{`NEAR(hello world, 99999999999999999999)`, true, ""},
 		{`(a AND b) OR c`, false, "*search.BooleanQuery"},
 		{`hello`, false, "*search.TermQuery"},
 		{`yön`, false, "*search.TermQuery"},

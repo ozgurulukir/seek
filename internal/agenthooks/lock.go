@@ -57,18 +57,6 @@ func AcquireWriterLock(ctx context.Context, path string) (*Lock, error) {
 	}
 }
 
-// withLockEnv marks an environment so the child knows the writer lock is
-// already held, replacing any stale value.
-func withLockEnv(env []string) []string {
-	filtered := env[:0]
-	for _, value := range env {
-		if !strings.HasPrefix(value, LockEnv+"=") {
-			filtered = append(filtered, value)
-		}
-	}
-	return append(filtered, LockEnv+"=1")
-}
-
 // withoutLockEnv strips the marker so a detached child acquires the lock
 // itself.
 func withoutLockEnv(env []string) []string {
