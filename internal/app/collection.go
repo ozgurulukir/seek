@@ -13,6 +13,35 @@ import (
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
+// requireDeps is the canonical nil-dependency guard for CollectionService:
+// every exported method checks exactly the dependencies it uses, and one
+// uniform error names what is missing instead of per-method guard drift.
+// Supported names: "store", "pipeline", "indexer".
+func (s *CollectionService) requireDeps(names ...string) error {
+	if s == nil {
+		return fmt.Errorf("collection service: not configured")
+	}
+	var missing []string
+	for _, n := range names {
+		var ok bool
+		switch n {
+		case "store":
+			ok = s.store != nil
+		case "pipeline":
+			ok = s.pipeline != nil
+		case "indexer":
+			ok = s.indexer != nil
+		}
+		if !ok {
+			missing = append(missing, n)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("collection service: not configured (missing %s)", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 // collectionByName resolves a collection so a store failure keeps its cause;
 // only a genuine miss reports "not found" (review 2026-09-17 L16 follow-up).
 func (s *CollectionService) collectionByName(name string) (*store.Collection, error) {
@@ -96,8 +125,8 @@ type CollectionInfo struct {
 
 // List returns every collection with its detail accounting in one store query.
 func (s *CollectionService) List(ctx context.Context) ([]CollectionInfo, error) {
-	if s == nil || s.store == nil {
-		return nil, fmt.Errorf("collection service: store is nil")
+	if err := s.requireDeps("store"); err != nil {
+		return nil, err
 	}
 	details, err := s.store.CollectionDetails(ctx)
 	if err != nil {
@@ -112,8 +141,8 @@ func (s *CollectionService) List(ctx context.Context) ([]CollectionInfo, error) 
 
 // Show returns the detail accounting for one collection by name.
 func (s *CollectionService) Show(ctx context.Context, name string) (CollectionInfo, error) {
-	if s == nil || s.store == nil {
-		return CollectionInfo{}, fmt.Errorf("collection service: store is nil")
+	if err := s.requireDeps("store"); err != nil {
+		return CollectionInfo{}, err
 	}
 	details, err := s.store.CollectionDetails(ctx)
 	if err != nil {
@@ -130,8 +159,8 @@ func (s *CollectionService) Show(ctx context.Context, name string) (CollectionIn
 // Rename atomically renames a collection. Only the index label changes; the
 // source path and every document/chunk/FTS/fast-field/embedding stay intact.
 func (s *CollectionService) Rename(ctx context.Context, oldName, newName string) error {
-	if s == nil || s.store == nil {
-		return fmt.Errorf("collection service: store is nil")
+	if err := s.requireDeps("store"); err != nil {
+		return err
 	}
 	if strings.TrimSpace(newName) == "" {
 		return fmt.Errorf("rename collection: new name must not be empty")
@@ -175,8 +204,8 @@ type ReindexResult struct {
 // across every collection) use ReindexAll, which re-syncs and re-embeds all
 // collections so the store-global profile can be cleared safely.
 func (s *CollectionService) Reindex(ctx context.Context, name string, opts ReindexOptions, log pipeline.Logger) (ReindexResult, error) {
-	if s == nil || s.store == nil || s.pipeline == nil {
-		return ReindexResult{}, fmt.Errorf("collection service: not configured")
+	if err := s.requireDeps("store", "pipeline"); err != nil {
+		return ReindexResult{}, err
 	}
 	col, err := s.collectionByName(name)
 	if err != nil {
@@ -200,6 +229,9 @@ func (s *CollectionService) Reindex(ctx context.Context, name string, opts Reind
 // and it never touches source files. Changing the vector space for the whole
 // store is a deliberate action, so it requires AllowVectorSpaceChange.
 func (s *CollectionService) ReindexAll(ctx context.Context, opts ReindexOptions, log pipeline.Logger) ([]ReindexResult, error) {
+	if err := s.requireDeps("store", "pipeline"); err != nil {
+		return nil, err
+	}
 	if !opts.AllowVectorSpaceChange {
 		return nil, fmt.Errorf(
 			"reindex --all requires --allow-vector-space-change: the embedding profile is store-global, so reindexing every collection changes the vector space for all collections")
@@ -395,8 +427,8 @@ func (s *CollectionService) clearProfileOnMismatch(ctx context.Context, colID in
 // every handler with per-path orphan/embedding semantics) is out of scope for
 // this plan.
 func (s *CollectionService) SyncPath(ctx context.Context, name, path string, opts pipeline.Options, log pipeline.Logger) (indexer.SyncReport, error) {
-	if s == nil || s.store == nil || s.pipeline == nil {
-		return indexer.SyncReport{}, fmt.Errorf("collection service: not configured")
+	if err := s.requireDeps("store", "pipeline"); err != nil {
+		return indexer.SyncReport{}, err
 	}
 	col, err := s.collectionByName(name)
 	if err != nil {
@@ -416,8 +448,8 @@ func (s *CollectionService) SyncPath(ctx context.Context, name, path string, opt
 // writer lock (same model as sync/embed); cancellation via ctx stops the pass
 // at the next document boundary.
 func (s *CollectionService) Backfill(ctx context.Context, name string, log pipeline.Logger) (indexer.BackfillReport, error) {
-	if s == nil || s.store == nil || s.indexer == nil {
-		return indexer.BackfillReport{}, fmt.Errorf("collection service: not configured")
+	if err := s.requireDeps("store", "indexer"); err != nil {
+		return indexer.BackfillReport{}, err
 	}
 	// Route indexer diagnostics to the caller's logger (stderr from cmd)
 	// instead of the Indexer's stdout default (review 2026-09-17 L15).
