@@ -94,9 +94,14 @@ async def extract(file: UploadFile = File(...), output_format: Optional[str] = F
             }
         }
     except Exception as e:
+        # Never expose raw exception text to API callers; it can leak
+        # filesystem paths and library internals via stack-trace details.
+        # Only the exception class name is returned; the details go to logs.
+        print(f"xberg_server: extraction failed for {filename}: {e!r}")
         return {
             "results": [],
-            "errors": [{"input": filename, "message": str(e)}],
+            "errors": [{"input": filename,
+                        "message": f"extraction failed ({type(e).__name__})"}],
             "summary": {
                 "inputs": 1,
                 "results": 0,
