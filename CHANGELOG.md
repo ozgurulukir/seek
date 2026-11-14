@@ -27,14 +27,14 @@ All notable changes to `seek` are documented here. This follows
   `CountDocuments`/`CountChunks` loops; both route through
   `CollectionService.List` (a single `CollectionDetails` store query), the
   same path `seek collection list` already uses.
-=======
-- **remove dead compatibility shims**: twelve never-called non-Context wrappers in
-  `internal/store` (`syncVectorIndexFull`, `linearSearchVector`, `fetchSearchResults`,
-  `MaxChunkSeq`, `ListChunksForDocument`, `GetChunkContent`, `GetDocumentByID`,
-  `UpdateDocumentMtime`, `UpdateCollectionParserVersion`, `MaxDocumentMtime`,
-  `AppendFTS`) and `internal/pipeline` (`embedBatch`) — part of the dead non-Context
-  surface tracked by issue #189; the remaining test-only wrappers stay until their
-  test callers migrate.
+
+- **refactor(config): break the internal/store → internal/embed import**
+  (#190): `ProviderKind` and `DetectProviderKind` (pure endpoint
+  classification) moved from `internal/embed/factory.go` to
+  `internal/config/providerkind.go` — a leaf package both embed and store
+  already import — with `embed` re-exporting them so the capability surface
+  is unchanged. `internal/store` no longer imports `internal/embed`; the
+  layering test now pins the rule ("store must not import embed").
 - **docs(chunk): size budgets are bytes, not chars**
   (`internal/chunk/chunk.go`): `DefaultMaxChunkSize`/`DefaultOverlap` were
   commented as "chars" while every measurement is byte-based (`len` /

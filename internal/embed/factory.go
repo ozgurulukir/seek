@@ -9,84 +9,26 @@ import (
 	"github.com/ozgurulukir/seek/internal/config"
 )
 
-// ProviderKind classifies the configured embedding endpoint. It is the
-// non-secret identity used by the persisted embedding profile (P3): the kind
-// is stored instead of the API key or the full URL.
-type ProviderKind string
+// ProviderKind and DetectProviderKind live in internal/config (a leaf package
+// both embed and store already import) so internal/store can derive the
+// persisted embedding profile without importing internal/embed (#190). The
+// embed surface re-exports them for capability consumers.
+type ProviderKind = config.ProviderKind
 
 const (
-	// ProviderKindGeneric is any OpenAI-compatible endpoint that is not
-	// recognized as a local helper or a known hosted provider. It defaults to
-	// realtime embeddings and never to async batch.
-	ProviderKindGeneric ProviderKind = "generic"
-	// ProviderKindOllama is a local Ollama endpoint (loopback, port 11434 or
-	// an "ollama" model name). It serves only the synchronous /embeddings
-	// surface.
-	ProviderKindOllama ProviderKind = "ollama"
-	// ProviderKindLocal is a local helper service (tools/embed_server,
-	// FastEmbed) on a loopback address. It serves only the synchronous
-	// /embeddings surface.
-	ProviderKindLocal ProviderKind = "local"
-	// ProviderKindHosted is a known hosted provider whose adapter declares
-	// its capabilities explicitly (including async batch support).
-	ProviderKindHosted ProviderKind = "hosted"
+	ProviderKindGeneric = config.ProviderKindGeneric
+	ProviderKindOllama  = config.ProviderKindOllama
+	ProviderKindLocal   = config.ProviderKindLocal
+	ProviderKindHosted  = config.ProviderKindHosted
 )
-
-func (k ProviderKind) String() string { return string(k) }
-
-// hostedProviderSpec declares the capabilities of a known hosted provider.
-// Async batch is only declared for providers that actually expose the
-// Files + Batch API; it is never guessed from the URL shape.
-type hostedProviderSpec struct {
-	hostSuffix string
-	asyncBatch bool
-}
-
-var hostedProviders = []hostedProviderSpec{
-	{"dashscope.aliyuncs.com", true},
-	{"api.openai.com", true},
-}
-
-// isLocalEndpoint reports whether rawURL points at a loopback address or the
-// "localhost" hostname. Hostnames other than localhost are deliberately not
-// treated as local so DNS/hosts-file configuration cannot turn a remote
-// destination into a local one.
-func isLocalEndpoint(rawURL string) bool {
-	if config.IsNumericLoopbackURL(rawURL) {
-		return true
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(u.Hostname(), "localhost")
-}
 
 // DetectProviderKind classifies the configured embedding endpoint. It is used
 // both to compute capabilities and to build the persisted embedding profile.
 func DetectProviderKind(cfg *config.AppConfig) ProviderKind {
-	if cfg == nil {
-		return ProviderKindGeneric
-	}
-	e := cfg.Config.Embedding
-	u, err := url.Parse(e.BaseURL)
-	if err != nil || u.Hostname() == "" {
-		return ProviderKindGeneric
-	}
-	host := strings.ToLower(u.Hostname())
-	for _, hp := range hostedProviders {
-		if host == hp.hostSuffix || strings.HasSuffix(host, "."+hp.hostSuffix) {
-			return ProviderKindHosted
-		}
-	}
-	if isLocalEndpoint(e.BaseURL) {
-		if u.Port() == "11434" || strings.Contains(strings.ToLower(e.Model), "ollama") {
-			return ProviderKindOllama
-		}
-		return ProviderKindLocal
-	}
-	return ProviderKindGeneric
+	return config.DetectProviderKind(cfg)
 }
+
+var hostedProviders = config.HostedProviders
 
 // ProviderCapabilities computes the embedding surface for the configured
 // provider. Realtime embeddings are assumed for every provider that exposes
@@ -105,8 +47,8 @@ func ProviderCapabilities(cfg *config.AppConfig) Capabilities {
 	}
 	host := strings.ToLower(u.Hostname())
 	for _, hp := range hostedProviders {
-		if host == hp.hostSuffix || strings.HasSuffix(host, "."+hp.hostSuffix) {
-			caps.AsyncBatch = hp.asyncBatch
+		if host == hp.HostSuffix || strings.HasSuffix(host, "."+hp.HostSuffix) {
+			caps.AsyncBatch = hp.AsyncBatch
 			return caps
 		}
 	}
