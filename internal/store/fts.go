@@ -207,10 +207,6 @@ func rebuildFTSFromDocuments(runner statementRunner) error {
 
 // --- FTS ---
 
-func (s *Store) UpsertFTS(docID int64, title, content string) error {
-	return s.UpsertFTSContext(context.Background(), docID, title, content)
-}
-
 func (s *Store) UpsertFTSContext(ctx context.Context, docID int64, title, content string) error {
 	return s.repositories.fts.upsertContext(ctx, docID, title, content)
 }
@@ -263,10 +259,6 @@ func (r ftsRepository) appendContext(ctx context.Context, docID int64, newConten
 		return err
 	}
 	return tx.Commit()
-}
-
-func (s *Store) SearchFTS(query string, limit int, filters *FilterSet) ([]SearchResult, error) {
-	return s.SearchFTSContext(context.Background(), query, limit, filters)
 }
 
 // SearchFTSContext is the context-aware search seam used by the search

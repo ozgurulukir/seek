@@ -157,7 +157,7 @@ func TestSafeCleanupOrphansNilPurges(t *testing.T) {
 	if removed != 1 {
 		t.Fatalf("nil livePaths removed = %d, want 1", removed)
 	}
-	docs, _ := db.ListDocumentPaths(col.ID)
+	docs, _ := db.ListDocumentPathsContext(context.Background(), col.ID)
 	if len(docs) != 0 {
 		t.Fatalf("nil livePaths must purge collection, %d documents remain", len(docs))
 	}
@@ -180,7 +180,7 @@ func TestSafeCleanupOrphansMissingRootPreserves(t *testing.T) {
 	if removed != 0 {
 		t.Fatalf("missing root removed = %d, want 0", removed)
 	}
-	docs, _ := db.ListDocumentPaths(col.ID)
+	docs, _ := db.ListDocumentPathsContext(context.Background(), col.ID)
 	if len(docs) != 1 {
 		t.Fatalf("missing root wiped documents: %d remain, want 1", len(docs))
 	}
@@ -203,7 +203,7 @@ func TestSafeCleanupOrphansEmptyScanPurges(t *testing.T) {
 	if removed != 1 {
 		t.Fatalf("empty scan removed = %d, want 1", removed)
 	}
-	docs, _ := db.ListDocumentPaths(col.ID)
+	docs, _ := db.ListDocumentPathsContext(context.Background(), col.ID)
 	if len(docs) != 0 {
 		t.Fatalf("empty scan must purge, %d documents remain", len(docs))
 	}
@@ -223,7 +223,7 @@ func TestSafeCleanupOrphansRemovesOrphans(t *testing.T) {
 	if removed != 1 {
 		t.Fatalf("normal cleanup removed = %d, want 1", removed)
 	}
-	docs, _ := db.ListDocumentPaths(col.ID)
+	docs, _ := db.ListDocumentPathsContext(context.Background(), col.ID)
 	if _, ok := docs[live]; !ok {
 		t.Fatal("live document was removed")
 	}
@@ -253,7 +253,7 @@ func TestSafeCleanupOrphansFileRootPreserves(t *testing.T) {
 	if removed != 0 {
 		t.Fatalf("file root removed = %d, want 0", removed)
 	}
-	docs, _ := db.ListDocumentPaths(col.ID)
+	docs, _ := db.ListDocumentPathsContext(context.Background(), col.ID)
 	if len(docs) != 1 {
 		t.Fatalf("file root wiped documents: %d remain, want 1", len(docs))
 	}

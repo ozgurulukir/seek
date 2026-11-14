@@ -87,7 +87,7 @@ func TestEmbedPending_NoKey_SkipsWithWarning(t *testing.T) {
 	}
 	// The chunk stays pending (no embedding written), so keyword search
 	// works and a later `seek embed` can still process it.
-	remaining, err := db.GetChunksWithoutEmbedding(false)
+	remaining, err := db.GetChunksWithoutEmbeddingContext(context.Background(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestEmbedPending_WithKey_EmbedsPending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("embed pending: %v", err)
 	}
-	remaining, err := db.GetChunksWithoutEmbedding(false)
+	remaining, err := db.GetChunksWithoutEmbeddingContext(context.Background(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestEmbedPending_BatchFlagSelectsPath(t *testing.T) {
 	if realtimeHits == 0 {
 		t.Errorf("Batch=false must use the realtime /embeddings endpoint, hits: realtime=%d batch=%d", realtimeHits, batchHits)
 	}
-	remaining, _ := db.GetChunksWithoutEmbedding(false)
+	remaining, _ := db.GetChunksWithoutEmbeddingContext(context.Background(), false)
 	if len(remaining) != 0 {
 		t.Errorf("chunk not embedded: %d remaining", len(remaining))
 	}
@@ -264,7 +264,7 @@ func TestEmbedPending_MockProvider(t *testing.T) {
 	// Bypass NewClientFromConfig by stubbing capability via a key and
 	// injecting the mock at the helper level instead: EmbedPending builds its
 	// own client, so this test drives the helpers directly.
-	chunks, err := db.GetChunksWithoutEmbedding(false)
+	chunks, err := db.GetChunksWithoutEmbeddingContext(context.Background(), false)
 	if err != nil || len(chunks) != 1 {
 		t.Fatalf("setup: %v (%d)", err, len(chunks))
 	}
@@ -280,7 +280,7 @@ func TestEmbedPending_MockProvider(t *testing.T) {
 	if mock.calls != 1 {
 		t.Errorf("expected 1 embedder call, got %d", mock.calls)
 	}
-	remaining, _ := db.GetChunksWithoutEmbedding(false)
+	remaining, _ := db.GetChunksWithoutEmbeddingContext(context.Background(), false)
 	if len(remaining) != 0 {
 		t.Errorf("chunk still pending after mock embed: %d", len(remaining))
 	}

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -54,7 +55,7 @@ func TestDynamicFieldDiscoveryAndFiltering(t *testing.T) {
 		if err := s.FastFields().Set(docID, "author", author); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.UpsertFTS(docID, "Note", "note body content"); err != nil {
+		if err := s.UpsertFTSContext(context.Background(), docID, "Note", "note body content"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -90,7 +91,7 @@ func TestDynamicFieldDiscoveryAndFiltering(t *testing.T) {
 	// An end-to-end search filter on the dynamic field matches.
 	fs := NewFilterSet()
 	fs.Add(&FastFieldFilter{Field: "author", Value: "bob"})
-	results, err := s.SearchFTS("Note", 10, fs)
+	results, err := s.SearchFTSContext(context.Background(), "Note", 10, fs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +123,7 @@ func TestDynamicDiscoveryCoversSortFieldNameCollision(t *testing.T) {
 	if err := s.FastFields().Set(docID, "title", "My Custom Title"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpsertFTS(docID, "Note", "note body content"); err != nil {
+	if err := s.UpsertFTSContext(context.Background(), docID, "Note", "note body content"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -164,13 +165,13 @@ func TestChunkTypeFilterOnFTSPath(t *testing.T) {
 	if err := s.InsertChunk(docID, 0, "note body content", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpsertFTS(docID, "Note", "note body content"); err != nil {
+	if err := s.UpsertFTSContext(context.Background(), docID, "Note", "note body content"); err != nil {
 		t.Fatal(err)
 	}
 
 	fs := NewFilterSet()
 	fs.Add(&ChunkTypeFilter{Type: 0}) // text chunk exists → doc matches
-	results, err := s.SearchFTS("Note", 10, fs)
+	results, err := s.SearchFTSContext(context.Background(), "Note", 10, fs)
 	if err != nil {
 		t.Fatalf("SearchFTS with chunk-type filter: %v", err)
 	}
@@ -180,7 +181,7 @@ func TestChunkTypeFilterOnFTSPath(t *testing.T) {
 
 	fs = NewFilterSet()
 	fs.Add(&ChunkTypeFilter{Type: 1}) // no image chunk → doc excluded
-	results, err = s.SearchFTS("Note", 10, fs)
+	results, err = s.SearchFTSContext(context.Background(), "Note", 10, fs)
 	if err != nil {
 		t.Fatalf("SearchFTS with image filter: %v", err)
 	}

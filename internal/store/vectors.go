@@ -16,10 +16,6 @@ import (
 // store.go as part of the god-object decomposition — a mechanical move,
 // no changes.
 
-func (s *Store) SyncVectorIndex() error {
-	return s.SyncVectorIndexContext(context.Background())
-}
-
 func (s *Store) SyncVectorIndexContext(ctx context.Context) error {
 	_, err := s.syncVectorIndexFullContext(ctx)
 	return err
@@ -256,10 +252,6 @@ func (s *Store) vectorGenerationContext(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func (s *Store) SearchVector(queryEmb []float32, limit int, filters *FilterSet) ([]SearchResult, error) {
-	return s.SearchVectorContext(context.Background(), queryEmb, limit, filters)
 }
 
 // SearchVectorContext performs vector search while honoring cancellation for

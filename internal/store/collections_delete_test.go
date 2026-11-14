@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"testing"
 )
 
@@ -24,7 +25,7 @@ func TestDeleteCollectionRemovesEverything(t *testing.T) {
 	if err := s.InsertChunk(docID, 0, "searchable doomed content", nil); err != nil {
 		t.Fatalf("InsertChunk: %v", err)
 	}
-	if err := s.UpsertFTS(docID, "Doomed", "searchable doomed content"); err != nil {
+	if err := s.UpsertFTSContext(context.Background(), docID, "Doomed", "searchable doomed content"); err != nil {
 		t.Fatalf("UpsertFTS: %v", err)
 	}
 	if err := s.FastFields().Set(docID, "language", "en"); err != nil {

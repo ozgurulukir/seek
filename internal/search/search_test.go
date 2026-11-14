@@ -321,7 +321,7 @@ func insertDoc(t *testing.T, s *store.Store, path, title, content string) int64 
 	if err := s.InsertChunk(docID, 0, content, nil); err != nil {
 		t.Fatalf("InsertChunk: %v", err)
 	}
-	if err := s.UpsertFTS(docID, title, content); err != nil {
+	if err := s.UpsertFTSContext(context.Background(), docID, title, content); err != nil {
 		t.Fatalf("UpsertFTS: %v", err)
 	}
 	s.FastFields().Set(docID, "title", title)
@@ -544,10 +544,10 @@ func TestSearchHybridBasic(t *testing.T) {
 	doc2, _ := s.UpsertDocument(col.ID, "/tmp/doc2.md", "grape doc", "hash2", 1, 1)
 
 	_ = s.InsertChunk(doc1, 0, "apple banana", []float32{1.0, 0.0})
-	_ = s.UpsertFTS(doc1, "apple doc", "apple banana")
+	_ = s.UpsertFTSContext(context.Background(), doc1, "apple doc", "apple banana")
 
 	_ = s.InsertChunk(doc2, 0, "grape orange", []float32{0.0, 1.0})
-	_ = s.UpsertFTS(doc2, "grape doc", "grape orange")
+	_ = s.UpsertFTSContext(context.Background(), doc2, "grape doc", "grape orange")
 
 	embedClient := newTestEmbedClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -579,10 +579,10 @@ func TestSearchHybridFallback(t *testing.T) {
 	doc2, _ := s.UpsertDocument(col.ID, "/tmp/doc2.md", "apple second", "hash2", 1, 1)
 
 	_ = s.InsertChunk(doc1, 0, "apple banana", []float32{1.0, 0.0})
-	_ = s.UpsertFTS(doc1, "apple doc", "apple banana")
+	_ = s.UpsertFTSContext(context.Background(), doc1, "apple doc", "apple banana")
 
 	_ = s.InsertChunk(doc2, 0, "apple grape", []float32{0.0, 1.0})
-	_ = s.UpsertFTS(doc2, "apple second", "apple grape")
+	_ = s.UpsertFTSContext(context.Background(), doc2, "apple second", "apple grape")
 
 	// Embedding server returns error to force fallback to BM25.
 	embedClient := newTestEmbedClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -612,7 +612,7 @@ func TestSearchHybridZeroLimit(t *testing.T) {
 	col, _ := s.CreateCollection("test", "markdown", "/tmp", "*.md")
 	doc1, _ := s.UpsertDocument(col.ID, "/tmp/doc1.md", "apple", "hash1", 1, 1)
 	_ = s.InsertChunk(doc1, 0, "apple", []float32{1.0, 0.0})
-	_ = s.UpsertFTS(doc1, "apple", "apple")
+	_ = s.UpsertFTSContext(context.Background(), doc1, "apple", "apple")
 
 	embedClient := newTestEmbedClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -636,7 +636,7 @@ func TestSearchHybridVLClient(t *testing.T) {
 	col, _ := s.CreateCollection("test", "markdown", "/tmp", "*.md")
 	doc1, _ := s.UpsertDocument(col.ID, "/tmp/doc1.md", "apple", "hash1", 1, 1)
 	_ = s.InsertChunk(doc1, 0, "apple", []float32{1.0, 0.0})
-	_ = s.UpsertFTS(doc1, "apple", "apple")
+	_ = s.UpsertFTSContext(context.Background(), doc1, "apple", "apple")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -973,11 +973,11 @@ func TestSearchHybrid_SingleRerankerCall(t *testing.T) {
 	col, _ := s.CreateCollection("test", "markdown", "/tmp", "*.md")
 	doc1, _ := s.UpsertDocument(col.ID, "/tmp/doc1.md", "doc1", "h1", 1, 1)
 	_ = s.InsertChunk(doc1, 0, "apple computer", []float32{1.0, 0.0})
-	_ = s.UpsertFTS(doc1, "doc1", "apple computer")
+	_ = s.UpsertFTSContext(context.Background(), doc1, "doc1", "apple computer")
 
 	doc2, _ := s.UpsertDocument(col.ID, "/tmp/doc2.md", "doc2", "h2", 1, 1)
 	_ = s.InsertChunk(doc2, 0, "apple fruit", []float32{0.0, 1.0})
-	_ = s.UpsertFTS(doc2, "doc2", "apple fruit")
+	_ = s.UpsertFTSContext(context.Background(), doc2, "doc2", "apple fruit")
 
 	client := newTestEmbedClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1010,15 +1010,15 @@ func TestSearchHybrid_SortByFastField(t *testing.T) {
 	engine := NewEngine(NewStoreRepository(s), nil)
 
 	doc1, _ := s.UpsertDocument(col.ID, "/docs/1", "Go Language", "hash1", 1, 1)
-	s.UpsertFTS(doc1, "Go Language", "Go is a compiled language.")
+	s.UpsertFTSContext(context.Background(), doc1, "Go Language", "Go is a compiled language.")
 	s.FastFields().Set(doc1, "title", "Go Language")
 
 	doc2, _ := s.UpsertDocument(col.ID, "/docs/2", "Python", "hash2", 1, 1)
-	s.UpsertFTS(doc2, "Python", "Python is an interpreted language.")
+	s.UpsertFTSContext(context.Background(), doc2, "Python", "Python is an interpreted language.")
 	s.FastFields().Set(doc2, "title", "Python")
 
 	doc3, _ := s.UpsertDocument(col.ID, "/docs/3", "Rust Language", "hash3", 1, 1)
-	s.UpsertFTS(doc3, "Rust Language", "Rust is a systems language.")
+	s.UpsertFTSContext(context.Background(), doc3, "Rust Language", "Rust is a systems language.")
 	s.FastFields().Set(doc3, "title", "Rust Language")
 
 	ctx := context.Background()
@@ -1055,7 +1055,7 @@ func TestSearchHybrid_SymmetricFallback(t *testing.T) {
 	col, _ := s.CreateCollection("test", "markdown", "/tmp", "*.md")
 	doc1, _ := s.UpsertDocument(col.ID, "/tmp/doc1.md", "doc1", "h1", 1, 1)
 	_ = s.InsertChunk(doc1, 0, "alpha beta", []float32{1.0, 0.0})
-	_ = s.UpsertFTS(doc1, "doc1", "alpha beta")
+	_ = s.UpsertFTSContext(context.Background(), doc1, "doc1", "alpha beta")
 
 	t.Run("vector fails fallback to bm25", func(t *testing.T) {
 		// Vector client is nil -> vector search fails, but BM25 succeeds
@@ -1089,11 +1089,11 @@ func TestSearchBM25_SortByDocumentColumn(t *testing.T) {
 	engine := NewEngine(NewStoreRepository(s), nil)
 
 	doc1, _ := s.UpsertDocument(col.ID, "/docs/c.md", "Beta", "h1", 1, 30)
-	s.UpsertFTS(doc1, "Beta", "notes about testing")
+	s.UpsertFTSContext(context.Background(), doc1, "Beta", "notes about testing")
 	doc2, _ := s.UpsertDocument(col.ID, "/docs/a.md", "Gamma", "h2", 1, 10)
-	s.UpsertFTS(doc2, "Gamma", "notes about testing")
+	s.UpsertFTSContext(context.Background(), doc2, "Gamma", "notes about testing")
 	doc3, _ := s.UpsertDocument(col.ID, "/docs/b.md", "Alpha", "h3", 1, 20)
-	s.UpsertFTS(doc3, "Alpha", "notes about testing")
+	s.UpsertFTSContext(context.Background(), doc3, "Alpha", "notes about testing")
 
 	ctx := context.Background()
 

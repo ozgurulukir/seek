@@ -40,14 +40,14 @@ func TestUpsertAndReplaceIndexIsAtomic(t *testing.T) {
 		t.Fatal("expected invalid chunk type to fail")
 	}
 
-	oldResults, err := s.SearchFTS("old", 10, nil)
+	oldResults, err := s.SearchFTSContext(context.Background(), "old", 10, nil)
 	if err != nil {
 		t.Fatalf("search old content: %v", err)
 	}
 	if len(oldResults) != 1 || oldResults[0].Title != "old title" {
 		t.Fatalf("old state was not preserved: %#v", oldResults)
 	}
-	newResults, err := s.SearchFTS("new", 10, nil)
+	newResults, err := s.SearchFTSContext(context.Background(), "new", 10, nil)
 	if err != nil {
 		t.Fatalf("search new content: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestUpsertAndReplaceIndexIsAtomic(t *testing.T) {
 		t.Fatalf("failed write leaked new FTS state: %#v", newResults)
 	}
 
-	doc, err := s.GetDocument(col.ID, "note.md")
+	doc, err := s.GetDocumentContext(context.Background(), col.ID, "note.md")
 	if err != nil {
 		t.Fatal(err)
 	}

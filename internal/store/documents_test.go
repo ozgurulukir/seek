@@ -30,7 +30,7 @@ func TestDeleteOrphansContext_PartialPurge(t *testing.T) {
 		if err := s.InsertChunk(docID, 0, "chunk content", nil); err != nil {
 			t.Fatalf("InsertChunk: %v", err)
 		}
-		if err := s.UpsertFTS(docID, "Title", "chunk content"); err != nil {
+		if err := s.UpsertFTSContext(context.Background(), docID, "Title", "chunk content"); err != nil {
 			t.Fatalf("UpsertFTS: %v", err)
 		}
 		if err := s.FastFields().Set(docID, "tag", "value"); err != nil {
@@ -112,7 +112,7 @@ func TestDeleteOrphansContext_FullPurge(t *testing.T) {
 		if err := s.InsertChunk(docID, 0, "chunk content", nil); err != nil {
 			t.Fatalf("InsertChunk: %v", err)
 		}
-		if err := s.UpsertFTS(docID, "Title", "chunk content"); err != nil {
+		if err := s.UpsertFTSContext(context.Background(), docID, "Title", "chunk content"); err != nil {
 			t.Fatalf("UpsertFTS: %v", err)
 		}
 		if err := s.FastFields().Set(docID, "tag", "value"); err != nil {

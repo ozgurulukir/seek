@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -34,7 +35,7 @@ func TestSearchVectorHNSWErrorPropagates(t *testing.T) {
 	boom := errors.New("corrupt graph")
 	s.SetVectorIndex(&stubVectorIndex{searchErr: boom})
 
-	_, err := s.SearchVector([]float32{0.1, 0.2, 0.3}, 10, nil)
+	_, err := s.SearchVectorContext(context.Background(), []float32{0.1, 0.2, 0.3}, 10, nil)
 	if !errors.Is(err, boom) {
 		t.Fatalf("expected HNSW error to propagate, got %v", err)
 	}
@@ -51,7 +52,7 @@ func TestSearchVectorEmptyHNSWFallsBackToLinear(t *testing.T) {
 	insertVecDoc(t, s, "LinearFindable", [][]float32{{1, 0, 0}})
 	s.SetVectorIndex(&stubVectorIndex{})
 
-	results, err := s.SearchVector([]float32{1, 0, 0}, 10, nil)
+	results, err := s.SearchVectorContext(context.Background(), []float32{1, 0, 0}, 10, nil)
 	if err != nil {
 		t.Fatalf("SearchVector: %v", err)
 	}

@@ -180,7 +180,7 @@ func TestEnrichContent_FullChunkFromDB(t *testing.T) {
 	if err := s.InsertChunk(docID, 0, "full >>>content<<< stored", nil); err != nil {
 		t.Fatal(err)
 	}
-	chunks, err := s.GetChunksWithoutEmbedding(false)
+	chunks, err := s.GetChunksWithoutEmbeddingContext(context.Background(), false)
 	if err != nil || len(chunks) == 0 {
 		t.Fatalf("get chunk: %v (%d)", err, len(chunks))
 	}

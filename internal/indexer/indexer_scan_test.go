@@ -2,6 +2,7 @@ package indexer_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,7 +51,7 @@ func TestSyncMarkdownScanIssuePreservesExistingDocuments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	docs, err := db.ListDocumentPaths(col.ID)
+	docs, err := db.ListDocumentPathsContext(context.Background(), col.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

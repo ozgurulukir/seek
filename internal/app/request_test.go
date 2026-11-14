@@ -208,7 +208,7 @@ func TestRunAggsRunsSpecs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := runtime.Store.UpsertFTS(docID, name, "aggregation body text"); err != nil {
+		if err := runtime.Store.UpsertFTSContext(context.Background(), docID, name, "aggregation body text"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -265,7 +265,7 @@ func TestRunSearchUsesConfigDefaultLimit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := runtime.Store.UpsertFTS(docID, name, "aggregation body text"); err != nil {
+		if err := runtime.Store.UpsertFTSContext(context.Background(), docID, name, "aggregation body text"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -315,7 +315,7 @@ func TestFiltersDefaultCollection(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := runtime.Store.UpsertFTS(docID, colName+".md", "aggregation body text"); err != nil {
+				if err := runtime.Store.UpsertFTSContext(context.Background(), docID, colName+".md", "aggregation body text"); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -359,7 +359,7 @@ func TestRunSearchParsedModeMatchesNonPrefixStems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.Store.UpsertFTS(docID, "Doc", body); err != nil {
+	if err := runtime.Store.UpsertFTSContext(context.Background(), docID, "Doc", body); err != nil {
 		t.Fatal(err)
 	}
 

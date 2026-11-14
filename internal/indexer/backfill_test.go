@@ -701,10 +701,10 @@ func TestBackfillSemanticIsolation(t *testing.T) {
 	// something to retrieve both before and after the backfill.
 	queryEmb := []float32{0.1, 0.2, 0.3}
 	embedChunkID := pending[0].ID
-	if err := db.UpdateChunkEmbedding(embedChunkID, queryEmb); err != nil {
+	if err := db.UpdateChunkEmbeddingContext(context.Background(), embedChunkID, queryEmb); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SyncVectorIndex(); err != nil {
+	if err := db.SyncVectorIndexContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 

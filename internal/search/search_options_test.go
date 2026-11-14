@@ -35,7 +35,7 @@ func TestEngine_SearchWithOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to insert chunk: %v", err)
 	}
-	err = s.UpsertFTS(docID1, "doc1", "hello world search text")
+	err = s.UpsertFTSContext(context.Background(), docID1, "doc1", "hello world search text")
 	if err != nil {
 		t.Fatalf("failed to update FTS: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestEngine_SearchWithOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to insert chunk: %v", err)
 	}
-	err = s.UpsertFTS(docID2, "doc2", "hello again testing")
+	err = s.UpsertFTSContext(context.Background(), docID2, "doc2", "hello again testing")
 	if err != nil {
 		t.Fatalf("failed to update FTS: %v", err)
 	}

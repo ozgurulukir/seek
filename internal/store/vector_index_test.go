@@ -215,7 +215,7 @@ func TestStoreRecoverVectorIndexOnGenerationMismatch(t *testing.T) {
 	if err := idx.Save(idx.persistPath); err != nil {
 		t.Fatalf("save stale index: %v", err)
 	}
-	if err := s.UpdateChunkEmbedding(chunkID, []float32{0, 1, 0}); err != nil {
+	if err := s.UpdateChunkEmbeddingContext(context.Background(), chunkID, []float32{0, 1, 0}); err != nil {
 		t.Fatalf("UpdateChunkEmbedding: %v", err)
 	}
 	s.SetVectorIndex(idx)

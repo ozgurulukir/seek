@@ -1,6 +1,7 @@
 package indexer_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,7 +78,7 @@ func TestSyncClaudeAppendContinuesSeq(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	chunks, err := db.GetChunksWithoutEmbedding(true)
+	chunks, err := db.GetChunksWithoutEmbeddingContext(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,21 +105,21 @@ func TestSyncClaudeAppendContinuesSeq(t *testing.T) {
 
 	// FTS must contain the full conversation exactly once (no duplication,
 	// no loss) — AppendFTS only fires on the append path.
-	res, err := db.SearchFTS(`"alpha question one"`, 5, nil)
+	res, err := db.SearchFTSContext(context.Background(), `"alpha question one"`, 5, nil)
 	if err != nil {
 		t.Fatalf("SearchFTS alpha: %v", err)
 	}
 	if len(res) != 1 || res[0].DocumentID != first.DocumentID {
 		t.Fatalf("SearchFTS alpha results = %+v, want exactly the synced doc", res)
 	}
-	if res, err = db.SearchFTS(`"gamma question three"`, 5, nil); err != nil {
+	if res, err = db.SearchFTSContext(context.Background(), `"gamma question three"`, 5, nil); err != nil {
 		t.Fatalf("SearchFTS gamma: %v", err)
 	}
 	if len(res) != 1 {
 		t.Fatalf("SearchFTS gamma results = %+v, want 1", res)
 	}
 
-	chunks, err = db.GetChunksWithoutEmbedding(true)
+	chunks, err = db.GetChunksWithoutEmbeddingContext(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +168,7 @@ func TestSyncClaudeAppendContinuesSeq(t *testing.T) {
 	if err := idx.SyncCollection(col); err != nil {
 		t.Fatal(err)
 	}
-	chunks, err = db.GetChunksWithoutEmbedding(true)
+	chunks, err = db.GetChunksWithoutEmbeddingContext(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +229,7 @@ func TestSyncClaudeTruncatedFileResyncs(t *testing.T) {
 	}
 
 	// The truncated line must be gone from the index.
-	res, err := db.SearchFTS(`"gamma question three"`, 5, nil)
+	res, err := db.SearchFTSContext(context.Background(), `"gamma question three"`, 5, nil)
 	if err != nil {
 		t.Fatalf("SearchFTS gamma: %v", err)
 	}
@@ -238,14 +239,14 @@ func TestSyncClaudeTruncatedFileResyncs(t *testing.T) {
 
 	// The remaining lines must still be present (no data loss).
 	for _, term := range []string{`"alpha question one"`, `"beta question two"`} {
-		if res, err := db.SearchFTS(term, 5, nil); err != nil {
+		if res, err := db.SearchFTSContext(context.Background(), term, 5, nil); err != nil {
 			t.Fatalf("SearchFTS %s: %v", term, err)
 		} else if len(res) != 1 {
 			t.Fatalf("expected 1 result for %s after resync, got %d", term, len(res))
 		}
 	}
 
-	chunks, err := db.GetChunksWithoutEmbedding(true)
+	chunks, err := db.GetChunksWithoutEmbeddingContext(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +258,7 @@ func TestSyncClaudeTruncatedFileResyncs(t *testing.T) {
 	}
 
 	// The document row's line count must reflect the new on-disk size.
-	doc, err := db.GetDocument(col.ID, convPath)
+	doc, err := db.GetDocumentContext(context.Background(), col.ID, convPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +271,7 @@ func TestSyncClaudeTruncatedFileResyncs(t *testing.T) {
 	if err := idx.SyncCollection(col); err != nil {
 		t.Fatal(err)
 	}
-	chunks, err = db.GetChunksWithoutEmbedding(true)
+	chunks, err = db.GetChunksWithoutEmbeddingContext(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,14 +319,14 @@ func TestSyncClaudeEmptyFileRemovesDoc(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	docs, err := db.ListDocumentPaths(col.ID)
+	docs, err := db.ListDocumentPathsContext(context.Background(), col.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(docs) != 0 {
 		t.Fatalf("expected 0 documents after content emptied, got %d: %v", len(docs), docs)
 	}
-	if res, err := db.SearchFTS(`"alpha question one"`, 5, nil); err != nil {
+	if res, err := db.SearchFTSContext(context.Background(), `"alpha question one"`, 5, nil); err != nil {
 		t.Fatalf("SearchFTS: %v", err)
 	} else if len(res) != 0 {
 		t.Fatalf("FTS entry survived document removal: %+v", res)

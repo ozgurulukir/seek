@@ -200,10 +200,6 @@ type ChunkEmbeddingUpdate struct {
 	Embedding []float32
 }
 
-func (s *Store) UpdateChunkEmbedding(chunkID int64, embedding []float32) error {
-	return s.UpdateChunkEmbeddingContext(context.Background(), chunkID, embedding)
-}
-
 func (s *Store) UpdateChunkEmbeddingContext(ctx context.Context, chunkID int64, embedding []float32) error {
 	return s.UpdateChunkEmbeddingsBatchContext(ctx, []ChunkEmbeddingUpdate{{ChunkID: chunkID, Embedding: embedding}}, false)
 }
@@ -361,22 +357,14 @@ func (s *Store) UpdateChunkEmbeddingsBatchContext(ctx context.Context, updates [
 	return nil
 }
 
-// GetChunksWithoutEmbedding returns chunks that don't have embeddings yet.
+// GetChunksWithoutEmbeddingContext returns chunks that don't have embeddings yet.
 // If force is true, returns all chunks.
-func (s *Store) GetChunksWithoutEmbedding(force bool) ([]Chunk, error) {
-	return s.GetChunksWithoutEmbeddingContext(context.Background(), force)
-}
-
 func (s *Store) GetChunksWithoutEmbeddingContext(ctx context.Context, force bool) ([]Chunk, error) {
 	return s.getChunksWithoutEmbeddingContext(ctx, force, "", false)
 }
 
-// GetChunksWithoutEmbeddingForCollectionType returns chunks from collections
+// GetChunksWithoutEmbeddingForCollectionTypeContext returns chunks from collections
 // of typ whose embeddings are missing (or all chunks when force is true).
-func (s *Store) GetChunksWithoutEmbeddingForCollectionType(typ CollectionType, force bool) ([]Chunk, error) {
-	return s.GetChunksWithoutEmbeddingForCollectionTypeContext(context.Background(), typ, force)
-}
-
 func (s *Store) GetChunksWithoutEmbeddingForCollectionTypeContext(ctx context.Context, typ CollectionType, force bool) ([]Chunk, error) {
 	return s.getChunksWithoutEmbeddingContext(ctx, force, typ, true)
 }

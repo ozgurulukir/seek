@@ -27,7 +27,7 @@ func TestSearchWireParity_CLIVsMCP(t *testing.T) {
 	if err := db.InsertChunk(1, 0, "Go concurrency with channels and goroutines.", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertFTS(1, "Go Notes", "Go concurrency with channels and goroutines."); err != nil {
+	if err := db.UpsertFTSContext(context.Background(), 1, "Go Notes", "Go concurrency with channels and goroutines."); err != nil {
 		t.Fatal(err)
 	}
 

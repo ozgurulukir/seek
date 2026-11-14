@@ -68,7 +68,7 @@ func TestEmbedVLTextChunks(t *testing.T) {
 		t.Fatalf("failed to insert chunk 2: %v", err)
 	}
 
-	chunks, err := db.GetChunksWithoutEmbedding(false)
+	chunks, err := db.GetChunksWithoutEmbeddingContext(context.Background(), false)
 	if err != nil {
 		t.Fatalf("failed to get chunks: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestEmbedVLTextChunks(t *testing.T) {
 	}
 
 	// Verify chunks have embeddings
-	remaining, err := db.GetChunksWithoutEmbedding(false)
+	remaining, err := db.GetChunksWithoutEmbeddingContext(context.Background(), false)
 	if err != nil {
 		t.Fatalf("failed to get chunks without embedding: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestEmbedVLImageChunks(t *testing.T) {
 		t.Fatalf("failed to insert image chunk: %v", err)
 	}
 
-	chunks, err := db.GetChunksWithoutEmbedding(false)
+	chunks, err := db.GetChunksWithoutEmbeddingContext(context.Background(), false)
 	if err != nil {
 		t.Fatalf("failed to get chunks: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestEmbedVLImageChunks(t *testing.T) {
 	}
 
 	// Verify chunks have embeddings
-	remaining, err := db.GetChunksWithoutEmbedding(false)
+	remaining, err := db.GetChunksWithoutEmbeddingContext(context.Background(), false)
 	if err != nil {
 		t.Fatalf("failed to get chunks without embedding: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestEmbedPending_HTTPContract(t *testing.T) {
 	if err := EmbedPendingContext(context.Background(), cfg, db, Options{VectorIndex: false}, testLogger{}); err != nil {
 		t.Fatalf("plain embed should succeed: %v", err)
 	}
-	remaining, err := db.GetChunksWithoutEmbedding(false)
+	remaining, err := db.GetChunksWithoutEmbeddingContext(context.Background(), false)
 	if err != nil {
 		t.Fatalf("GetChunksWithoutEmbedding: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestEmbedBatchContext_CanceledCtx(t *testing.T) {
 	if err := db.InsertChunk(docID, 0, "Chunk 1", nil); err != nil {
 		t.Fatalf("failed to insert chunk: %v", err)
 	}
-	chunks, err := db.GetChunksWithoutEmbedding(false)
+	chunks, err := db.GetChunksWithoutEmbeddingContext(context.Background(), false)
 	if err != nil {
 		t.Fatalf("failed to get chunks: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestEmbedBatchContext_CanceledCtx(t *testing.T) {
 		t.Errorf("expected context.Canceled, got: %v", err)
 	}
 
-	remaining, err := db.GetChunksWithoutEmbedding(false)
+	remaining, err := db.GetChunksWithoutEmbeddingContext(context.Background(), false)
 	if err != nil {
 		t.Fatalf("failed to get chunks without embedding: %v", err)
 	}

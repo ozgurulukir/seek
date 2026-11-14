@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,7 +68,7 @@ func TestFTSRebuildHealsMissingTableOnReopen(t *testing.T) {
 	}
 	t.Cleanup(func() { s2.Close() })
 
-	results, err := s2.SearchFTS("uniquetoken", 5, nil)
+	results, err := s2.SearchFTSContext(context.Background(), "uniquetoken", 5, nil)
 	if err != nil {
 		t.Fatalf("SearchFTS after reopen: %v", err)
 	}
