@@ -5,6 +5,15 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **refactor(pipeline): one shared embeddings→persist path**
+  (`internal/pipeline/pipeline.go`): the four near-identical "iterate
+  embeddings → build `ChunkEmbeddingUpdate` → `UpdateChunkEmbeddingsBatchContext`
+  → count/log" loops (`updateTextEmbeddings`, the VL image callback, the
+  `embedBatchContext` tail, the `embedRealtimeContext` tail) now call one
+  `persistEmbeddingBatch` helper that maps batch positions to chunk indices
+  and owns the cancellation check — fixing the missing `ctx.Err()` guard in
+  the `embedBatchContext` persist loop, which could write to the store even
+  after the context was canceled.
 - **search: NEAR parser rejects unclosed and malformed proximity**
   (`internal/search/query.go`): `NEAR(a b` without a closing parenthesis is now
   a parse error instead of silently becoming a NEAR search, and a non-numeric
