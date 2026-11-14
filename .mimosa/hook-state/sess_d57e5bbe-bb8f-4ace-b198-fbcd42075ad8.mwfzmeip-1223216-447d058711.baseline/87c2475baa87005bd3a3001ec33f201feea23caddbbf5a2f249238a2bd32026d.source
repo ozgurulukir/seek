@@ -1,0 +1,633 @@
+package indexer
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+
+	"github.com/ozgurulukir/seek/internal/chunk"
+	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/embed"
+	"github.com/ozgurulukir/seek/internal/extractor"
+	"github.com/ozgurulukir/seek/internal/extractor/builtin"
+	"github.com/ozgurulukir/seek/internal/extractor/xberg"
+	"github.com/ozgurulukir/seek/internal/semantic"
+	"github.com/ozgurulukir/seek/internal/source"
+	"github.com/ozgurulukir/seek/internal/store"
+)
+
+// Logger allows the indexer to emit progress without hardcoding fmt.Printf
+type Logger interface {
+	Printf(format string, v ...interface{})
+}
+
+type defaultLogger struct{}
+
+func (l defaultLogger) Printf(format string, v ...interface{}) {
+	fmt.Printf(format, v...)
+}
+
+type Indexer struct {
+	cfg      *config.AppConfig
+	db       *store.Store
+	writer   IndexWriter
+	log      Logger
+	ctxValue context.Context
+	// mu guards the instance-level mutable state below (logger, report
+	// accounting and the lazily resolved semantic caches). Sync runs
+	// sequentially today; the lock keeps a future parallel sync/backfill on
+	// one shared Indexer from silently racing (review 2026-09-17 L12). The
+	// logger is guarded because WithLogger is called per-operation, not just
+	// at composition time.
+	mu     sync.Mutex
+	report SyncReport
+	// ext is an explicit override for the extraction backend, taking precedence
+	// over both per-collection backend and the config default. Set via
+	// WithExtractor (e.g. from a --backend flag). When nil, the backend is
+	// resolved per collection (see extractorFor).
+	ext      extractor.Extractor
+	resolver ExtractorResolver
+	// sem* cache the resolved semantic provider. Resolution (offline gate +
+	// one health check) happens at most once per indexer instance; handlers
+	// run sequentially.
+	semChecked bool
+	semClient  semantic.Provider
+	// semBasis caches the semantic enrichment identity (service identity +
+	// capability set + schema version, WITHOUT the per-document content hash)
+	// used by the sync path to record fingerprints. It is computed lazily and
+	// cached because a sync pass records one fingerprint per document and must
+	// not health-check the service for every one of them; WithSemanticProvider
+	// resets it so provider swaps recompute the identity.
+	semBasis    store.SemanticFingerprint
+	semBasisSet bool
+	// semBasisFailed records that semanticSyncBasis's last health check
+	// failed, so the sync path warns once instead of once per document while
+	// still retrying the check on every call. WithSemanticProvider resets it.
+	semBasisFailed bool
+	// enricher is the document-finalization seam all handlers route fast
+	// fields through. Defaults to the config-backed indexerEnricher; inject
+	// via WithEnricher.
+	enricher DocumentEnricher
+}
+
+func New(cfg *config.AppConfig, db *store.Store) *Indexer {
+	return NewWithDependencies(cfg, db, NewConfigExtractorResolver(cfg), db)
+}
+
+// NewWithDependencies is the composition-root constructor. The legacy New
+// convenience constructor remains for package callers and tests, while the
+// runtime supplies extractor and writer dependencies explicitly.
+func NewWithDependencies(cfg *config.AppConfig, db *store.Store, resolver ExtractorResolver, writer IndexWriter) *Indexer {
+	idx := &Indexer{
+		cfg:      cfg,
+		db:       db,
+		writer:   writer,
+		log:      defaultLogger{},
+		ctxValue: context.Background(),
+		resolver: resolver,
+	}
+	idx.enricher = &indexerEnricher{idx: idx}
+	return idx
+}
+
+// WithExtractor overrides the extraction backend for all collections (e.g. from
+// a --backend flag). Pass nil to revert to per-collection / config resolution.
+func (idx *Indexer) WithExtractor(ext extractor.Extractor) *Indexer {
+	idx.ext = ext
+	return idx
+}
+
+// WithExtractorResolver injects backend construction so the indexer does not
+// need to know how the composition root obtains extractors.
+func (idx *Indexer) WithExtractorResolver(resolver ExtractorResolver) *Indexer {
+	idx.resolver = resolver
+	return idx
+}
+
+// WithIndexWriter injects the transactional persistence seam used by all
+// format handlers. The default writer is the Store passed to New.
+func (idx *Indexer) WithIndexWriter(writer IndexWriter) *Indexer {
+	idx.writer = writer
+	return idx
+}
+
+// WithEnricher injects the document-finalization seam. The default is the
+// config-backed enricher that lazily resolves the semantic provider; tests
+// and composition roots may substitute a fake.
+func (idx *Indexer) WithEnricher(enricher DocumentEnricher) *Indexer {
+	idx.enricher = enricher
+	return idx
+}
+
+// WithSemanticProvider injects the semantic tag provider directly, marking
+// the lazy resolution as already done. Tests substitute a fake provider via
+// this hook instead of running a real service; the production path resolves
+// the provider from config on first use.
+func (idx *Indexer) WithSemanticProvider(p semantic.Provider) *Indexer {
+	idx.mu.Lock()
+	idx.semChecked = true
+	idx.semClient = p
+	idx.semBasisSet = false
+	idx.semBasisFailed = false
+	idx.mu.Unlock()
+	return idx
+}
+
+func (idx *Indexer) chunkSize() (int, int) {
+	if idx.cfg == nil {
+		return 0, 0
+	}
+	return idx.cfg.Config.Chunk.MaxSize, idx.cfg.Config.Chunk.Overlap
+}
+
+// extractorFor resolves the extractor to use for a collection. Precedence:
+//  1. idx.ext (explicit override, e.g. --backend flag);
+//  2. col.Backend (per-collection override persisted at add time);
+//  3. cfg.Config.Extractor.Backend (global config default).
+//
+// Empty backend strings fall through to the configured resolver default.
+func (idx *Indexer) extractorFor(col *store.Collection) (extractor.Extractor, error) {
+	if idx.ext != nil {
+		return idx.ext, nil
+	}
+	if idx.resolver == nil {
+		return nil, fmt.Errorf("extractor resolver is not configured")
+	}
+	return idx.resolver.Resolve(col)
+}
+
+// NewExtractor builds the extractor named by backend. An empty backend selects
+// the config default. It lives here (not in the extractor package) to avoid an
+// import cycle: both backends import extractor for the interface, so the
+// constructor that picks between them must sit above them. For xberg it uses
+// NewWithHealthCheck so an unreachable server fails fast at sync start rather
+// than silently marking every file unsupported.
+func NewExtractor(cfg *config.AppConfig, backend string) (extractor.Extractor, error) {
+	if backend == "" {
+		backend = cfg.Config.Extractor.Backend
+	}
+	var ocr extractor.OCR
+	if cfg.Config.CanUseOCR() {
+		ocr = embed.NewOCRClient(cfg.Config.OCR.BaseURL, cfg.Config.OCR.APIKey, cfg.Config.OCR.Model, cfg.Config.OCR.MaxTokens)
+	}
+	switch backend {
+	case "", "builtin":
+		return builtin.New(ocr, cfg.CacheDir), nil
+	case "xberg":
+		// The xberg backend extracts rich documents by POSTing their contents
+		// to the xberg HTTP service — external data flow even when that
+		// service runs on localhost. privacy.offline_only forbids every
+		// network call, so refuse the backend outright rather than silently
+		// shipping document text over the wire (review finding: the offline
+		// guarantee previously did not cover this path).
+		if cfg.Config.OfflineOnly() {
+			return nil, fmt.Errorf("offline_only is enabled: the xberg extractor sends document contents to %q; use --backend builtin (or disable offline_only)", func() string {
+				if u := cfg.Config.Extractor.XbergBaseURL; u != "" {
+					return u
+				}
+				return config.DefaultXbergBaseURL
+			}())
+		}
+		return xberg.NewWithHealthCheck(cfg.Config.Extractor, cfg.CacheDir)
+	default:
+		return nil, fmt.Errorf("unknown extractor backend %q (want builtin or xberg)", backend)
+	}
+}
+
+// WithContext attaches the caller-owned cancellation context to disk,
+// extraction, and persistence work performed by this indexer.
+func (idx *Indexer) WithContext(ctx context.Context) *Indexer {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	idx.mu.Lock()
+	idx.ctxValue = ctx
+	idx.mu.Unlock()
+	return idx
+}
+
+func (idx *Indexer) ctx() context.Context {
+	idx.mu.Lock()
+	ctx := idx.ctxValue
+	idx.mu.Unlock()
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func (idx *Indexer) WithLogger(l Logger) *Indexer {
+	if l == nil {
+		l = defaultLogger{}
+	}
+	idx.mu.Lock()
+	idx.log = l
+	idx.mu.Unlock()
+	return idx
+}
+
+func (idx *Indexer) warnf(format string, v ...interface{}) {
+	idx.mu.Lock()
+	idx.report.Warnings++
+	log := idx.log
+	idx.mu.Unlock()
+	log.Printf(format, v...)
+}
+
+// warnExtraction logs the non-fatal warnings an extractor attached to a
+// successful Result (e.g. per-page OCR failures on scanned PDFs). Each one
+// counts toward the sync summary so partial extraction stays visible.
+func (idx *Indexer) warnExtraction(path string, res extractor.Result) {
+	for _, w := range res.Warnings {
+		idx.warnf("  WARN: extract %s: %s\n", path, w)
+	}
+}
+
+func (idx *Indexer) addReport(report SyncReport) {
+	idx.mu.Lock()
+	idx.report.add(report)
+	idx.mu.Unlock()
+}
+
+func (idx *Indexer) addSyncFailure(path, kind, errMsg string) {
+	idx.mu.Lock()
+	idx.report.Errors = append(idx.report.Errors, SyncFailure{Path: path, Kind: kind, Error: errMsg})
+	idx.mu.Unlock()
+}
+
+func (idx *Indexer) recordFailure(path, kind string, err error) {
+	if err == nil {
+		return
+	}
+	idx.addSyncFailure(path, kind, err.Error())
+}
+
+// LastReport returns a snapshot of the most recent collection sync report.
+func (idx *Indexer) LastReport() SyncReport {
+	idx.mu.Lock()
+	report := idx.report
+	idx.mu.Unlock()
+	report.Errors = append([]SyncFailure(nil), report.Errors...)
+	return report
+}
+
+func (idx *Indexer) SyncCollection(col *store.Collection) error {
+	return idx.SyncCollectionContext(context.Background(), col)
+}
+
+// SyncCollectionContext syncs one collection with the supplied cancellation
+// context. The compatibility method above keeps existing command/test call
+// sites source-compatible during the runtime migration.
+func (idx *Indexer) SyncCollectionContext(ctx context.Context, col *store.Collection) error {
+	_, err := idx.SyncCollectionWithReport(ctx, col)
+	return err
+}
+
+// SyncCollectionWithReport syncs one collection and returns structured
+// accounting alongside the compatibility error result.
+func (idx *Indexer) SyncCollectionWithReport(ctx context.Context, col *store.Collection) (SyncReport, error) {
+	idx.mu.Lock()
+	idx.report = SyncReport{}
+	if col == nil {
+		idx.report.Failed++
+		idx.report.Errors = append(idx.report.Errors, SyncFailure{Kind: "invalid_collection", Error: "nil collection"})
+		idx.mu.Unlock()
+		return idx.LastReport(), fmt.Errorf("sync collection: nil collection")
+	}
+	idx.report.Collection = col.Name
+	idx.mu.Unlock()
+	idx.WithContext(ctx)
+	h, ok := syncHandlers[col.Type]
+	if !ok {
+		idx.addSyncFailure("", "unsupported_collection", fmt.Sprintf("unknown collection type: %s", col.Type))
+		idx.mu.Lock()
+		idx.report.Unsupported++
+		idx.mu.Unlock()
+		return idx.LastReport(), fmt.Errorf("unknown collection type: %s", col.Type)
+	}
+	err := h.Sync(idx.ctx(), &HandlerDeps{Indexer: idx, Writer: idx.writer}, col)
+	if err != nil {
+		idx.mu.Lock()
+		idx.report.Failed++
+		idx.mu.Unlock()
+		idx.addSyncFailure("", "collection", err.Error())
+	}
+	return idx.LastReport(), err
+}
+
+// ConversationBatch is the normalized output of Claude/Codex parsers. The
+// format-specific message types stop at the parser adapter; the shared sync
+// path only handles the text, title, session identity, and saved images it
+// needs to persist.
+type ConversationBatch struct {
+	Text      string
+	Title     string
+	SessionID string
+	Images    []source.ConversationImage
+}
+
+// syncConversation abstracts the heavily duplicated logic between Claude and Codex
+func (idx *Indexer) syncConversation(
+	col *store.Collection,
+	scanFiles func() ([]source.ConversationFile, error),
+	parseFile func(path string, fromLine int) (ConversationBatch, error),
+	getTitle func(sessionID, defaultTitle string) string,
+) error {
+	files, err := scanFiles()
+	if err != nil {
+		return err
+	}
+
+	diskPaths := make(map[string]bool, len(files))
+	for _, f := range files {
+		diskPaths[f.Path] = true
+	}
+	if _, err := idx.safeCleanupOrphans(col, diskPaths, "conversations"); err != nil {
+		return fmt.Errorf("cleanup conversations: %w", err)
+	}
+
+	var indexed, skipped, totalImages, failed int
+
+	for _, f := range files {
+		if err := idx.ctx().Err(); err != nil {
+			return err
+		}
+		existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, f.Path)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			// A store failure is not "document absent": falling through would
+			// trigger a wasteful full re-parse or a spurious failure with no
+			// root cause (review 2026-09-17 L14).
+			idx.warnf("  WARN: look up document %s: %v\n", f.Path, err)
+			failed++
+			continue
+		}
+		if err == nil && existing.Mtime >= f.Mtime {
+			skipped++
+			continue
+		}
+
+		lineCount, err := source.CountLinesContext(idx.ctx(), f.Path)
+		if err != nil {
+			idx.warnf("  WARN: count lines %s: %v\n", f.Path, err)
+			failed++
+			continue
+		}
+		// Conversation files are expected to be append-only: a file that
+		// shrank (or has the same line count) was truncated or edited in
+		// place, so the incremental path below cannot reconstruct its
+		// content from the delta. Fall through to a full re-parse
+		// (fromLine = 0), which replaces FTS and re-chunks the whole file,
+		// keeping the index in sync with what is actually on disk.
+		fromLine := 0
+		if existing != nil && existing.LineCount < lineCount {
+			fromLine = existing.LineCount
+		}
+
+		batch, err := parseFile(f.Path, fromLine)
+		if err != nil {
+			idx.warnf("  WARN: parse %s: %v\n", f.Path, err)
+			failed++
+			continue
+		}
+
+		if batch.Text == "" && len(batch.Images) == 0 {
+			if err := idx.pruneEmptyConversationBatch(existing, fromLine, f.Path, f.Mtime); err != nil {
+				return err
+			}
+			skipped++
+			continue
+		}
+
+		title := conversationTitle(f.Path, batch, fromLine, getTitle)
+
+		// On an append, new chunks must continue after the seqs from the
+		// previous sync and their line spans must be offset into the full
+		// file — the parser only saw lines after fromLine, so both its
+		// chunk text and its line numbers are relative to the delta.
+		baseSeq, err := idx.conversationBaseSeq(existing, fromLine, f.Path)
+		if err != nil {
+			idx.warnf("  WARN: %v\n", err)
+			failed++
+			continue
+		}
+		maxSize, _ := idx.chunkSize()
+		text := batch.Text
+		indexChunks, _ := buildConversationChunks(batch, baseSeq, fromLine, maxSize)
+		totalImages += len(batch.Images)
+
+		request := store.DocumentIndex{
+			CollectionID: col.ID,
+			Path:         f.Path,
+			Title:        title,
+			Mtime:        f.Mtime,
+			LineCount:    lineCount,
+			FTSContent:   text,
+			Chunks:       indexChunks,
+		}
+		// Tag only on the initial (replace) write: append passes must not
+		// recompute tags for the whole session on every delta. The append
+		// path in the store upserts fast fields without deleting them, so
+		// the initial tags survive; they are refreshed on the next full
+		// sync of the session.
+		if fromLine == 0 && text != "" {
+			request.FastFields = idx.enricher.Enrich(idx.ctx(), col.Type, f.Path, nil, indexChunks)
+		}
+		docID, err := idx.writeConversationDocument(request, fromLine)
+		if err != nil {
+			idx.warnf("  WARN: index %s: %v\n", f.Path, err)
+			failed++
+			continue
+		}
+		// Record the fingerprint only on the initial write that actually
+		// enriched the session. Append passes do not recompute semantic
+		// fields (their content hash would claim a "current" state the tags
+		// do not match), so their fingerprint stays untouched.
+		if fromLine == 0 && text != "" {
+			if err := idx.recordSemanticSyncState(idx.ctx(), col.Type, docID, request.FastFields, indexChunks); err != nil {
+				idx.warnf("  WARN: record semantic state %s: %v\n", f.Path, err)
+			}
+		}
+
+		indexed++
+	}
+
+	idx.addReport(SyncReport{Indexed: indexed, Skipped: skipped, Failed: failed})
+	idx.log.Printf("  Synced: %d indexed, %d unchanged", indexed, skipped)
+	if totalImages > 0 {
+		idx.log.Printf(", %d images", totalImages)
+	}
+	if failed > 0 {
+		idx.log.Printf(", %d failed", failed)
+	}
+	idx.log.Printf("\n")
+	return nil
+}
+
+// conversationTitle resolves the document title: the parser-provided title
+// wins on a full parse (append deltas carry no title), the file's base name
+// is the fallback, and the format-specific session-title lookup has the
+// final say when present.
+func conversationTitle(path string, batch ConversationBatch, fromLine int, getTitle func(sessionID, defaultTitle string) string) string {
+	title := filepath.Base(path)
+	if fromLine == 0 && batch.Title != "" {
+		title = batch.Title
+	}
+	if getTitle != nil {
+		title = getTitle(batch.SessionID, title)
+	}
+	return title
+}
+
+// pruneEmptyConversationBatch handles a parse that produced no content. A
+// full re-parse that yields nothing means the file no longer contains
+// parseable content (e.g. truncated to empty or to metadata-only lines):
+// remove the stale document so its FTS entry and chunks go with it,
+// mirroring deleted files. An append that produced no new content only
+// records the mtime so subsequent syncs skip the file without re-parsing.
+func (idx *Indexer) pruneEmptyConversationBatch(existing *store.Document, fromLine int, path string, mtime float64) error {
+	if existing == nil {
+		return nil
+	}
+	if fromLine == 0 {
+		if err := idx.db.DeleteDocumentContext(idx.ctx(), existing.ID); err != nil {
+			return fmt.Errorf("delete empty document %s: %w", path, err)
+		}
+		return nil
+	}
+	if err := idx.db.UpdateDocumentMtimeContext(idx.ctx(), existing.ID, mtime); err != nil {
+		return fmt.Errorf("update mtime %s: %w", path, err)
+	}
+	return nil
+}
+
+// conversationBaseSeq returns the sequence number append chunks continue
+// from. A missing prior document state (the row vanished since the mtime
+// check) is an error, not a silent full re-parse: the delta text must not
+// be written under a wrong sequence numbering.
+func (idx *Indexer) conversationBaseSeq(existing *store.Document, fromLine int, path string) (int, error) {
+	if fromLine == 0 {
+		return 0, nil
+	}
+	if existing == nil {
+		return 0, fmt.Errorf("append %s: document state is missing", path)
+	}
+	ms, err := idx.db.MaxChunkSeqContext(idx.ctx(), existing.ID)
+	if err != nil {
+		return 0, fmt.Errorf("chunk seq %s: %w", path, err)
+	}
+	return ms + 1, nil
+}
+
+// buildConversationChunks chunks the batch text and appends its saved images
+// as image chunks. On an append (fromLine > 0) the parser only saw lines
+// after fromLine, so chunk line spans are offset to index into the full
+// file. Returns the index chunks and the next free sequence number.
+func buildConversationChunks(batch ConversationBatch, baseSeq, fromLine, maxSize int) ([]store.IndexChunk, int) {
+	nextSeq := baseSeq
+	var indexChunks []store.IndexChunk
+	if batch.Text != "" {
+		chunks := chunk.ChunkConversation(batch.Text, maxSize)
+		for i := range chunks {
+			chunks[i].Seq = baseSeq + i
+			if fromLine > 0 {
+				chunks[i].StartLine += fromLine
+				chunks[i].EndLine += fromLine
+			}
+			indexChunks = append(indexChunks, store.IndexChunk{
+				Seq:       chunks[i].Seq,
+				Content:   chunks[i].Content,
+				StartLine: chunks[i].StartLine,
+				EndLine:   chunks[i].EndLine,
+			})
+		}
+		nextSeq = baseSeq + len(chunks)
+	}
+	for _, img := range batch.Images {
+		indexChunks = append(indexChunks, store.IndexChunk{
+			Seq:       nextSeq,
+			Content:   img.Context,
+			ChunkType: store.ChunkTypeImage,
+			ImagePath: img.SavedPath,
+		})
+		nextSeq++
+	}
+	return indexChunks, nextSeq
+}
+
+// writeConversationDocument persists a conversation document: a full parse
+// replaces the document wholesale (FTS, chunks, fast fields); an append
+// extends it without touching existing chunks.
+func (idx *Indexer) writeConversationDocument(request store.DocumentIndex, fromLine int) (int64, error) {
+	if fromLine == 0 {
+		return idx.writer.UpsertAndReplaceIndex(idx.ctx(), request)
+	}
+	return idx.writer.UpsertAndAppendIndex(idx.ctx(), request)
+}
+
+// cleanupOrphans deletes every document of colID whose path is not in
+// livePaths. A nil livePaths deletes all documents (full-reindex path).
+// The returned error comes from ListDocumentPaths; callers that treat
+// cleanup as best-effort may ignore it (removed is 0 then). label is used
+// in the log line "Removed %d stale <label>"; an empty label disables logging.
+func (idx *Indexer) cleanupOrphans(colID int64, livePaths map[string]bool, label string) (int, error) {
+	removed, err := idx.db.DeleteOrphansContext(idx.ctx(), colID, livePaths)
+	if err != nil {
+		return 0, err
+	}
+	if removed > 0 && label != "" {
+		idx.log.Printf("  Removed %d stale %s\n", removed, label)
+	}
+	return removed, nil
+}
+
+// safeCleanupOrphans guards cleanupOrphans against data loss from scans of an
+// unavailable scan root. The source files are the source of truth, so a
+// legitimate scan of an existing directory that yields no live files (e.g. the
+// user deleted every file) must still purge so the index reflects the deletion.
+// The guard therefore only requires that the scan root still exists as a
+// directory; this catches unmounted/renamed/missing roots and a file-instead-
+// of-dir root, which are the cases where an empty scan is suspicious. A nil
+// livePaths keeps the explicit full-purge semantics of cleanupOrphans (used by
+// reindex).
+func (idx *Indexer) safeCleanupOrphans(col *store.Collection, livePaths map[string]bool, label string) (int, error) {
+	// Explicit full purge (e.g. reindex): keep the old behaviour.
+	if livePaths == nil {
+		return idx.cleanupOrphans(col.ID, nil, label)
+	}
+	info, err := os.Stat(col.Path)
+	if err != nil {
+		idx.warnf("  WARN: skipping orphan cleanup for %q: scan root unavailable: %v\n", col.Name, err)
+		return 0, nil
+	}
+	if !info.IsDir() {
+		idx.warnf("  WARN: skipping orphan cleanup for %q: scan root is not a directory: %s\n", col.Name, col.Path)
+		return 0, nil
+	}
+	return idx.cleanupOrphans(col.ID, livePaths, label)
+}
+
+func toIndexChunks(chunks []chunk.Chunk, withLines bool) []store.IndexChunk {
+	out := make([]store.IndexChunk, 0, len(chunks))
+	for _, c := range chunks {
+		indexed := store.IndexChunk{Seq: c.Seq, Content: c.Content}
+		if withLines {
+			indexed.StartLine = c.StartLine
+			indexed.EndLine = c.EndLine
+		}
+		out = append(out, indexed)
+	}
+	return out
+}
+
+func (idx *Indexer) cleanupStaleCodeDocuments(col *store.Collection, files []source.CodeFileInfo) error {
+	diskPaths := make(map[string]bool, len(files))
+	for _, f := range files {
+		diskPaths[f.Path] = true
+	}
+	_, err := idx.safeCleanupOrphans(col, diskPaths, "documents")
+	return err
+}

@@ -1,0 +1,4 @@
+{
+  "go.buildTags": "fts5",
+  "go.testTags": "fts5"
+}

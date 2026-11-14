@@ -1,0 +1,477 @@
+package chunk
+
+import (
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
+
+func TestChunkMarkdownSmallContent(t *testing.T) {
+	content := "# Header\n\nSome short text."
+	chunks := ChunkMarkdown(content, 1000, 100)
+
+	if len(chunks) != 1 {
+		t.Fatalf("expected 1 chunk, got %d", len(chunks))
+	}
+	c := chunks[0]
+	if c.Seq != 0 {
+		t.Errorf("expected seq=0, got %d", c.Seq)
+	}
+	if c.Type != ChunkText {
+		t.Errorf("expected ChunkText, got %v", c.Type)
+	}
+	if !strings.Contains(c.Content, "Some short text.") {
+		t.Errorf("chunk content missing text: %q", c.Content)
+	}
+}
+
+func TestChunkMarkdownSplitsByHeaders(t *testing.T) {
+	content := "# First Section\n\nBody one.\n\n# Second Section\n\nBody two.\n\n# Third Section\n\nBody three."
+	chunks := ChunkMarkdown(content, 1000, 100)
+
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 chunks (one per section), got %d", len(chunks))
+	}
+
+	for i, c := range chunks {
+		if c.Seq != i {
+			t.Errorf("chunk %d: expected seq=%d, got %d", i, i, c.Seq)
+		}
+		if !strings.Contains(c.Content, "# ") {
+			t.Errorf("chunk %d missing header: %q", i, c.Content)
+		}
+	}
+}
+
+func TestChunkMarkdownEmpty(t *testing.T) {
+	chunks := ChunkMarkdown("", 1000, 100)
+	if len(chunks) != 0 {
+		t.Errorf("expected 0 chunks for empty input, got %d", len(chunks))
+	}
+}
+
+func TestChunkMarkdownWhitespaceOnly(t *testing.T) {
+	chunks := ChunkMarkdown("   \n\n  \n", 1000, 100)
+	if len(chunks) != 0 {
+		t.Errorf("expected 0 chunks for whitespace-only input, got %d", len(chunks))
+	}
+}
+
+func TestChunkMarkdownDefaults(t *testing.T) {
+	// Zero/negative maxSize and overlap should fall back to defaults and not panic.
+	// Use multiple paragraphs so splitBySize splits them.
+	var sb strings.Builder
+	for i := 0; i < 20; i++ {
+		sb.WriteString(strings.Repeat("word ", 100)) // 400 chars per paragraph
+		sb.WriteString("\n\n")
+	}
+	content := "# H\n\n" + sb.String()
+	chunks := ChunkMarkdown(content, 0, 0)
+	if len(chunks) == 0 {
+		t.Fatal("expected at least 1 chunk with default parameters")
+	}
+	for _, c := range chunks {
+		if c.Content == "" {
+			t.Errorf("chunk %d has empty content", c.Seq)
+		}
+	}
+	// No individual paragraph is >1000, but combined they exceed it,
+	// so we expect multiple chunks from a single section.
+	if len(chunks) < 2 {
+		t.Errorf("expected multiple chunks from a large multi-paragraph section, got %d", len(chunks))
+	}
+}
+
+func TestChunkMarkdownLargeSectionSplitBySize(t *testing.T) {
+	// A section with many paragraphs that together exceed maxSize must be split.
+	var sb strings.Builder
+	for i := 0; i < 10; i++ {
+		sb.WriteString(strings.Repeat("alpha ", 50)) // 250 chars per paragraph
+		sb.WriteString("\n\n")
+	}
+	content := sb.String() // ~2500 chars total, no headers
+	maxSize := 500
+	overlap := 50
+	chunks := ChunkMarkdown(content, maxSize, overlap)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks for large multi-paragraph content, got %d", len(chunks))
+	}
+
+	// Each chunk must be within maxSize (paragraph split keeps each chunk under size).
+	for _, c := range chunks {
+		if len(c.Content) > maxSize {
+			t.Errorf("chunk %d exceeds maxSize=%d: %d chars", c.Seq, maxSize, len(c.Content))
+		}
+		if c.Content == "" {
+			t.Errorf("chunk %d has empty content", c.Seq)
+		}
+	}
+}
+
+func TestChunkMarkdownSingleLargeParagraph(t *testing.T) {
+	// A single paragraph larger than maxSize is returned whole (splitBySize
+	// only splits at paragraph boundaries) — verify no panic and one chunk.
+	content := strings.Repeat("x", 5000) // 5000-char single paragraph
+	chunks := ChunkMarkdown(content, 500, 50)
+	if len(chunks) != 1 {
+		t.Fatalf("expected 1 chunk for single paragraph, got %d", len(chunks))
+	}
+	if chunks[0].Content != content {
+		t.Errorf("expected content preserved, got %d chars", len(chunks[0].Content))
+	}
+}
+
+func TestChunkMarkdownSeqIsContinuous(t *testing.T) {
+	// Two sections: first has many paragraphs (splits into multiple chunks),
+	// second is short. Verify seq values are continuous.
+	var sb strings.Builder
+	for i := 0; i < 8; i++ {
+		sb.WriteString(strings.Repeat("para", 80)) // ~320 chars
+		sb.WriteString("\n\n")
+	}
+	content := "# A\n\n" + sb.String() + "# B\n\nshort b"
+	chunks := ChunkMarkdown(content, 500, 50)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected at least 2 chunks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if c.Seq != i {
+			t.Errorf("expected continuous seq, chunk %d has seq=%d", i, c.Seq)
+		}
+	}
+}
+
+func TestChunkConversation(t *testing.T) {
+	content := "line one\nline two\nline three\nline four\nline five"
+	chunks := ChunkConversation(content, 10) // small maxSize to force multiple chunks
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if c.Seq != i {
+			t.Errorf("expected seq=%d, got %d", i, c.Seq)
+		}
+		if c.Type != ChunkText {
+			t.Errorf("expected ChunkText, got %v", c.Type)
+		}
+		if strings.TrimSpace(c.Content) == "" {
+			t.Errorf("chunk %d has empty content", i)
+		}
+	}
+}
+
+func TestChunkConversationDefaults(t *testing.T) {
+	content := "short content"
+	chunks := ChunkConversation(content, 0)
+	if len(chunks) != 1 {
+		t.Fatalf("expected 1 chunk, got %d", len(chunks))
+	}
+	if chunks[0].Content != content {
+		t.Errorf("expected content %q, got %q", content, chunks[0].Content)
+	}
+}
+
+func TestChunkConversationEmpty(t *testing.T) {
+	chunks := ChunkConversation("", 100)
+	if len(chunks) != 0 {
+		t.Errorf("expected 0 chunks, got %d", len(chunks))
+	}
+}
+
+func TestAssignLineNumbersTrailingNewline(t *testing.T) {
+	content := "line one\nline two\nline three\n"
+	chunks := []Chunk{
+		{Content: "line two"},
+		{Content: "line three"},
+	}
+	out := AssignLineNumbers(content, chunks)
+	if out[0].StartLine != 2 || out[0].EndLine != 2 {
+		t.Errorf("chunk 0 line span = %d-%d, want 2-2", out[0].StartLine, out[0].EndLine)
+	}
+	if out[1].StartLine != 3 || out[1].EndLine != 3 {
+		t.Errorf("chunk 1 line span = %d-%d, want 3-3", out[1].StartLine, out[1].EndLine)
+	}
+}
+
+func TestAssignLineNumbersMatchesWholeChunk(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		chunk   string
+	}{
+		{
+			name:    "does not accept a substring of an earlier line",
+			content: "prefix target line suffix\nother\ntarget line\nunique follower",
+			chunk:   "target line\nunique follower",
+		},
+		{
+			name:    "uses following lines to disambiguate a repeated first line",
+			content: "repeat\nwrong follower\nrepeat\nright follower",
+			chunk:   "repeat\nright follower",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := AssignLineNumbers(tt.content, []Chunk{{Content: tt.chunk}})
+			if got[0].StartLine != 3 || got[0].EndLine != 4 {
+				t.Fatalf("line span = %d-%d, want 3-4", got[0].StartLine, got[0].EndLine)
+			}
+		})
+	}
+}
+
+func TestSplitByHeaders(t *testing.T) {
+	content := "intro line\n# Header One\nbody one\n# Header Two\nbody two"
+	sections := splitByHeaders(content)
+
+	// splitByHeaders splits before each header when there's accumulated content,
+	// so "intro line" becomes its own section, then each header section follows.
+	if len(sections) != 3 {
+		t.Fatalf("expected 3 sections, got %d", len(sections))
+	}
+	if !strings.Contains(sections[0], "intro line") {
+		t.Errorf("first section missing intro: %q", sections[0])
+	}
+	if !strings.Contains(sections[1], "# Header One") {
+		t.Errorf("second section missing header one: %q", sections[1])
+	}
+	if !strings.Contains(sections[2], "# Header Two") {
+		t.Errorf("third section missing header two: %q", sections[2])
+	}
+}
+
+func TestSplitBySizeOverlap(t *testing.T) {
+	// Multiple paragraphs that together exceed maxSize, with overlap.
+	paragraphs := make([]string, 5)
+	for i := range paragraphs {
+		paragraphs[i] = strings.Repeat("para"+string(rune('a'+i)), 50)
+	}
+	content := strings.Join(paragraphs, "\n\n")
+
+	maxSize := 300
+	overlap := 30
+	parts := splitBySize(content, maxSize, overlap)
+
+	if len(parts) < 2 {
+		t.Fatalf("expected 2+ parts, got %d", len(parts))
+	}
+	for _, p := range parts {
+		if len(p) > maxSize {
+			t.Errorf("part exceeds maxSize=%d: %d chars", maxSize, len(p))
+		}
+	}
+}
+
+func TestSplitBySizeNoOverlap(t *testing.T) {
+	paragraphs := make([]string, 4)
+	for i := range paragraphs {
+		paragraphs[i] = strings.Repeat("word", 60) // 240 chars
+	}
+	content := strings.Join(paragraphs, "\n\n")
+
+	parts := splitBySize(content, 400, 0) // overlap=0
+
+	if len(parts) < 2 {
+		t.Fatalf("expected 2+ parts, got %d", len(parts))
+	}
+	// With overlap=0, no tail should be carried into the next part.
+	for _, p := range parts {
+		if len(p) > 400 {
+			t.Errorf("part exceeds maxSize=400: %d chars", len(p))
+		}
+	}
+}
+
+func TestChunkMarkdown_ExcessiveOverlap(t *testing.T) {
+	// Overlap >= maxSize should be gracefully capped without infinite loop or failure
+	content := strings.Repeat("para one content line\n\n", 10)
+	chunks := ChunkMarkdown(content, 100, 200)
+	if len(chunks) == 0 {
+		t.Fatal("expected chunks, got 0")
+	}
+}
+
+// TestAssignLineNumbersAdvancesOnMiss pins the M14 contract: consecutive
+// unmatched chunks must get distinct, advancing spans instead of collapsing
+// onto the same lines, and a match after a miss still snaps to the true line
+// (review 2026-09-17 M14).
+func TestAssignLineNumbersAdvancesOnMiss(t *testing.T) {
+	content := "alpha\nbeta\ngamma\ndelta\n"
+	chunks := []Chunk{
+		{Content: "missing-one"},
+		{Content: "missing-two"},
+		{Content: "gamma"},
+		{Content: "delta"},
+	}
+	out := AssignLineNumbers(content, chunks)
+
+	if out[0].StartLine == out[1].StartLine {
+		t.Errorf("consecutive misses collapsed to the same start line %d", out[0].StartLine)
+	}
+	if out[2].StartLine != 3 {
+		t.Errorf("chunk matching \"gamma\" should snap to line 3, got %d", out[2].StartLine)
+	}
+	if out[3].StartLine != 4 {
+		t.Errorf("chunk matching \"delta\" should snap to line 4, got %d", out[3].StartLine)
+	}
+}
+
+// TestSplitBySizeUTF8Boundary verifies that overlapping tail slices never begin
+// mid-rune: every returned part must be valid UTF-8 and must not start with a
+// UTF-8 continuation byte.
+func TestSplitBySizeUTF8Boundary(t *testing.T) {
+	// Multibyte Turkish + CJK + emoji content. Each unit mixes 2-, 3- and
+	// 4-byte runes so byte offsets frequently land inside a rune.
+	unit := "İstanbul şehri çok güzel 🙂 你好世界\n\n"
+	var sb strings.Builder
+	for i := 0; i < 40; i++ {
+		sb.WriteString(unit)
+	}
+	content := sb.String()
+
+	// maxSize/overlap chosen so the overlap boundary is a byte offset that is
+	// NOT a rune boundary for the multibyte tail.
+	for _, overlap := range []int{1, 3, 7, 13, 30, 61} {
+		parts := splitBySize(content, 300, overlap)
+		if len(parts) < 2 {
+			t.Fatalf("overlap=%d: expected multiple parts, got %d", overlap, len(parts))
+		}
+		for i, p := range parts {
+			if !utf8.ValidString(p) {
+				t.Errorf("overlap=%d part %d is invalid UTF-8: %q", overlap, i, p)
+			}
+			if p == "" {
+				continue
+			}
+			if !utf8.RuneStart(p[0]) {
+				t.Errorf("overlap=%d part %d begins with a UTF-8 continuation byte (0x%02x): %q",
+					overlap, i, p[0], p)
+			}
+		}
+	}
+}
+
+// TestChunkMarkdownUTF8Boundary drives the same multibyte content through the
+// public API to confirm chunks survive to consumers (e.g. FTS) as valid UTF-8.
+func TestChunkMarkdownUTF8Boundary(t *testing.T) {
+	unit := "İstanbul şehri çok güzel 🙂 你好世界\n\n"
+	content := strings.Repeat(unit, 40)
+
+	chunks := ChunkMarkdown(content, 300, 50)
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
+	}
+	for _, c := range chunks {
+		if !utf8.ValidString(c.Content) {
+			t.Errorf("chunk %d content is invalid UTF-8: %q", c.Seq, c.Content)
+		}
+		if c.Content == "" {
+			continue
+		}
+		if !utf8.RuneStart(c.Content[0]) {
+			t.Errorf("chunk %d begins with a UTF-8 continuation byte (0x%02x): %q",
+				c.Seq, c.Content[0], c.Content)
+		}
+	}
+}
+
+// TestTailBytes pins the helper contract, including the case where the naive
+// tail[len(tail)-n:] slice would have split a rune.
+func TestTailBytes(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		n    int
+		want string
+	}{
+		{"n<=0 returns empty", "abc", 0, ""},
+		{"len<=n returns whole string", "abc", 5, "abc"},
+		{"ascii exactly n", "abcdef", 3, "def"},
+		// "İstanbul" — 'İ' is 2 bytes (0xC4 0xB0), so len=9. n=1 -> byte 8
+		// is 'l' (ASCII, a rune start), so no advance.
+		{"ascii tail unaffected", "İstanbul", 1, "l"},
+		// n=2 -> byte 7 is 'u', byte 8 is 'l'; both rune starts.
+		{"multi-byte prefix not touched", "İstanbul", 2, "ul"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tailBytes(tt.in, tt.n); got != tt.want {
+				t.Errorf("tailBytes(%q, %d) = %q, want %q", tt.in, tt.n, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestTailBytesAdvancesToRuneStart pins the exact bug: a byte index that lands
+// on a continuation byte must be advanced to the next rune start.
+func TestTailBytesAdvancesToRuneStart(t *testing.T) {
+	// "aİ" = 'a' (0x61) + 'İ' (0xC4 0xB0). len = 3.
+	s := "aİ"
+	// n=2 -> i = 1 = 0xC4, a rune start (already valid).
+	if got := tailBytes(s, 2); got != "İ" {
+		t.Fatalf("tailBytes(%q, 2) = %q, want %q", s, got, "İ")
+	}
+	// n=1 -> i = 2 = 0xB0, a continuation byte. Naive s[len-1:] would yield
+	// "\xb0" (invalid). tailBytes must advance past the partial rune and
+	// return "" because the boundary is the end of string.
+	naive := s[len(s)-1:]
+	if utf8.ValidString(naive) {
+		t.Fatalf("precondition failed: naive tail %q unexpectedly valid", naive)
+	}
+	if got := tailBytes(s, 1); got != "" {
+		t.Fatalf("tailBytes(%q, 1) = %q, want %q (advanced past partial rune)", s, got, "")
+	}
+	// A longer mixed string: ensure the result is always valid UTF-8.
+	mixed := "prefix🙂suffix"
+	for n := 1; n < len(mixed); n++ {
+		got := tailBytes(mixed, n)
+		if !utf8.ValidString(got) {
+			t.Fatalf("tailBytes(%q, %d) = %q is invalid UTF-8", mixed, n, got)
+		}
+		if got != "" && !utf8.RuneStart(got[0]) {
+			t.Fatalf("tailBytes(%q, %d) = %q starts mid-rune", mixed, n, got)
+		}
+	}
+}
+
+// TestSplitByHeadersExactSections pins the zero-copy slicing contract: sections
+// are exact byte ranges of the input (no added trailing newline) and a split
+// only happens when a header follows accumulated content in the same section.
+func TestSplitByHeadersExactSections(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    []string
+	}{
+		{"empty", "", nil},
+		{"no headers", "abc", []string{"abc"}},
+		{"whitespace only", "   \n\n  \n", []string{"   \n\n  \n"}},
+		{
+			"intro then headers",
+			"intro line\n# Header One\nbody one\n# Header Two\nbody two",
+			[]string{"intro line\n", "# Header One\nbody one\n", "# Header Two\nbody two"},
+		},
+		{"leading header stays whole", "  # A\nbody", []string{"  # A\nbody"}},
+		{"consecutive headers", "# A\n# B\n", []string{"# A\n", "# B\n"}},
+		{"header after leading blank line", "\n# H\nbody", []string{"\n", "# H\nbody"}},
+		{"crlf preserved", "# A\r\nbody\r\n# B\r\nbody2", []string{"# A\r\nbody\r\n", "# B\r\nbody2"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := splitByHeaders(tt.content)
+			if len(got) != len(tt.want) {
+				t.Fatalf("splitByHeaders(%q) returned %d sections, want %d: %q", tt.content, len(got), len(tt.want), got)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("section %d = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}

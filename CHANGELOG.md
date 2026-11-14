@@ -27,6 +27,14 @@ All notable changes to `seek` are documented here. This follows
   `CountDocuments`/`CountChunks` loops; both route through
   `CollectionService.List` (a single `CollectionDetails` store query), the
   same path `seek collection list` already uses.
+=======
+- **remove dead compatibility shims**: twelve never-called non-Context wrappers in
+  `internal/store` (`syncVectorIndexFull`, `linearSearchVector`, `fetchSearchResults`,
+  `MaxChunkSeq`, `ListChunksForDocument`, `GetChunkContent`, `GetDocumentByID`,
+  `UpdateDocumentMtime`, `UpdateCollectionParserVersion`, `MaxDocumentMtime`,
+  `AppendFTS`) and `internal/pipeline` (`embedBatch`) — part of the dead non-Context
+  surface tracked by issue #189; the remaining test-only wrappers stay until their
+  test callers migrate.
 - **search: NEAR parser rejects unclosed and malformed proximity**
   (`internal/search/query.go`): `NEAR(a b` without a closing parenthesis is now
   a parse error instead of silently becoming a NEAR search, and a non-numeric

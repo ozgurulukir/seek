@@ -19,14 +19,10 @@ func (s *Store) GetDocumentContext(ctx context.Context, collectionID int64, path
 	return s.repositories.documents.getContext(ctx, collectionID, path)
 }
 
-// GetDocumentByID returns a document by its primary key, regardless of
-// collection. Used by the semantic backfill, which selects stale documents by
-// ID so it can re-enrich their chunks without re-reading source files.
-func (s *Store) GetDocumentByID(docID int64) (*Document, error) {
-	return s.GetDocumentByIDContext(context.Background(), docID)
-}
-
-// GetDocumentByIDContext returns a document by ID while honoring cancellation.
+// GetDocumentByIDContext returns a document by its primary key, regardless of
+// collection, while honoring cancellation. Used by the semantic backfill,
+// which selects stale documents by ID so it can re-enrich their chunks
+// without re-reading source files.
 func (s *Store) GetDocumentByIDContext(ctx context.Context, docID int64) (*Document, error) {
 	document := &Document{}
 	err := s.db.QueryRowContext(ctx,
@@ -116,10 +112,6 @@ func (s *Store) DeleteDocumentContext(ctx context.Context, docID int64) error {
 		return fmt.Errorf("delete document: %w", err)
 	}
 	return tx.Commit()
-}
-
-func (s *Store) UpdateDocumentMtime(docID int64, mtime float64) error {
-	return s.UpdateDocumentMtimeContext(context.Background(), docID, mtime)
 }
 
 func (s *Store) UpdateDocumentMtimeContext(ctx context.Context, docID int64, mtime float64) error {

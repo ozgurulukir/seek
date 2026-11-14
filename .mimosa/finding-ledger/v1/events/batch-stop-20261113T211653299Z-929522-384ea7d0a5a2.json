@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20261113T211653299Z-929522-384ea7d0a5a2",
+  "runId": "20261113T211653299Z-929522-384ea7d0a5a2",
+  "runStatus": "inconclusive",
+  "coverage": {
+    "status": "partial",
+    "reasons": [
+      {
+        "code": "changed_file_unreadable",
+        "stage": "candidate-select",
+        "target": "internal/app/guards_test.go",
+        "detail": "observed changed file no longer exists or cannot be read",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "candidate-select",
+        "target": "internal/app/guards_test.go",
+        "detail": "changed_file_unreadable: observed changed file no longer exists or cannot be read",
+        "affectsCompletion": true
+      }
+    ]
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "efb9f9bb2633dbb3ebd1fdea66b61d97026c3189",
+  "diffHash": "35937eb7e052ebef60c08e7a9fa5ab588c7e0c73fea9010e40bd468a37abfff0",
+  "rulesVersion": "unavailable",
+  "sessionHash": "2f2f1e26446e81edf6778367380d76637d9d65b5da7fd387e4606470b6e83b41",
+  "reportRef": ".mimosa/reports/task-review-sess_5fa7c92d-8b55-4adc-9342-da68432e6a89-20261113T211653299Z-929522-384ea7d0a5a2.json",
+  "events": [],
+  "observedFindingIds": [],
+  "verifiedFiles": [
+    {
+      "file": "internal/chunk/chunk.go",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "internal/config/providerkind.go",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "internal/embed/factory.go",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "internal/store/profile.go",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "layering_test.go",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-11-13T21:16:53.884Z"
+}

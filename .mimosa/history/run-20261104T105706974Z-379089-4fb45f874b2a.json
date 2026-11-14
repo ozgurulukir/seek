@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "mimosa-finding-history/v1",
+  "runId": "20261104T105706974Z-379089-4fb45f874b2a",
+  "runStatus": "inconclusive",
+  "errors": [
+    "candidate-select:tools/search-benchmark-game/corpus_transform.py: changed_file_unreadable: observed changed file no longer exists or cannot be read",
+    "candidate-select:tools/search-benchmark-game/src/client.py: changed_file_unreadable: observed changed file no longer exists or cannot be read",
+    "baseline-read:third_party/search-benchmark-game/corpus_transform.py: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:third_party/search-benchmark-game/src/client.py: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:internal/bench/emit.go: baseline_snapshot_unreadable: file is missing from task baseline"
+  ],
+  "target": ".",
+  "revision": "aa7e5e6def2f3c4e5640b1465e6d991db3d2f81d",
+  "diffHash": "965206dee5739e89abfc11cb720d035d40bfe3c83e7c3afd8e7ad4f967081ff9",
+  "rulesVersion": "unavailable",
+  "recordedAt": "2026-11-04T10:57:06.974Z",
+  "timing": {
+    "startedAt": "2026-11-04T10:57:05.024Z",
+    "completedAt": "2026-11-04T10:57:06.974Z",
+    "durationMs": 1950
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "modelCalls": 0,
+    "measurement": "known-zero"
+  },
+  "findings": {
+    "total": 4,
+    "bySeverity": {
+      "high": 4
+    },
+    "byStatus": {
+      "static_verified": 2,
+      "blocked": 2
+    }
+  },
+  "coverage": {
+    "status": "partial",
+    "reasonCounts": {
+      "changed_file_unreadable": 2,
+      "baseline_snapshot_unreadable": 3,
+      "project_check_failed": 5
+    }
+  },
+  "evidenceBoundary": "static_only",
+  "immutableReport": ".mimosa/reports/task-review-sess_66fbfc4c-39cf-42dc-b5c4-a4a37aa79a6a-20261104T105706974Z-379089-4fb45f874b2a.json"
+}

@@ -1,0 +1,57 @@
+// Build with: make build (or: CGO_ENABLED=1 go build -tags "fts5 sqlite_fts5" -o seek .)
+// FTS5 tag is required for SQLite full-text search.
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/alecthomas/kong"
+	"github.com/ozgurulukir/seek/cmd"
+	"github.com/ozgurulukir/seek/internal/buildinfo"
+	"github.com/ozgurulukir/seek/internal/config"
+)
+
+var cli struct {
+	Version    kong.VersionFlag  `help:"Show version and exit."`
+	Add        cmd.AddCmd        `cmd:"" help:"Add a collection to index"`
+	Rm         cmd.RmCmd         `cmd:"" help:"Remove a collection"`
+	Collection cmd.CollectionCmd `cmd:"" help:"Manage collections (list, show, rename, reindex)"`
+	Sync       cmd.SyncCmd       `cmd:"" help:"Sync all collections (incremental)"`
+	Embed      cmd.EmbedCmd      `cmd:"" help:"Generate embeddings (batch or realtime)"`
+	Search     cmd.SearchCmd     `cmd:"" help:"Search across collections"`
+	Analyze    cmd.AnalyzeCmd    `cmd:"" help:"Analyze text (tokenize, stem)"`
+	Status     cmd.StatusCmd     `cmd:"" help:"Show index status"`
+	Service    cmd.ServiceCmd    `cmd:"" help:"Manage periodic sync+embed service"`
+	Hooks      cmd.HooksCmd      `cmd:"" help:"Install/remove hooks for AI tools"`
+	Auth       cmd.AuthCmd       `cmd:"" help:"Manage API authentication"`
+	Config     cmd.ConfigCmd     `cmd:"" help:"Show or edit config"`
+	Advanced   cmd.AdvancedCmd   `cmd:"" help:"Advanced commands (schema, parsers, analyze)"`
+	Schema     cmd.SchemaCmd     `cmd:"" help:"Show or validate schema"`
+	Doctor     cmd.DoctorCmd     `cmd:"" help:"Check and repair local installation (permissions)"`
+	Uninstall  cmd.UninstallCmd  `cmd:"" help:"Remove seek service, hooks, cache, and config (--dry-run first)"`
+	Parsers    cmd.ParsersCmd    `cmd:"" help:"Manage schema-driven parser definitions"`
+	Fields     cmd.FieldsCmd     `cmd:"" help:"Discover fast-field values and taxonomy (tags, topics, entities, etc.)"`
+	Bench      cmd.BenchCmd      `cmd:"" help:"search-benchmark-game harness bridge (index, serve, report)"`
+	Mcp        cmd.McpCmd        `cmd:"" help:"Run MCP (Model Context Protocol) server on stdio for AI agents"`
+}
+
+func main() {
+	ctx := kong.Parse(&cli,
+		kong.Name("seek"),
+		kong.Description("Personal document search engine — BM25 + vector hybrid search"),
+		kong.UsageOnError(),
+		kong.Vars{
+			"version": fmt.Sprintf("%s (%s)", buildinfo.Version, buildinfo.Commit),
+		},
+	)
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	err = ctx.Run(cfg)
+	ctx.FatalIfErrorf(err)
+}

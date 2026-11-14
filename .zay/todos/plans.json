@@ -1,0 +1,50 @@
+{
+  "2": {
+    "summary": "Write a concise Turkish field report documenting which Zay agent capabilities failed or degraded during this session, with evidence and impact.",
+    "steps": [
+      {
+        "done": true,
+        "text": "Collect session evidence from tool outputs and repository state"
+      },
+      {
+        "done": true,
+        "text": "Write the Turkish field report with categorized failures, workarounds, and recommendations"
+      },
+      {
+        "done": true,
+        "text": "Read back and verify the report, then summarize the final state"
+      }
+    ],
+    "notes": "Report only observed failures/friction in this session. Do not expose secrets from command output. Mention that requested GitHub actions were performed, but distinguish tool/UX failures from repository failures. Preserve existing untracked files."
+  },
+  "1": {
+    "summary": "Review all open PRs against the current codebase, fix actionable findings, resolve duplicate/stale PRs, then merge approved changes and synchronize the local seek index.",
+    "steps": [
+      {
+        "done": true,
+        "text": "Discover and classify all open PRs, CI, age, overlap, and existing discussions"
+      },
+      {
+        "done": true,
+        "text": "Review each non-duplicate PR diff against current code using mcp-seek and sitting-duck"
+      },
+      {
+        "done": true,
+        "text": "Implement and test required fixes in isolated branches/worktrees; preserve unrelated local files"
+      },
+      {
+        "done": true,
+        "text": "Present verdicts and mutation plan before posting GitHub reviews/closing/merging"
+      },
+      {
+        "done": true,
+        "text": "Apply approved GitHub actions, merge valid PRs, update local main, and run final seek sync"
+      },
+      {
+        "done": true,
+        "text": "Verify final repository state and summarize merged, closed, and deferred PRs"
+      }
+    ],
+    "notes": "User explicitly requested review, alignment fixes, duplicate/stale handling, merge, and final seek sync. Preserve existing untracked CODE_REVIEW_REPORT.md and _plan. Must use mcp__seek__seek_search for code search and sitting-duck plugin for structural queries. GitHub mutation/merge should follow PR-review confirmation convention if applicable."
+  }
+}

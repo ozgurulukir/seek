@@ -484,10 +484,6 @@ func embedVLImagesContext(ctx context.Context, db *store.Store, vlClient embed.V
 	return imageUpdated, nil
 }
 
-func embedBatch(db *store.Store, client embed.BatchEmbedder, chunks []store.Chunk, texts []string, log Logger) (int, error) {
-	return embedBatchContext(context.Background(), db, client, chunks, texts, log, false)
-}
-
 func embedBatchContext(ctx context.Context, db *store.Store, client embed.BatchEmbedder, chunks []store.Chunk, texts []string, log Logger, deferVectorUpdate bool) (int, error) {
 	if client == nil {
 		return 0, fmt.Errorf("batch embedding client is unavailable")

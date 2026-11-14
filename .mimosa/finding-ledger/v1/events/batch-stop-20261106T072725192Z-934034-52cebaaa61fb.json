@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20261106T072725192Z-934034-52cebaaa61fb",
+  "runId": "20261106T072725192Z-934034-52cebaaa61fb",
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "24591d4e87764e3de3a0dbb965515324ab805685",
+  "diffHash": "734d041f3db52bf451c7b131f042398c631214c7ede740f55ac5cc83928133b8",
+  "rulesVersion": "unavailable",
+  "sessionHash": "1e3674f3402336a4142fe7ad26b695f401b3e144e05e8d83f379020ff8895ed0",
+  "reportRef": ".mimosa/reports/task-review-sess_66fbfc4c-39cf-42dc-b5c4-a4a37aa79a6a-20261106T072725192Z-934034-52cebaaa61fb.json",
+  "events": [],
+  "observedFindingIds": [],
+  "verifiedFiles": [
+    {
+      "file": "internal/bench/merge.go",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "cmd/bench.go",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "internal/bench/merge_test.go",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-11-06T07:27:25.776Z"
+}

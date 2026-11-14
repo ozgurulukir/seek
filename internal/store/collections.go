@@ -79,22 +79,15 @@ func (s *Store) CreateParserCollection(name, path, pattern, parserName string) (
 	return &Collection{ID: id, Name: name, Type: CollectionTypeParser, Path: path, Pattern: pattern, ParserName: parserName}, nil
 }
 
-// UpdateCollectionParserVersion sets the detected schema version for a parser collection.
-func (s *Store) UpdateCollectionParserVersion(colID int64, version int) error {
-	return s.UpdateCollectionParserVersionContext(context.Background(), colID, version)
-}
-
+// UpdateCollectionParserVersionContext sets the detected schema version for a parser collection.
 func (s *Store) UpdateCollectionParserVersionContext(ctx context.Context, colID int64, version int) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE collections SET parser_version = ? WHERE id = ?`, version, colID)
 	return err
 }
 
-// MaxDocumentMtime returns the maximum mtime among documents in a collection,
-// or zero if there are no documents. Used for incremental sync of parser collections.
-func (s *Store) MaxDocumentMtime(collectionID int64) (float64, error) {
-	return s.MaxDocumentMtimeContext(context.Background(), collectionID)
-}
-
+// MaxDocumentMtimeContext returns the maximum mtime among documents in a
+// collection, or zero if there are no documents. Used for incremental sync of
+// parser collections.
 func (s *Store) MaxDocumentMtimeContext(ctx context.Context, collectionID int64) (float64, error) {
 	var maxMtime sql.NullFloat64
 	err := s.db.QueryRowContext(ctx,

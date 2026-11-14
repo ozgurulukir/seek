@@ -1,0 +1,301 @@
+package search
+
+import (
+	"errors"
+	"strings"
+	"testing"
+)
+
+func TestParseQuery(t *testing.T) {
+	tests := []struct {
+		input    string
+		wantErr  bool
+		wantType string
+	}{
+		{`"hello world"`, false, "*search.PhraseQuery"},
+		{`hello AND world`, false, "*search.BooleanQuery"},
+		{`seek review`, false, "*search.BooleanQuery"},
+		{`go programming language`, false, "*search.BooleanQuery"},
+		{`hello OR world`, false, "*search.BooleanQuery"},
+		{`NOT hello`, false, "*search.BooleanQuery"},
+		{`pref*`, false, "*search.PrefixQuery"},
+		{`hello~2`, false, "*search.FuzzyQuery"},
+		{`hello~`, false, "*search.FuzzyQuery"},
+		{`title:hello`, false, "*search.FieldQuery"},
+		{`content:sql`, false, "*search.FieldQuery"},
+		{`TITLE:hello`, false, "*search.FieldQuery"},
+		// Field-scoped terms render verbatim into the FTS5 MATCH string; an
+		// unknown column name must be rejected at parse time, not surface as
+		// an opaque FTS5 "no such column" error at query time.
+		{`tags:go`, true, ""},
+		{`nosuchcol:x`, true, ""},
+		{`NEAR(hello world, 5)`, false, "*search.NearQuery"},
+		// An unclosed NEAR must be a parse error, not a silently
+		// truncated NEAR search (matches the paren enforcement in
+		// parsePrimary).
+		{`NEAR(hello world`, true, ""},
+		{`NEAR(hello world, 99999999999999999999)`, true, ""},
+		{`(a AND b) OR c`, false, "*search.BooleanQuery"},
+		{`hello`, false, "*search.TermQuery"},
+		{`yön`, false, "*search.TermQuery"},
+		{`öğren`, false, "*search.TermQuery"},
+		{`açık`, false, "*search.TermQuery"},
+		{`şişe`, false, "*search.TermQuery"},
+		{`gül`, false, "*search.TermQuery"},
+		{"", false, ""},
+		{`INVALID (`, true, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			q, err := ParseQuery(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.input == "" {
+				if q != nil {
+					t.Fatalf("expected nil for empty input, got %T", q)
+				}
+				return
+			}
+			if q == nil {
+				t.Fatalf("expected non-nil query, got nil")
+			}
+			_ = q.String()
+			_ = tt.wantType
+		})
+	}
+}
+
+// TestParseQuery_UnknownFieldIsSentinelError pins the errors.Is contract: the
+// validation error must be distinguishable from ordinary parse errors so the
+// search engine can surface it instead of falling back to the raw query.
+func TestParseQuery_UnknownFieldIsSentinelError(t *testing.T) {
+	_, err := ParseQuery("tags:go")
+	if err == nil {
+		t.Fatal("expected error for unknown field, got nil")
+	}
+	if !errors.Is(err, ErrUnknownField) {
+		t.Fatalf("err = %v, want errors.Is(err, ErrUnknownField)", err)
+	}
+	if !strings.Contains(err.Error(), "supported: title, content") {
+		t.Fatalf("err = %v, want actionable supported-fields hint", err)
+	}
+}
+
+func TestParseQuery_TurkishUTF8(t *testing.T) {
+	// Verify multi-byte UTF-8 tokens are not sliced or mangled
+	q, err := ParseQuery("yön bulma")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	bq, ok := q.(*BooleanQuery)
+	if !ok {
+		t.Fatalf("expected *BooleanQuery, got %T", q)
+	}
+	left, ok := bq.Left.(*TermQuery)
+	if !ok || left.Value != "yön" {
+		t.Fatalf("expected left term 'yön', got %v", bq.Left)
+	}
+	right, ok := bq.Right.(*TermQuery)
+	if !ok || right.Value != "bulma" {
+		t.Fatalf("expected right term 'bulma', got %v", bq.Right)
+	}
+
+	// Single terms with various Turkish multi-byte runes
+	singleCases := []string{"öä", "aç", "şişe", "çağrı", "İstanbul"}
+	for _, sc := range singleCases {
+		sq, err := ParseQuery(sc)
+		if err != nil {
+			t.Fatalf("unexpected error parsing %q: %v", sc, err)
+		}
+		tq, ok := sq.(*TermQuery)
+		if !ok || tq.Value != sc {
+			t.Fatalf("expected TermQuery with %q, got %#v", sc, sq)
+		}
+	}
+}
+
+func TestToFTS5(t *testing.T) {
+	tests := []struct {
+		q         Query
+		want      string
+		wantFuzzy bool
+	}{
+		{&TermQuery{Value: "hello"}, "hello", false},
+		{&PhraseQuery{Terms: []string{"hello", "world"}}, `"hello world"`, false},
+		{&PrefixQuery{Prefix: "hel"}, "hel*", false},
+		{&FuzzyQuery{Term: "hello", N: 2}, "hello*", true},
+		{&FieldQuery{Field: "title", Query: &TermQuery{Value: "hello"}}, "title:hello", false},
+		{&NearQuery{Terms: []string{"hello", "world"}, N: 5}, "NEAR(hello world, 5)", false},
+		{&BooleanQuery{Left: &TermQuery{Value: "a"}, Op: "AND", Right: &TermQuery{Value: "b"}}, "(a AND b)", false},
+		{&BooleanQuery{Left: &TermQuery{Value: "a"}, Op: "NOT", Right: &TermQuery{Value: "b"}}, "(a NOT b)", false},
+		{&BooleanQuery{Left: &TermQuery{Value: ""}, Op: "NOT", Right: &TermQuery{Value: "b"}}, "", false},
+	}
+
+	for _, tt := range tests {
+		got, fuzzy := ToFTS5(tt.q)
+		if got != tt.want {
+			t.Errorf("ToFTS5(%T) = %q, want %q", tt.q, got, tt.want)
+		}
+		if fuzzy != tt.wantFuzzy {
+			t.Errorf("ToFTS5(%T) fuzzy = %v, want %v", tt.q, fuzzy, tt.wantFuzzy)
+		}
+	}
+}
+
+func TestAnalyzeToken(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{"hello world", []string{"hello", "world"}},
+		{"hello-world", []string{"hello", "world"}},
+		{"hello_world", []string{"hello_world"}},
+		{"İstanbul, 42_abc", []string{"İstanbul", "42_abc"}},
+		{"", []string{}},
+		{"123", []string{"123"}},
+	}
+
+	for _, tt := range tests {
+		got := AnalyzeToken(tt.input)
+		if len(got) != len(tt.want) {
+			t.Errorf("AnalyzeToken(%q) = %v, want %v", tt.input, got, tt.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("AnalyzeToken(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+			}
+		}
+
+		var streamed []string
+		AnalyzeTokenFunc(tt.input, func(token string) {
+			streamed = append(streamed, token)
+		})
+		if len(streamed) != len(tt.want) {
+			t.Errorf("AnalyzeTokenFunc(%q) produced %v, want %v", tt.input, streamed, tt.want)
+			continue
+		}
+		for i := range streamed {
+			if streamed[i] != tt.want[i] {
+				t.Errorf("AnalyzeTokenFunc(%q)[%d] = %q, want %q", tt.input, i, streamed[i], tt.want[i])
+			}
+		}
+	}
+}
+
+func TestLowerToken(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"HELLO", "hello"},
+		{"world", "world"},
+		{"MiXeD", "mixed"},
+		{"123", "123"},
+		{"a1-b_c.d", "a1-b_c.d"},
+		{"", ""},
+		{"ıstanbul", "ıstanbul"},
+		{"ÄÖÜ", "äöü"},
+		{"Γεια", "γεια"},
+		{"Привет", "привет"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := LowerToken(tt.input); got != tt.want {
+				t.Errorf("LowerToken(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestToFTS5WithAnalyzer(t *testing.T) {
+	a := NewAnalyzer("en", true, true)
+	tests := []struct {
+		q         Query
+		want      string
+		wantFuzzy bool
+	}{
+		{nil, "", false},
+		{&TermQuery{Value: "running"}, "run*", false},
+		{&TermQuery{Value: "the"}, "the", false},
+		// Unstemmed index: a non-prefix porter stem ("body"->"bodi") must not
+		// render as `bodi*`, which can never match — issue #98.
+		{&TermQuery{Value: "body"}, "body", false},
+		{&TermQuery{Value: "studies"}, "studi*", false},
+		{&PhraseQuery{Terms: []string{"running", "jumps"}}, `"run* jump*"`, false},
+		{&PhraseQuery{Terms: []string{"the", "running"}}, `"the run*"`, false},
+		{&PrefixQuery{Prefix: "running"}, "run*", false},
+		{&PrefixQuery{Prefix: "the"}, "the*", false},
+		{&FuzzyQuery{Term: "running", N: 2}, "run*", true},
+		{&FuzzyQuery{Term: "the", N: 2}, "the*", true},
+		{&FieldQuery{Field: "title", Query: &TermQuery{Value: "running"}}, "title:run*", false},
+		{&NearQuery{Terms: []string{"running", "jumps"}, N: 5}, "NEAR(run* jump*, 5)", false},
+		{&BooleanQuery{Left: &TermQuery{Value: "running"}, Op: "AND", Right: &TermQuery{Value: "jumps"}}, "(run* AND jump*)", false},
+		{&BooleanQuery{Left: &TermQuery{Value: "running"}, Op: "NOT", Right: &TermQuery{Value: "jumps"}}, "(run* NOT jump*)", false},
+	}
+
+	for _, tt := range tests {
+		got, fuzzy := ToFTS5WithAnalyzer(tt.q, a)
+		if got != tt.want {
+			t.Errorf("ToFTS5WithAnalyzer(%T) = %q, want %q", tt.q, got, tt.want)
+		}
+		if fuzzy != tt.wantFuzzy {
+			t.Errorf("ToFTS5WithAnalyzer(%T) fuzzy = %v, want %v", tt.q, fuzzy, tt.wantFuzzy)
+		}
+	}
+}
+
+// TestToFTS5_UnaryNotUnderAnd pins the M9 contract: unary NOT combined via
+// AND must render as FTS5's binary NOT instead of being silently dropped —
+// `go AND NOT rust` used to search for just `go` (review 2026-09-17 M9).
+func TestToFTS5_UnaryNotUnderAnd(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"unary not on the right", "go AND NOT rust", "(go NOT rust)"},
+		{"implicit AND with unary not on the right", "go NOT rust", "(go NOT rust)"},
+		{"unary not on the left", "NOT rust AND go", "(go NOT rust)"},
+		{"chained negations", "go AND NOT rust AND NOT c", "((go NOT rust) NOT c)"},
+		{"pure negation still unanswerable", "NOT rust", ""},
+		{"negation on both sides unanswerable", "NOT go AND NOT rust", ""},
+	}
+	for _, tt := range tests {
+		q, err := ParseQuery(tt.input)
+		if err != nil {
+			t.Fatalf("%s: ParseQuery: %v", tt.name, err)
+		}
+		got, _ := ToFTS5(q)
+		if got != tt.want {
+			t.Errorf("%s: ToFTS5(%q) = %q, want %q", tt.name, tt.input, got, tt.want)
+		}
+	}
+}
+
+// TestParseQueryRejectsInvalidPunctuation pins the L22 contract: unrecognized
+// punctuation must fail the parse instead of being silently swallowed as
+// end-of-input — `a @` used to parse as just `a`, losing the trailing term
+// without any error. The NEAR case covers parseNear, which used to drop the
+// invalid token even after the general fix (review 2026-09-17 L22).
+func TestParseQueryRejectsInvalidPunctuation(t *testing.T) {
+	for _, input := range []string{"a @", "go !", "x #", "a @ b", "NEAR(a @ b, 2)"} {
+		q, err := ParseQuery(input)
+		if err == nil {
+			t.Errorf("ParseQuery(%q) = %#v, want a syntax error", input, q)
+		}
+	}
+	// Legitimate queries still parse.
+	if q, err := ParseQuery("go AND NOT rust"); err != nil || q == nil {
+		t.Errorf("ParseQuery(\"go AND NOT rust\") = %v, %v", q, err)
+	}
+}
