@@ -262,7 +262,9 @@ func buildMCPServerWithServices(runtime *app.Runtime, cfg *config.AppConfig) (*m
 		Name:        "seek_status",
 		Description: "List indexed collections with document and chunk counts.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-		collections, err := runtime.Store.ListCollections()
+		// Shared request path (one store query) instead of the N+1
+		// ListCollections + per-collection counts loop.
+		collections, err := app.NewCollectionServiceFromStore(runtime.Store).List(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -274,15 +276,7 @@ func buildMCPServerWithServices(runtime *app.Runtime, cfg *config.AppConfig) (*m
 		}
 		out := make([]colInfo, 0, len(collections))
 		for _, col := range collections {
-			docs, err := runtime.Store.CountDocuments(col.ID)
-			if err != nil {
-				return nil, nil, err
-			}
-			chunks, err := runtime.Store.CountChunks(col.ID)
-			if err != nil {
-				return nil, nil, err
-			}
-			out = append(out, colInfo{Name: col.Name, Type: string(col.Type), Documents: docs, Chunks: chunks})
+			out = append(out, colInfo{Name: col.Name, Type: string(col.Type), Documents: col.Documents, Chunks: col.Chunks})
 		}
 		payload, err := json.Marshal(out)
 		if err != nil {
