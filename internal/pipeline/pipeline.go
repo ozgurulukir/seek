@@ -375,10 +375,6 @@ func (p *Pipeline) syncVectorIndexIfNeeded(ctx context.Context, opts Options, lo
 	return nil
 }
 
-func embedVLText(db *store.Store, vlClient embed.VLTextBatcher, textChunks []store.Chunk, log Logger) (int, error) {
-	return embedVLTextContext(context.Background(), db, vlClient, textChunks, log, false)
-}
-
 func embedVLTextContext(ctx context.Context, db *store.Store, vlClient embed.VLTextBatcher, textChunks []store.Chunk, log Logger, deferVectorUpdate bool) (int, error) {
 	log.Printf("Embedding %d text chunks via VL realtime API...", len(textChunks))
 	texts := make([]string, len(textChunks))
@@ -448,10 +444,6 @@ func updateTextEmbeddings(ctx context.Context, db *store.Store, chunks []store.C
 	return nil
 }
 
-func embedVLImages(db *store.Store, vlClient embed.VLImageBatcher, imageChunks []store.Chunk, log Logger) (int, error) {
-	return embedVLImagesContext(context.Background(), db, vlClient, imageChunks, log, false)
-}
-
 func embedVLImagesContext(ctx context.Context, db *store.Store, vlClient embed.VLImageBatcher, imageChunks []store.Chunk, log Logger, deferVectorUpdate bool) (int, error) {
 	log.Printf("Embedding %d image chunks via VL realtime API...", len(imageChunks))
 	items := make([]embed.ImageBatchItem, len(imageChunks))
@@ -508,10 +500,6 @@ func embedBatchContext(ctx context.Context, db *store.Store, client embed.BatchE
 		return 0, fmt.Errorf("batch update embeddings: %w", err)
 	}
 	return updated, nil
-}
-
-func embedRealtime(db *store.Store, client embed.DocumentEmbedder, chunks []store.Chunk, texts []string, log Logger) (int, error) {
-	return embedRealtimeContext(context.Background(), db, client, chunks, texts, log, false)
 }
 
 func embedRealtimeContext(ctx context.Context, db *store.Store, client embed.DocumentEmbedder, chunks []store.Chunk, texts []string, log Logger, deferVectorUpdate bool) (int, error) {

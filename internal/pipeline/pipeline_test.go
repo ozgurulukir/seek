@@ -74,7 +74,7 @@ func TestEmbedVLTextChunks(t *testing.T) {
 	}
 
 	vlClient := embed.NewVLClient("test-key", "test-model", 3, ts.URL, embed.TaskPrefix{})
-	updated, err := embedVLText(db, vlClient, chunks, testLogger{})
+	updated, err := embedVLTextContext(context.Background(), db, vlClient, chunks, testLogger{}, false)
 	if err != nil {
 		t.Fatalf("embed VL text: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestEmbedVLImageChunks(t *testing.T) {
 	}
 
 	vlClient := embed.NewVLClient("test-key", "test-model", 3, ts.URL, embed.TaskPrefix{})
-	updated, err := embedVLImages(db, vlClient, chunks, testLogger{})
+	updated, err := embedVLImagesContext(context.Background(), db, vlClient, chunks, testLogger{}, false)
 	if err != nil {
 		t.Fatalf("embed VL images: %v", err)
 	}
