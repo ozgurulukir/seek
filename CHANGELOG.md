@@ -5,6 +5,8 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-11-14
+
 - **refactor(pipeline): remove the last non-Context shims** (fixes #189
   fully): `embedVLText`, `embedVLImages`, and `embedRealtime` had only test
   callers; the three test call sites now call the `*Context` variants with
