@@ -35,6 +35,13 @@ All notable changes to `seek` are documented here. This follows
   `AppendFTS`) and `internal/pipeline` (`embedBatch`) — part of the dead non-Context
   surface tracked by issue #189; the remaining test-only wrappers stay until their
   test callers migrate.
+- **docs(chunk): size budgets are bytes, not chars**
+  (`internal/chunk/chunk.go`): `DefaultMaxChunkSize`/`DefaultOverlap` were
+  commented as "chars" while every measurement is byte-based (`len` /
+  `strings.Builder.Len`). The units documentation is now corrected — multibyte
+  content produces chunks with fewer *characters* than the byte budget, never
+  over-budget ones (the "~3x overflow" mechanism in issue #192 does not
+  exist; the direction is inverted).
 - **search: NEAR parser rejects unclosed and malformed proximity**
   (`internal/search/query.go`): `NEAR(a b` without a closing parenthesis is now
   a parse error instead of silently becoming a NEAR search, and a non-numeric
