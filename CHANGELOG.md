@@ -14,6 +14,13 @@ All notable changes to `seek` are documented here. This follows
   and owns the cancellation check — fixing the missing `ctx.Err()` guard in
   the `embedBatchContext` persist loop, which could write to the store even
   after the context was canceled.
+- **refactor(app): unified nil-dependency guards**
+  (`internal/app/collection.go`, `internal/app/add.go`): both collection
+  services now use a canonical `requireDeps` guard — every exported method
+  checks exactly the dependencies it uses and one uniform "not configured"
+  error names what is missing, replacing the per-method "store is nil" vs
+  "not configured" drift. `ReindexAll` previously had no nil-dependency guard
+  at all; it now refuses on a missing store/pipeline like `Reindex`.
 - **search: NEAR parser rejects unclosed and malformed proximity**
   (`internal/search/query.go`): `NEAR(a b` without a closing parenthesis is now
   a parse error instead of silently becoming a NEAR search, and a non-numeric
