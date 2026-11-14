@@ -30,3 +30,6 @@ __pycache__/
 docs/plans/
 docs/*review*
 .commandcode/
+
+# Mimosa security-scan hook state (session-local)
+.mimosa/
