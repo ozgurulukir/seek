@@ -262,8 +262,7 @@ func (r ftsRepository) appendContext(ctx context.Context, docID int64, newConten
 }
 
 // SearchFTSContext is the context-aware search seam used by the search
-// repository adapter. The legacy SearchFTS method remains for callers that do
-// not yet own a context.
+// repository adapter.
 func (s *Store) SearchFTSContext(ctx context.Context, query string, limit int, filters *FilterSet) ([]SearchResult, error) {
 	return s.repositories.fts.searchContext(ctx, query, limit, filters)
 }
