@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/embed"
