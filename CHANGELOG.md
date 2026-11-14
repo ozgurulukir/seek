@@ -5,6 +5,10 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **refactor(pipeline): remove the last non-Context shims** (fixes #189
+  fully): `embedVLText`, `embedVLImages`, and `embedRealtime` had only test
+  callers; the three test call sites now call the `*Context` variants with
+  `context.Background()` and the wrappers are deleted.
 - **refactor(store): remove test-only non-Context shims** (fixes part of
   #189): the 11 remaining delegating wrappers (`SyncVectorIndex`,
   `SearchVector`, `UpdateChunkEmbedding`, `GetChunksWithoutEmbedding`,

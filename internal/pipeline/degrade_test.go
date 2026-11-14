@@ -270,7 +270,7 @@ func TestEmbedPending_MockProvider(t *testing.T) {
 	}
 	var log captureLogger
 	mock := &mockDocEmbedder{vec: []float32{0.1, 0.2}}
-	updated, err := embedRealtime(db, mock, chunks, []string{"hello world content"}, &log)
+	updated, err := embedRealtimeContext(context.Background(), db, mock, chunks, []string{"hello world content"}, &log, false)
 	if err != nil {
 		t.Fatalf("realtime embed: %v", err)
 	}
