@@ -33,7 +33,7 @@ func BenchmarkDeleteOrphansFullReindex(b *testing.B) {
 						b.Fatalf("UpsertDocument: %v", err)
 					}
 					_ = s.InsertChunk(docID, 0, "some text content", nil)
-					_ = s.UpsertFTS(docID, "title", "some text content")
+					_ = s.UpsertFTSContext(context.Background(), docID, "title", "some text content")
 					_ = s.FastFields().Set(docID, "language", "en")
 				}
 				b.StartTimer()
@@ -79,7 +79,7 @@ func BenchmarkDeleteOrphansPartial(b *testing.B) {
 						b.Fatalf("UpsertDocument: %v", err)
 					}
 					_ = s.InsertChunk(docID, 0, "some text content", nil)
-					_ = s.UpsertFTS(docID, "title", "some text content")
+					_ = s.UpsertFTSContext(context.Background(), docID, "title", "some text content")
 					_ = s.FastFields().Set(docID, "language", "en")
 					if j < liveCount {
 						livePaths[path] = true

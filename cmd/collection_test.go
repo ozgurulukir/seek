@@ -57,14 +57,14 @@ func TestCollectionRenameCmd_E2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rt.Store.UpsertFTS(docID, "Architecture", "runtime composition"); err != nil {
+	if err := rt.Store.UpsertFTSContext(context.Background(), docID, "Architecture", "runtime composition"); err != nil {
 		t.Fatal(err)
 	}
 	embed := []float32{0.1, 0.2, 0.3}
 	if err := rt.Store.InsertChunk(docID, 0, "runtime composition", embed); err != nil {
 		t.Fatal(err)
 	}
-	if err := rt.Store.SyncVectorIndex(); err != nil {
+	if err := rt.Store.SyncVectorIndexContext(context.Background()); err != nil {
 		t.Fatalf("SyncVectorIndex: %v", err)
 	}
 	if err := rt.Close(); err != nil {

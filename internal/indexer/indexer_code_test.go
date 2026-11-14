@@ -1,6 +1,7 @@
 package indexer_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -72,7 +73,7 @@ func TestIndexer_CodeCollectionSync(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		docs, err := db.ListDocumentPaths(col.ID)
+		docs, err := db.ListDocumentPathsContext(context.Background(), col.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -139,7 +140,7 @@ func TestIndexer_CodeCollectionSync(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		docsAfter, err := db.ListDocumentPaths(col.ID)
+		docsAfter, err := db.ListDocumentPathsContext(context.Background(), col.ID)
 		if err != nil {
 			t.Fatal(err)
 		}

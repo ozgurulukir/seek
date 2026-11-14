@@ -11,10 +11,6 @@ import (
 
 // --- Documents ---
 
-func (s *Store) GetDocument(collectionID int64, path string) (*Document, error) {
-	return s.GetDocumentContext(context.Background(), collectionID, path)
-}
-
 func (s *Store) GetDocumentContext(ctx context.Context, collectionID int64, path string) (*Document, error) {
 	return s.repositories.documents.getContext(ctx, collectionID, path)
 }
@@ -56,11 +52,7 @@ func (s *Store) UpsertDocument(collectionID int64, path, title, contentHash stri
 	return id, nil
 }
 
-// ListDocumentPaths returns all document paths for a collection.
-func (s *Store) ListDocumentPaths(collectionID int64) (map[string]int64, error) {
-	return s.ListDocumentPathsContext(context.Background(), collectionID)
-}
-
+// ListDocumentPathsContext returns all document paths for a collection.
 func (s *Store) ListDocumentPathsContext(ctx context.Context, collectionID int64) (map[string]int64, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, path FROM documents WHERE collection_id = ?`, collectionID)
 	if err != nil {
@@ -85,10 +77,6 @@ func (s *Store) ListDocumentPathsContext(ctx context.Context, collectionID int64
 // DeleteDocument removes a document and its chunks/FTS/fast_field entries.
 // Each DELETE is individually atomic; foreign key cascades handle orphan
 // cleanup if interrupted between statements.
-func (s *Store) DeleteDocument(docID int64) error {
-	return s.DeleteDocumentContext(context.Background(), docID)
-}
-
 // DeleteDocumentContext removes a document and all searchable projections in
 // one transaction. This prevents an interrupted cleanup from leaving FTS,
 // chunks, or fast fields out of sync with the document row.
@@ -117,10 +105,6 @@ func (s *Store) DeleteDocumentContext(ctx context.Context, docID int64) error {
 func (s *Store) UpdateDocumentMtimeContext(ctx context.Context, docID int64, mtime float64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE documents SET mtime = ? WHERE id = ?`, mtime, docID)
 	return err
-}
-
-func (s *Store) UpdateDocumentContentHash(docID int64, contentHash string) error {
-	return s.UpdateDocumentContentHashContext(context.Background(), docID, contentHash)
 }
 
 func (s *Store) UpdateDocumentContentHashContext(ctx context.Context, docID int64, contentHash string) error {

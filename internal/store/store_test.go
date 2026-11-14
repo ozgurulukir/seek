@@ -66,14 +66,14 @@ func TestGetChunksWithoutEmbeddingForCollectionType(t *testing.T) {
 		t.Fatalf("InsertChunk codex missing: %v", err)
 	}
 
-	missing, err := s.GetChunksWithoutEmbeddingForCollectionType(CollectionTypeClaude, false)
+	missing, err := s.GetChunksWithoutEmbeddingForCollectionTypeContext(context.Background(), CollectionTypeClaude, false)
 	if err != nil {
 		t.Fatalf("GetChunksWithoutEmbeddingForCollectionType missing: %v", err)
 	}
 	if len(missing) != 1 || missing[0].DocumentID != claudeDoc {
 		t.Errorf("missing chunks = %#v, want only Claude missing chunk", missing)
 	}
-	all, err := s.GetChunksWithoutEmbeddingForCollectionType(CollectionTypeClaude, true)
+	all, err := s.GetChunksWithoutEmbeddingForCollectionTypeContext(context.Background(), CollectionTypeClaude, true)
 	if err != nil {
 		t.Fatalf("GetChunksWithoutEmbeddingForCollectionType force: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestSearchVectorOrdersBySimilarity(t *testing.T) {
 	insertVecDoc(t, s, "far", [][]float32{{0.1, 0.99}})
 	insertVecDoc(t, s, "mid", [][]float32{{0.6, 0.8}})
 
-	res, err := s.SearchVector([]float32{1, 0}, 2, nil)
+	res, err := s.SearchVectorContext(context.Background(), []float32{1, 0}, 2, nil)
 	if err != nil {
 		t.Fatalf("SearchVector: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestSearchVectorOrdersBySimilarity(t *testing.T) {
 // SearchVector returns nothing for an empty embedding table without error.
 func TestSearchVectorEmpty(t *testing.T) {
 	s := newTestStore(t)
-	res, err := s.SearchVector([]float32{1, 0}, 5, nil)
+	res, err := s.SearchVectorContext(context.Background(), []float32{1, 0}, 5, nil)
 	if err != nil {
 		t.Fatalf("SearchVector on empty: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestSearchFTS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InsertDocument 1: %v", err)
 	}
-	if err := store.UpsertFTS(doc1ID, "Security Vulnerability Fix", "Content describing an SQL injection issue in search logic."); err != nil {
+	if err := store.UpsertFTSContext(context.Background(), doc1ID, "Security Vulnerability Fix", "Content describing an SQL injection issue in search logic."); err != nil {
 		t.Fatalf("UpsertFTS 1: %v", err)
 	}
 
@@ -214,12 +214,12 @@ func TestSearchFTS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InsertDocument 2: %v", err)
 	}
-	if err := store.UpsertFTS(doc2ID, "Performance Update", "Optimizing the indexer performance and chunking speed."); err != nil {
+	if err := store.UpsertFTSContext(context.Background(), doc2ID, "Performance Update", "Optimizing the indexer performance and chunking speed."); err != nil {
 		t.Fatalf("UpsertFTS 2: %v", err)
 	}
 
 	// Test regular SearchFTS execution
-	results, err := store.SearchFTS("injection", 10, nil)
+	results, err := store.SearchFTSContext(context.Background(), "injection", 10, nil)
 	if err != nil {
 		t.Fatalf("SearchFTS failed: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestStore_AutocompleteTerms(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertDocument: %v", err)
 	}
-	if err := store.UpsertFTS(docID, "Algorithm Testing", "Architecture indexing autocomplete performance"); err != nil {
+	if err := store.UpsertFTSContext(context.Background(), docID, "Algorithm Testing", "Architecture indexing autocomplete performance"); err != nil {
 		t.Fatalf("UpsertFTS: %v", err)
 	}
 
@@ -324,7 +324,7 @@ func TestSyncVectorIndexIncremental(t *testing.T) {
 	}
 
 	// 4. Delete document (and its chunks) -> verify ghost cleanup on next sync
-	if err := store.DeleteDocument(docID); err != nil {
+	if err := store.DeleteDocumentContext(context.Background(), docID); err != nil {
 		t.Fatalf("DeleteDocument: %v", err)
 	}
 	// At this point vi still has 2 vectors, but DB has 0 embedded chunks.
@@ -358,7 +358,7 @@ func TestUpdateChunkEmbeddingUpdatesVectorIndex(t *testing.T) {
 		t.Fatalf("initial sync: %v", err)
 	}
 
-	if err := store.UpdateChunkEmbedding(1, []float32{0, 1}); err != nil {
+	if err := store.UpdateChunkEmbeddingContext(context.Background(), 1, []float32{0, 1}); err != nil {
 		t.Fatalf("UpdateChunkEmbedding: %v", err)
 	}
 	results, err := vi.Search([]float32{0, 1}, 1)
@@ -393,11 +393,11 @@ func TestUpdateChunkEmbeddingRebuildsHNSWForExistingID(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT id FROM chunks WHERE document_id = ?`, docID).Scan(&chunkID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SyncVectorIndex(); err != nil {
+	if err := store.SyncVectorIndexContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := store.UpdateChunkEmbedding(chunkID, []float32{0, 1}); err != nil {
+	if err := store.UpdateChunkEmbeddingContext(context.Background(), chunkID, []float32{0, 1}); err != nil {
 		t.Fatalf("replace HNSW embedding: %v", err)
 	}
 	results, err := idx.Search([]float32{0, 1}, 1)
@@ -439,7 +439,7 @@ func TestUpdateChunkEmbeddingRestoresSQLiteWhenHNSWRebuildFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = store.UpdateChunkEmbedding(chunkID, []float32{0, 1})
+	err = store.UpdateChunkEmbeddingContext(context.Background(), chunkID, []float32{0, 1})
 	if err == nil || !strings.Contains(err.Error(), "dimension mismatch") {
 		t.Fatalf("UpdateChunkEmbedding error = %v, want dimension mismatch", err)
 	}
@@ -483,7 +483,7 @@ func TestSyncVectorIndexFullPreservesHNSWOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.SyncVectorIndex(); err == nil || !strings.Contains(err.Error(), "dimension mismatch") {
+	if err := store.SyncVectorIndexContext(context.Background()); err == nil || !strings.Contains(err.Error(), "dimension mismatch") {
 		t.Fatalf("SyncVectorIndex error = %v, want dimension mismatch", err)
 	}
 	if store.vector() != idx {
@@ -510,7 +510,7 @@ func TestFTSRebuildOnTokenizerChange(t *testing.T) {
 	if err := store.InsertChunk(docID, 0, "rebuilt full text search vocabulary", nil); err != nil {
 		t.Fatalf("InsertChunk: %v", err)
 	}
-	if err := store.UpsertFTS(docID, "Tokenizer Document", "rebuilt full text search vocabulary"); err != nil {
+	if err := store.UpsertFTSContext(context.Background(), docID, "Tokenizer Document", "rebuilt full text search vocabulary"); err != nil {
 		t.Fatalf("UpsertFTS: %v", err)
 	}
 
@@ -552,7 +552,7 @@ func TestFTSRebuildOnTokenizerChange(t *testing.T) {
 	}
 
 	// Verify SearchFTS works with rebuilt index
-	searchResults, err := store.SearchFTS("vocabulary", 5, nil)
+	searchResults, err := store.SearchFTSContext(context.Background(), "vocabulary", 5, nil)
 	if err != nil {
 		t.Fatalf("SearchFTS after rebuild: %v", err)
 	}

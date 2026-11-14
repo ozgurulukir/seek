@@ -28,7 +28,7 @@ func TestOpenRuntimeSharesStoreWithSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertDocument: %v", err)
 	}
-	if err := runtime.Store.UpsertFTS(documentID, "Architecture", "runtime composition"); err != nil {
+	if err := runtime.Store.UpsertFTSContext(context.Background(), documentID, "Architecture", "runtime composition"); err != nil {
 		t.Fatalf("UpsertFTS: %v", err)
 	}
 

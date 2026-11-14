@@ -1,6 +1,7 @@
 package cmd_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,7 +61,7 @@ func TestAddCmd_CodeCollection(t *testing.T) {
 		t.Errorf("expected collection type %q, got %q", store.CollectionTypeCode, col.Type)
 	}
 
-	docs, err := db.ListDocumentPaths(col.ID)
+	docs, err := db.ListDocumentPathsContext(context.Background(), col.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

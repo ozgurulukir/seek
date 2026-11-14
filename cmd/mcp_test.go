@@ -159,7 +159,7 @@ func TestMCPSearch_CollectionFilter(t *testing.T) {
 	if err := db.InsertChunk(1, 0, "Zig comptime is powerful and the language is simple.", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertFTS(1, "Zig Patterns", "Zig comptime is powerful and the language is simple."); err != nil {
+	if err := db.UpsertFTSContext(context.Background(), 1, "Zig Patterns", "Zig comptime is powerful and the language is simple."); err != nil {
 		t.Fatal(err)
 	}
 	col2, err := db.CreateCollection("rustcol", "markdown", "/tmp", "**/*.md")
@@ -172,7 +172,7 @@ func TestMCPSearch_CollectionFilter(t *testing.T) {
 	if err := db.InsertChunk(2, 0, "Rust borrow checker rules.", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertFTS(2, "Rust Patterns", "Rust borrow checker rules."); err != nil {
+	if err := db.UpsertFTSContext(context.Background(), 2, "Rust Patterns", "Rust borrow checker rules."); err != nil {
 		t.Fatal(err)
 	}
 
@@ -233,7 +233,7 @@ func TestMCPSearch_AgentArguments(t *testing.T) {
 	if err := db.InsertChunk(doc, 0, content, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertFTS(doc, "test", content); err != nil {
+	if err := db.UpsertFTSContext(context.Background(), doc, "test", content); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.FastFields().Set(doc, "doc_type", "code"); err != nil {

@@ -1,6 +1,7 @@
 package indexer_test
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -61,13 +62,13 @@ func TestIndexer_IncrementalSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	docs, _ := db.ListDocumentPaths(col.ID)
+	docs, _ := db.ListDocumentPathsContext(context.Background(), col.ID)
 	if len(docs) != 1 {
 		t.Fatalf("expected 1 doc, got %d", len(docs))
 	}
 
 	_ = docs[doc1Path]
-	chunks, _ := db.GetChunksWithoutEmbedding(true)
+	chunks, _ := db.GetChunksWithoutEmbeddingContext(context.Background(), true)
 	if len(chunks) != 1 {
 		t.Fatalf("expected 1 chunk, got %d", len(chunks))
 	}
@@ -76,7 +77,7 @@ func TestIndexer_IncrementalSync(t *testing.T) {
 	if err := idx.SyncCollection(col); err != nil {
 		t.Fatal(err)
 	}
-	chunks2, _ := db.GetChunksWithoutEmbedding(true)
+	chunks2, _ := db.GetChunksWithoutEmbeddingContext(context.Background(), true)
 	if len(chunks2) != 1 {
 		t.Fatalf("expected chunk count to remain 1, got %d", len(chunks2))
 	}
@@ -88,11 +89,11 @@ func TestIndexer_IncrementalSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	docsAfter, _ := db.ListDocumentPaths(col.ID)
+	docsAfter, _ := db.ListDocumentPathsContext(context.Background(), col.ID)
 	if len(docsAfter) != 1 {
 		t.Fatalf("expected 1 doc after update, got %d", len(docsAfter))
 	}
-	chunks3, _ := db.GetChunksWithoutEmbedding(true)
+	chunks3, _ := db.GetChunksWithoutEmbeddingContext(context.Background(), true)
 	if len(chunks3) != 1 {
 		t.Fatalf("expected 1 chunk after update, got %d", len(chunks3))
 	}
@@ -106,7 +107,7 @@ func TestIndexer_IncrementalSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	docsFinal, _ := db.ListDocumentPaths(col.ID)
+	docsFinal, _ := db.ListDocumentPathsContext(context.Background(), col.ID)
 	if len(docsFinal) != 0 {
 		t.Fatalf("expected 0 docs after removal, got %d", len(docsFinal))
 	}
@@ -226,7 +227,7 @@ func TestIndexer_ParserCollectionSync(t *testing.T) {
 			t.Fatalf("first sync: %v", err)
 		}
 		var err error
-		docs, err = env.db.ListDocumentPaths(env.col.ID)
+		docs, err = env.db.ListDocumentPathsContext(context.Background(), env.col.ID)
 		if err != nil {
 			t.Fatalf("ListDocumentPaths: %v", err)
 		}
@@ -234,7 +235,7 @@ func TestIndexer_ParserCollectionSync(t *testing.T) {
 			t.Fatalf("expected 1 doc after full sync, got %d", len(docs))
 		}
 
-		chunks, _ := env.db.GetChunksWithoutEmbedding(true)
+		chunks, _ := env.db.GetChunksWithoutEmbeddingContext(context.Background(), true)
 		if len(chunks) != 1 {
 			t.Fatalf("expected 1 chunk, got %d", len(chunks))
 		}
@@ -253,7 +254,7 @@ func TestIndexer_ParserCollectionSync(t *testing.T) {
 		for _, docID := range docs {
 			env.db.DeleteChunksForDocument(docID)
 		}
-		chunksAfterDelete, _ := env.db.GetChunksWithoutEmbedding(true)
+		chunksAfterDelete, _ := env.db.GetChunksWithoutEmbeddingContext(context.Background(), true)
 		if len(chunksAfterDelete) != 0 {
 			t.Fatalf("expected 0 chunks after delete, got %d", len(chunksAfterDelete))
 		}
@@ -266,7 +267,7 @@ func TestIndexer_ParserCollectionSync(t *testing.T) {
 		// should appear (the session was returned with Messages=nil, so the indexer
 		// skipped it). If the cursor truncation bug is present, the session would be
 		// re-indexed and chunks would reappear.
-		chunksFinal, _ := env.db.GetChunksWithoutEmbedding(true)
+		chunksFinal, _ := env.db.GetChunksWithoutEmbeddingContext(context.Background(), true)
 		if len(chunksFinal) != 0 {
 			t.Errorf("incremental sync re-indexed unchanged session: %d chunks appeared "+
 				"(cursor sub-second precision lost in round-trip). Chunk content: %q",
@@ -306,7 +307,7 @@ func TestIndexerCustomChunkConfig(t *testing.T) {
 		t.Fatalf("SyncCollection: %v", err)
 	}
 
-	chunksDefault, err := db.GetChunksWithoutEmbedding(true)
+	chunksDefault, err := db.GetChunksWithoutEmbeddingContext(context.Background(), true)
 	if err != nil {
 		t.Fatalf("GetChunksWithoutEmbedding: %v", err)
 	}
@@ -317,7 +318,7 @@ func TestIndexerCustomChunkConfig(t *testing.T) {
 	// 2. With custom large chunk size (3000), ~1400 chars should produce exactly 1 chunk
 	for _, ch := range chunksDefault {
 		db.DeleteChunksForDocument(ch.DocumentID)
-		if err := db.UpdateDocumentContentHash(ch.DocumentID, ""); err != nil {
+		if err := db.UpdateDocumentContentHashContext(context.Background(), ch.DocumentID, ""); err != nil {
 			t.Fatalf("clear content hash: %v", err)
 		}
 	}
@@ -332,7 +333,7 @@ func TestIndexerCustomChunkConfig(t *testing.T) {
 		t.Fatalf("SyncCollection with custom chunk: %v", err)
 	}
 
-	chunksCustom, err := db.GetChunksWithoutEmbedding(true)
+	chunksCustom, err := db.GetChunksWithoutEmbeddingContext(context.Background(), true)
 	if err != nil {
 		t.Fatalf("GetChunksWithoutEmbedding: %v", err)
 	}

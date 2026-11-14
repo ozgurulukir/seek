@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -162,14 +163,14 @@ func TestTagFilter_MatchesCommaSeparatedValues(t *testing.T) {
 	if err := s.FastFields().Set(docID, "tags", "go,rust"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpsertFTS(docID, "Note", "note body content"); err != nil {
+	if err := s.UpsertFTSContext(context.Background(), docID, "Note", "note body content"); err != nil {
 		t.Fatal(err)
 	}
 
 	match := func(tag string) bool {
 		fs := NewFilterSet()
 		fs.Add(&TagFilter{Tag: tag})
-		results, err := s.SearchFTS("Note", 10, fs)
+		results, err := s.SearchFTSContext(context.Background(), "Note", 10, fs)
 		if err != nil {
 			t.Fatal(err)
 		}

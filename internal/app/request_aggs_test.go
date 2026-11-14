@@ -26,7 +26,7 @@ func TestRunAggs_TermsBounds(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := runtime.Store.UpsertFTS(docID, name, "content"); err != nil {
+		if err := runtime.Store.UpsertFTSContext(context.Background(), docID, name, "content"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -87,7 +87,7 @@ func TestRunAggs_ConfiguredDefaultBucketLimit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := runtime.Store.UpsertFTS(docID, name, "content"); err != nil {
+		if err := runtime.Store.UpsertFTSContext(context.Background(), docID, name, "content"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -128,7 +128,7 @@ func TestRunAggs_NonTermAggregations(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := runtime.Store.UpsertFTS(docID, name, "content"); err != nil {
+		if err := runtime.Store.UpsertFTSContext(context.Background(), docID, name, "content"); err != nil {
 			t.Fatal(err)
 		}
 	}

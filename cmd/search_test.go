@@ -1,6 +1,7 @@
 package cmd_test
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -125,7 +126,7 @@ func TestSearchCmd_Execution(t *testing.T) {
 	}
 
 	// Populate the FTS index; without this BM25 finds nothing.
-	if err := db.UpsertFTS(docID, "Test Doc", content); err != nil {
+	if err := db.UpsertFTSContext(context.Background(), docID, "Test Doc", content); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()

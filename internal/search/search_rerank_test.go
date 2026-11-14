@@ -43,10 +43,10 @@ func TestSearchWithReranker(t *testing.T) {
 	doc1, _ := db.UpsertDocument(col.ID, "/path/doc1.go", "doc1.go", "h1", 1000, 50)
 	doc2, _ := db.UpsertDocument(col.ID, "/path/doc2.go", "doc2.go", "h2", 1000, 50)
 
-	_ = db.UpsertFTS(doc1, "doc1.go", "apple banana")
+	_ = db.UpsertFTSContext(context.Background(), doc1, "doc1.go", "apple banana")
 	_ = db.InsertChunkWithLines(doc1, 0, "apple banana", 1, 20, nil)
 
-	_ = db.UpsertFTS(doc2, "doc2.go", "apple orange")
+	_ = db.UpsertFTSContext(context.Background(), doc2, "doc2.go", "apple orange")
 	_ = db.InsertChunkWithLines(doc2, 0, "apple orange", 1, 20, nil)
 
 	engine := search.NewEngine(app.NewStoreSearchRepository(db), nil)

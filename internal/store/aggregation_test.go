@@ -150,7 +150,7 @@ func TestDynamicFastFieldTermsAggregation(t *testing.T) {
 	if err := s.FastFields().Set(ids[0], "series", "a,b"); err != nil {
 		t.Fatalf("set series: %v", err)
 	}
-	if err := s.UpsertFTS(ids[0], "a.md", "body"); err != nil {
+	if err := s.UpsertFTSContext(context.Background(), ids[0], "a.md", "body"); err != nil {
 		t.Fatal(err)
 	}
 

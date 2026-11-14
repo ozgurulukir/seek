@@ -205,7 +205,7 @@ func TestPruneEmptyConversationBatch(t *testing.T) {
 		if err := idx.pruneEmptyConversationBatch(doc, 0, doc.Path, 200); err != nil {
 			t.Fatalf("pruneEmptyConversationBatch: %v", err)
 		}
-		paths, _ := db.ListDocumentPaths(col.ID)
+		paths, _ := db.ListDocumentPathsContext(context.Background(), col.ID)
 		if len(paths) != 0 {
 			t.Errorf("stale document survived, remaining: %v", paths)
 		}

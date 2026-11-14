@@ -5,6 +5,16 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **refactor(store): remove test-only non-Context shims** (fixes part of
+  #189): the 11 remaining delegating wrappers (`SyncVectorIndex`,
+  `SearchVector`, `UpdateChunkEmbedding`, `GetChunksWithoutEmbedding`,
+  `GetChunksWithoutEmbeddingForCollectionType`, `GetDocument`,
+  `ListDocumentPaths`, `DeleteDocument`, `UpdateDocumentContentHash`,
+  `UpsertFTS`, `SearchFTS`) are deleted — a full caller audit confirmed zero
+  production callers (the search engine reaches the store through the
+  `internal/app` `SearchRepository` adapter, which calls the `*Context`
+  variants). All ~280 test call sites now call the `*Context` methods with
+  `context.Background()` directly.
 - **refactor(pipeline): one shared embeddings→persist path**
   (`internal/pipeline/pipeline.go`): the four near-identical "iterate
   embeddings → build `ChunkEmbeddingUpdate` → `UpdateChunkEmbeddingsBatchContext`

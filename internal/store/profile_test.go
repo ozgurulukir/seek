@@ -238,7 +238,7 @@ func TestRestoreEmbeddingSpaceRestoresFTSContent(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT id FROM documents LIMIT 1`).Scan(&documentID); err != nil {
 		t.Fatalf("document id: %v", err)
 	}
-	if err := s.UpsertFTS(documentID, "old title", "old searchable content"); err != nil {
+	if err := s.UpsertFTSContext(context.Background(), documentID, "old title", "old searchable content"); err != nil {
 		t.Fatalf("old FTS: %v", err)
 	}
 	var collectionID int64
@@ -255,7 +255,7 @@ func TestRestoreEmbeddingSpaceRestoresFTSContent(t *testing.T) {
 		RETURNING id`, collectionID, "image-only.png").Scan(&imageDocumentID); err != nil {
 		t.Fatalf("insert legacy document: %v", err)
 	}
-	if err := s.UpsertFTS(imageDocumentID, "image title", "image searchable content"); err != nil {
+	if err := s.UpsertFTSContext(context.Background(), imageDocumentID, "image title", "image searchable content"); err != nil {
 		t.Fatalf("image FTS: %v", err)
 	}
 	if err := s.FastFields().Set(imageDocumentID, "topic", "legacy"); err != nil {
@@ -268,7 +268,7 @@ func TestRestoreEmbeddingSpaceRestoresFTSContent(t *testing.T) {
 	if _, err := s.db.ExecContext(ctx, `UPDATE chunks SET content = 'new content' WHERE document_id = ?`, documentID); err != nil {
 		t.Fatalf("change chunk: %v", err)
 	}
-	if err := s.UpsertFTS(documentID, "new title", "new searchable content"); err != nil {
+	if err := s.UpsertFTSContext(context.Background(), documentID, "new title", "new searchable content"); err != nil {
 		t.Fatalf("new FTS: %v", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM documents WHERE id = ?`, imageDocumentID); err != nil {

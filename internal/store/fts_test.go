@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"testing"
 )
 
@@ -22,18 +23,18 @@ func TestSearchFTSRanksTitleAboveContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertDocument title-hit: %v", err)
 	}
-	if err := s.UpsertFTS(titleDoc, "quartz formation", "plain body text about rocks"); err != nil {
+	if err := s.UpsertFTSContext(context.Background(), titleDoc, "quartz formation", "plain body text about rocks"); err != nil {
 		t.Fatalf("UpsertFTS title-hit: %v", err)
 	}
 	contentDoc, err := s.UpsertDocument(col.ID, "/tmp/content-hit.md", "geology overview", "h2", 1, 1)
 	if err != nil {
 		t.Fatalf("UpsertDocument content-hit: %v", err)
 	}
-	if err := s.UpsertFTS(contentDoc, "geology overview", "deep dive into quartz crystals"); err != nil {
+	if err := s.UpsertFTSContext(context.Background(), contentDoc, "geology overview", "deep dive into quartz crystals"); err != nil {
 		t.Fatalf("UpsertFTS content-hit: %v", err)
 	}
 
-	results, err := s.SearchFTS("quartz", 10, nil)
+	results, err := s.SearchFTSContext(context.Background(), "quartz", 10, nil)
 	if err != nil {
 		t.Fatalf("SearchFTS: %v", err)
 	}
