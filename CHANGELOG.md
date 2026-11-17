@@ -5,6 +5,14 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **fix(defaults): make config the single source of truth for engine defaults**:
+  chunk size/overlap are seeded from config and reported in bytes (not
+  characters); RRF k, compression level, HNSW `ef_search`, aggregation bucket
+  limit, VL batch sizes, and the `auth login` dimensions prompt now reference
+  the config-owned values instead of duplicated literals. The engine-local
+  `search.DefaultLimit` fallback now matches the documented default of 10 —
+  direct `Engine` callers that omit a limit previously received 20.
+
 ## [0.6.8] - 2026-11-14
 
 - **refactor(pipeline): remove the last non-Context shims** (fixes #189
