@@ -10,8 +10,12 @@ import (
 	"github.com/ozgurulukir/seek/internal/embed"
 )
 
+// Engine-local fallbacks for direct callers that supply no limit or RRF k.
+// Values mirror config.DefaultSearchLimit and config.DefaultRRFK; the search
+// package deliberately stays config-neutral, so the runtime passes the
+// configured values explicitly and these are only reached without it.
 const (
-	DefaultLimit = 20
+	DefaultLimit = 10
 	DefaultRRFK  = 60
 )
 
