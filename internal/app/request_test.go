@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/config"
-	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
@@ -118,8 +117,8 @@ func TestPlanSearchDefaults(t *testing.T) {
 	if opts.SortOrder != "desc" {
 		t.Errorf("sort order default = %q, want desc", opts.SortOrder)
 	}
-	if opts.RRFK != search.DefaultRRFK {
-		t.Errorf("RRFK = %d, want default %d", opts.RRFK, search.DefaultRRFK)
+	if opts.RRFK != config.DefaultRRFK {
+		t.Errorf("RRFK = %d, want default %d", opts.RRFK, config.DefaultRRFK)
 	}
 	if opts.Analyzer == nil {
 		t.Error("analyzer should be built when query mode is not raw")

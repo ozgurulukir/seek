@@ -384,11 +384,11 @@ func embedVLTextContext(ctx context.Context, db *store.Store, vlClient embed.VLT
 	updated := 0
 	var err error
 	if batcher, ok := vlClient.(embed.ContextVLTextBatcher); ok {
-		_, err = batcher.EmbedTextsInBatchesContext(ctx, texts, 20, 200*time.Millisecond, func(batchStart int, embeddings [][]float32) error {
+		_, err = batcher.EmbedTextsInBatchesContext(ctx, texts, config.DefaultVLMaxContents, 200*time.Millisecond, func(batchStart int, embeddings [][]float32) error {
 			return updateTextEmbeddings(ctx, db, textChunks, batchStart, embeddings, &updated, log, deferVectorUpdate)
 		})
 	} else {
-		_, err = vlClient.EmbedTextsInBatches(texts, 20, 200*time.Millisecond, func(batchStart int, embeddings [][]float32) error {
+		_, err = vlClient.EmbedTextsInBatches(texts, config.DefaultVLMaxContents, 200*time.Millisecond, func(batchStart int, embeddings [][]float32) error {
 			return updateTextEmbeddings(ctx, db, textChunks, batchStart, embeddings, &updated, log, deferVectorUpdate)
 		})
 	}
@@ -465,9 +465,9 @@ func embedVLImagesContext(ctx context.Context, db *store.Store, vlClient embed.V
 		return nil
 	}
 	if batcher, ok := vlClient.(embed.ContextVLImageBatcher); ok {
-		_, err = batcher.EmbedImagesInBatchesContext(ctx, items, 5, 500*time.Millisecond, callback)
+		_, err = batcher.EmbedImagesInBatchesContext(ctx, items, config.DefaultVLMaxImages, 500*time.Millisecond, callback)
 	} else {
-		_, err = vlClient.EmbedImagesInBatches(items, 5, 500*time.Millisecond, callback)
+		_, err = vlClient.EmbedImagesInBatches(items, config.DefaultVLMaxImages, 500*time.Millisecond, callback)
 	}
 	if err != nil {
 		return imageUpdated, fmt.Errorf("image batch: %w", err)

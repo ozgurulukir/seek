@@ -127,7 +127,7 @@ func promptCustomProvider() (string, string, int, error) {
 		return "", "", 0, fmt.Errorf("model name cannot be empty")
 	}
 
-	fmt.Print("Dimensions [1024]: ")
+	fmt.Printf("Dimensions [%d]: ", config.DefaultEmbeddingDimensions)
 	dimStr, err := readLine()
 	if err != nil {
 		return "", "", 0, inputErr(err)
@@ -137,7 +137,7 @@ func promptCustomProvider() (string, string, int, error) {
 		fmt.Sscanf(dimStr, "%d", &dimensions)
 	}
 	if dimensions <= 0 {
-		dimensions = 1024
+		dimensions = config.DefaultEmbeddingDimensions
 	}
 
 	return baseURL, model, dimensions, nil

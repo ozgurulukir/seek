@@ -124,7 +124,9 @@ func (r *Runtime) planSearch(ctx context.Context, req SearchRequest) (search.Opt
 
 	opts.RRFK = cfgRRFK
 	if opts.RRFK <= 0 {
-		opts.RRFK = search.DefaultRRFK
+		// config owns the default; the search engine's own constant is only
+		// its config-neutral fallback for direct (non-runtime) callers.
+		opts.RRFK = config.DefaultRRFK
 	}
 
 	opts.SortBy = req.SortBy

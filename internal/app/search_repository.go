@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 
+	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
 )
@@ -16,12 +17,14 @@ type StoreSearchRepository struct {
 }
 
 func NewStoreSearchRepository(s *store.Store) *StoreSearchRepository {
-	return NewStoreSearchRepositoryWithLimit(s, store.DefaultAggregationBucketLimit)
+	return NewStoreSearchRepositoryWithLimit(s, config.DefaultAggregationBucketLimit)
 }
 
 func NewStoreSearchRepositoryWithLimit(s *store.Store, defaultBucketLimit int) *StoreSearchRepository {
 	if defaultBucketLimit <= 0 {
-		defaultBucketLimit = store.DefaultAggregationBucketLimit
+		// config owns the operator-facing default; the store's own constant is
+		// its config-neutral fallback for direct persistence callers.
+		defaultBucketLimit = config.DefaultAggregationBucketLimit
 	}
 	return &StoreSearchRepository{store: s, defaultBucketLimit: defaultBucketLimit}
 }

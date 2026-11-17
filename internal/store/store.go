@@ -208,7 +208,7 @@ func (s *Store) FastFields() *FastFieldStore {
 func (s *Store) SetCompression(enabled bool, level int) {
 	s.compressionEnabled = enabled
 	if level <= 0 {
-		level = 3
+		level = config.DefaultCompressionLevel
 	}
 	s.compressionLevel = level
 }

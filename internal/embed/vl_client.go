@@ -310,7 +310,7 @@ func (c *VLClient) EmbedTextsInBatches(texts []string, batchSize int, pause time
 
 func (c *VLClient) EmbedTextsInBatchesContext(ctx context.Context, texts []string, batchSize int, pause time.Duration, onBatch func(batchStart int, embeddings [][]float32) error) (int, error) {
 	if batchSize <= 0 {
-		batchSize = 20
+		batchSize = vlMaxContents
 	}
 	updated := 0
 	var firstErr error
@@ -369,7 +369,7 @@ func (c *VLClient) EmbedImagesInBatches(items []ImageBatchItem, batchSize int, p
 
 func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []ImageBatchItem, batchSize int, pause time.Duration, onBatch func(batchStart int, embeddings [][]float32, validIndices []int) error) (int, error) {
 	if batchSize <= 0 {
-		batchSize = 5
+		batchSize = vlMaxImages
 	}
 	updated := 0
 	var firstErr error

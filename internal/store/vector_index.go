@@ -95,7 +95,7 @@ func newHNSWIndex(dim, m, efSearch int) (*hnswIndex, error) {
 	// value made default-config round-trips declare a good graph "mismatched"
 	// and trigger an unnecessary rebuild (review 2026-09-17 L2).
 	if efSearch <= 0 {
-		efSearch = 50
+		efSearch = config.DefaultHNSEFSearch
 	}
 	g := hnsw.NewGraph[int64]()
 	g.M = m
@@ -221,7 +221,7 @@ func (h *hnswIndex) Clear() error {
 	if h.efSearch > 0 {
 		g.EfSearch = h.efSearch
 	} else {
-		g.EfSearch = 50
+		g.EfSearch = config.DefaultHNSEFSearch
 	}
 	g.Distance = hnsw.CosineDistance
 	h.graph = g

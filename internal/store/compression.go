@@ -6,13 +6,15 @@ import (
 	"io"
 
 	"github.com/klauspost/compress/zstd"
+
+	"github.com/ozgurulukir/seek/internal/config"
 )
 
 // Compress compresses data using Zstd with the given compression level (1-22).
-// If level <= 0, the default level (3) is used.
+// If level <= 0, the config-owned default level is used.
 func Compress(data []byte, level int) ([]byte, error) {
 	if level <= 0 {
-		level = 3
+		level = config.DefaultCompressionLevel
 	}
 	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(level)))
 	if err != nil {
