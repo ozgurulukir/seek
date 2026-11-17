@@ -48,9 +48,11 @@ const (
 	// DefaultImageSnippetLen is the length for image context results in search.
 	DefaultImageSnippetLen = 150
 
-	// DefaultChunkMaxSize is the default max chunk size in characters.
+	// DefaultChunkMaxSize is the default max chunk size in bytes. Chunk budgets
+	// are bytes, not characters: UTF-8 multibyte text (Turkish, CJK) counts more
+	// bytes per character, so the budget is an upper bound (#192).
 	DefaultChunkMaxSize = 1000
-	// DefaultChunkOverlap is the default overlap in characters.
+	// DefaultChunkOverlap is the default overlap in bytes.
 	DefaultChunkOverlap = 100
 
 	// DefaultEmbeddingBatchSize is the default batch size for text embeddings.

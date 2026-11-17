@@ -74,6 +74,12 @@ func TestDefaultAppConfig(t *testing.T) {
 	if ac.Config.VectorIndex.HNSW.M != DefaultHNSWM {
 		t.Errorf("HNSW.M = %d, want %d", ac.Config.VectorIndex.HNSW.M, DefaultHNSWM)
 	}
+	if ac.Config.Chunk.MaxSize != DefaultChunkMaxSize {
+		t.Errorf("Chunk.MaxSize = %d, want %d", ac.Config.Chunk.MaxSize, DefaultChunkMaxSize)
+	}
+	if ac.Config.Chunk.Overlap != DefaultChunkOverlap {
+		t.Errorf("Chunk.Overlap = %d, want %d", ac.Config.Chunk.Overlap, DefaultChunkOverlap)
+	}
 }
 
 func TestCanUseOCR(t *testing.T) {

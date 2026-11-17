@@ -365,6 +365,13 @@ func defaultAppConfig(cacheD string) *AppConfig {
 				Model:      DefaultEmbeddingModel,
 				Dimensions: DefaultEmbeddingDimensions,
 			},
+			// Seed the chunk budgets so the config layer stays the single source
+			// of truth for the documented defaults and `seek config` shows the
+			// values the indexer actually uses (zero would hide them).
+			Chunk: ChunkConfig{
+				MaxSize: DefaultChunkMaxSize,
+				Overlap: DefaultChunkOverlap,
+			},
 			Search: SearchConfig{
 				QueryMode:    DefaultQueryMode,
 				AnalyzeLang:  DefaultAnalyzeLang,

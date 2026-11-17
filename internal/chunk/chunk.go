@@ -3,15 +3,19 @@ package chunk
 import (
 	"strings"
 	"unicode/utf8"
+
+	"github.com/ozgurulukir/seek/internal/config"
 )
 
 // Size budgets are measured in BYTES (len / strings.Builder.Len), not
 // characters: UTF-8 multibyte content (Turkish, CJK) counts more bytes per
 // character, so multibyte chunks carry fewer characters than these numbers
-// suggest — never more (#192).
+// suggest — never more (#192). The values are owned by the config layer; these
+// aliases keep direct/bench callers in lockstep with the operator-facing
+// defaults instead of maintaining a second copy of the numbers.
 const (
-	DefaultMaxChunkSize = 1000 // bytes
-	DefaultOverlap      = 100  // bytes
+	DefaultMaxChunkSize = config.DefaultChunkMaxSize // bytes
+	DefaultOverlap      = config.DefaultChunkOverlap // bytes
 )
 
 // ChunkType distinguishes text chunks from image chunks.

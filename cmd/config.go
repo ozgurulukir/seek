@@ -62,7 +62,7 @@ func (c *ConfigCmd) Run(cfg *config.AppConfig) error {
 		fmt.Println("  #   query: \"search_query: \"")
 		fmt.Println("  #   document: \"search_document: \"")
 		fmt.Println("chunk:")
-		fmt.Println("  # optional: customize chunk size based on model context capacity (defaults: 1000 chars, 100 overlap)")
+		fmt.Printf("  # optional: customize chunk size based on model context capacity (defaults: %d bytes, %d bytes overlap)\n", config.DefaultChunkMaxSize, config.DefaultChunkOverlap)
 		fmt.Println("  # max_size: 2000")
 		fmt.Println("  # overlap: 200")
 		fmt.Println("ocr:")
