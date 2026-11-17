@@ -5,6 +5,8 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-11-17
+
 - **fix(defaults): make config the single source of truth for engine defaults**:
   chunk size/overlap are seeded from config and reported in bytes (not
   characters); RRF k, compression level, HNSW `ef_search`, aggregation bucket
