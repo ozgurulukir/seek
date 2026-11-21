@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"strings"
@@ -14,6 +13,16 @@ import (
 
 	"github.com/ozgurulukir/seek/internal/config"
 )
+
+// WarnLogger is the batch downloader's logging seam. Library code must not
+// write timestamped stderr lines via the stdlib log — the caller owns the
+// output channel (pipeline.Logger and indexer.Logger satisfy it
+// structurally), and a nil logger discards, keeping the batch path silent
+// for embedded consumers. This is the C1 audit fix: the WARN summary for
+// partial batch downloads used to go straight to stdlib log.
+type WarnLogger interface {
+	Printf(format string, v ...any)
+}
 
 // BatchJob tracks a batch embedding job.
 type BatchJob struct {
@@ -263,12 +272,13 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 }
 
 // DownloadBatchResults downloads and parses the batch output file.
-// Returns a map of custom_id -> embedding.
+// Returns a map of custom_id -> embedding. Partial-failure warnings are
+// discarded; pass a WarnLogger via DownloadBatchResultsContext to observe them.
 func (c *Client) DownloadBatchResults(fileID string) (map[string][]float32, error) {
-	return c.DownloadBatchResultsContext(context.Background(), fileID)
+	return c.DownloadBatchResultsContext(context.Background(), fileID, nil)
 }
 
-func (c *Client) DownloadBatchResultsContext(ctx context.Context, fileID string) (map[string][]float32, error) {
+func (c *Client) DownloadBatchResultsContext(ctx context.Context, fileID string, warn WarnLogger) (map[string][]float32, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/files/"+fileID+"/content", nil)
 	if err != nil {
 		return nil, err
@@ -328,15 +338,19 @@ func (c *Client) DownloadBatchResultsContext(ctx context.Context, fileID string)
 	// embeddings. The caller detects incomplete results by comparing
 	// len(results) to the expected count.
 	if parseErrors > 0 || apiErrors > 0 {
-		log.Printf("WARN: batch download: %d parse errors, %d API errors out of %d lines",
-			parseErrors, apiErrors, len(lines))
+		if warn != nil {
+			warn.Printf("WARN: batch download: %d parse errors, %d API errors out of %d lines",
+				parseErrors, apiErrors, len(lines))
+		}
 	}
 	return results, nil
 }
 
 // BatchEmbedAsyncContext runs the full batch embedding flow:
 // prepare JSONL → upload → create batch → poll → download → return embeddings.
-func (c *Client) BatchEmbedAsyncContext(ctx context.Context, texts []string, onStatus func(status string, elapsed time.Duration)) ([][]float32, error) {
+// warn receives the partial-failure summary from the result download; nil
+// discards it.
+func (c *Client) BatchEmbedAsyncContext(ctx context.Context, texts []string, onStatus func(status string, elapsed time.Duration), warn WarnLogger) ([][]float32, error) {
 	if c.offline {
 		return nil, fmt.Errorf("offline_only is enabled: refusing to send %d text(s) to %q", len(texts), c.model)
 	}
@@ -373,7 +387,7 @@ func (c *Client) BatchEmbedAsyncContext(ctx context.Context, texts []string, onS
 	}
 
 	// 5. Download results
-	resultMap, err := c.DownloadBatchResultsContext(ctx, job.OutputFileID)
+	resultMap, err := c.DownloadBatchResultsContext(ctx, job.OutputFileID, warn)
 	if err != nil {
 		return nil, fmt.Errorf("download batch results: %w", err)
 	}

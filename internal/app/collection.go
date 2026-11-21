@@ -16,28 +16,15 @@ import (
 // requireDeps is the canonical nil-dependency guard for CollectionService:
 // every exported method checks exactly the dependencies it uses, and one
 // uniform error names what is missing instead of per-method guard drift.
-// Supported names: "store", "pipeline", "indexer".
+// Supported names: "store", "pipeline", "indexer"; the check-and-format
+// logic is shared via depView/notConfigured (see deps.go).
 func (s *CollectionService) requireDeps(names ...string) error {
 	if s == nil {
-		return fmt.Errorf("collection service: not configured")
+		return notConfigured("collection service", nil)
 	}
-	var missing []string
-	for _, n := range names {
-		var ok bool
-		switch n {
-		case "store":
-			ok = s.store != nil
-		case "pipeline":
-			ok = s.pipeline != nil
-		case "indexer":
-			ok = s.indexer != nil
-		}
-		if !ok {
-			missing = append(missing, n)
-		}
-	}
+	missing := depView{store: s.store, cfg: s.cfg, pipeline: s.pipeline, indexer: s.indexer}.missing(names)
 	if len(missing) > 0 {
-		return fmt.Errorf("collection service: not configured (missing %s)", strings.Join(missing, ", "))
+		return notConfigured("collection service", missing)
 	}
 	return nil
 }

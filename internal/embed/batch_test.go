@@ -1,12 +1,15 @@
 package embed
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -260,6 +263,62 @@ func TestDownloadBatchResultsError(t *testing.T) {
 	}
 }
 
+// TestDownloadBatchResultsWarnSeam pins the C1 audit fix: the partial-failure
+// summary goes to the injected WarnLogger (not stdlib log), and a nil logger
+// discards it without changing the returned results.
+func TestDownloadBatchResultsWarnSeam(t *testing.T) {
+	// One good line, one unparseable line, one API-error line, one non-200 line.
+	body := `{"custom_id":"chunk-0","response":{"status_code":200,"body":{"data":[{"embedding":[1,2],"index":0}]}}}
+not-json-at-all
+{"custom_id":"chunk-2","error":{"code":"x","message":"boom"}}
+{"custom_id":"chunk-3","response":{"status_code":500,"body":{}}}
+`
+	c := newTestBatchClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/jsonl")
+		w.Write([]byte(body))
+	})
+
+	var buf syncBuffer
+	got, err := c.DownloadBatchResultsContext(context.Background(), "file-out", &buf)
+	if err != nil {
+		t.Fatalf("DownloadBatchResultsContext: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("results = %v, want only chunk-0", got)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "WARN: batch download: 1 parse errors, 2 API errors out of 4 lines") {
+		t.Errorf("warn output = %q, want the partial-failure summary", out)
+	}
+
+	// nil logger: same results, no panic, nothing recorded anywhere.
+	got, err = c.DownloadBatchResultsContext(context.Background(), "file-out", nil)
+	if err != nil {
+		t.Fatalf("DownloadBatchResultsContext(nil warn): %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("results with nil warn = %v, want only chunk-0", got)
+	}
+}
+
+// syncBuffer is a minimal WarnLogger over bytes.Buffer.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Printf(format string, v ...any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	fmt.Fprintf(&b.buf, format, v...)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // TestBatchEmbedAsync exercises the full pipeline against a stateful mock
 // server that walks the job through queued -> completed.
 func TestBatchEmbedAsync(t *testing.T) {
@@ -297,7 +356,7 @@ func TestBatchEmbedAsync(t *testing.T) {
 		}
 	})
 
-	got, err := c.BatchEmbedAsyncContext(context.Background(), []string{"hello"}, nil)
+	got, err := c.BatchEmbedAsyncContext(context.Background(), []string{"hello"}, nil, nil)
 	if err != nil {
 		t.Fatalf("BatchEmbedAsync: %v", err)
 	}
@@ -313,7 +372,7 @@ func TestBatchEmbedAsync(t *testing.T) {
 
 func TestBatchEmbedAsyncEmpty(t *testing.T) {
 	c := NewClient("https://api.example/v1", "k", "m", 8, TaskPrefix{})
-	got, err := c.BatchEmbedAsyncContext(context.Background(), nil, nil)
+	got, err := c.BatchEmbedAsyncContext(context.Background(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("BatchEmbedAsyncContext(nil): %v", err)
 	}

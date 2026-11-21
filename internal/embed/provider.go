@@ -118,9 +118,10 @@ type DocumentEmbedder interface {
 }
 
 // BatchEmbedder submits texts to an asynchronous batch API. The onProgress
-// callback receives (status, elapsed) updates while the batch runs.
+// callback receives (status, elapsed) updates while the batch runs, and warn
+// receives the download's partial-failure summary (nil discards).
 type BatchEmbedder interface {
-	BatchEmbedAsyncContext(ctx context.Context, texts []string, onProgress func(status string, elapsed time.Duration)) ([][]float32, error)
+	BatchEmbedAsyncContext(ctx context.Context, texts []string, onProgress func(status string, elapsed time.Duration), warn WarnLogger) ([][]float32, error)
 }
 
 // VLTextBatcher embeds plain texts through the VL realtime API in batches.
