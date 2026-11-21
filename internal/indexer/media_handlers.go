@@ -59,6 +59,7 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 		})
 		if err != nil {
 			idx.warnf("  WARN: index %s: %v\n", f.Path, err)
+			idx.recordFailure(f.Path, "persistence", err)
 			failed++
 			continue
 		}
@@ -167,6 +168,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 		})
 		if err != nil {
 			idx.warnf("  WARN: index %s: %v\n", f.Path, err)
+			idx.recordFailure(f.Path, "persistence", err)
 			failed++
 			continue
 		}
@@ -183,7 +185,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 	}
 
 	idx.addReport(SyncReport{Indexed: indexed, Skipped: skipped, Failed: failed})
-	idx.log.Printf("PDFs: %d indexed, %d skipped", indexed, skipped)
+	idx.log.Printf("PDFs: %d indexed, %d unchanged", indexed, skipped)
 	if failed > 0 {
 		idx.log.Printf(", %d failed", failed)
 	}
