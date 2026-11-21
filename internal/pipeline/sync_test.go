@@ -48,6 +48,8 @@ func newSyncStore(t *testing.T) (*store.Store, *store.Collection, *store.Collect
 	if err := os.WriteFile(filepath.Join(dir1, "note.md"), []byte("# Hello\n\nworld content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Chunking caveat: tests assert report.Indexed == 1, so the corpus must
+	// stay a single chunk under the default chunk config.
 
 	first, err := db.CreateCollection("notes", store.CollectionTypeMarkdown, dir1, "*.md")
 	if err != nil {
@@ -73,6 +75,11 @@ func TestSync_UnconfiguredPipelineFails(t *testing.T) {
 	p := New(syncConfig(t), db, nil, embed.Provider{Document: &mockDocEmbedder{vec: []float32{1, 0}}})
 	if _, err := p.Sync(context.Background(), first, Options{}, &captureLogger{}); err == nil {
 		t.Fatal("Sync with a nil indexer must fail")
+	}
+	// The nil-receiver branch of the same guard.
+	var nilPipeline *Pipeline
+	if _, err := nilPipeline.Sync(context.Background(), first, Options{}, &captureLogger{}); err == nil {
+		t.Fatal("Sync on a nil pipeline must fail")
 	}
 }
 
@@ -102,6 +109,17 @@ func TestSync_SkipEmbedIndexesWithoutEmbedding(t *testing.T) {
 
 func TestSync_IndexesAndEmbedsCollectionScoped(t *testing.T) {
 	db, first, second := newSyncStore(t)
+	// Seed a pending chunk into the second collection so the scoping
+	// assertion is load-bearing: an index-wide embed pass WOULD embed it,
+	// and the test fails if Sync stops defaulting opts.CollectionID to the
+	// synced collection.
+	secondDoc, err := db.UpsertDocument(second.ID, "other.md", "Other", "h2", 1, 1)
+	if err != nil {
+		t.Fatalf("upsert second document: %v", err)
+	}
+	if err := db.InsertChunk(secondDoc, 0, "second collection content", nil); err != nil {
+		t.Fatalf("insert second chunk: %v", err)
+	}
 	mock := &mockDocEmbedder{vec: []float32{1, 0}}
 	p := New(syncConfig(t), db, indexer.New(syncConfig(t), db), embed.Provider{Document: mock})
 
@@ -122,14 +140,13 @@ func TestSync_IndexesAndEmbedsCollectionScoped(t *testing.T) {
 	if len(firstPending) != 0 {
 		t.Errorf("first collection pending = %d, want 0", len(firstPending))
 	}
-	// The other collection (no files, no chunks) must be untouched: Sync
-	// defaults opts.CollectionID to the synced collection, never the index.
+	// The seeded second-collection chunk must still be pending.
 	secondPending, err := db.GetChunksWithoutEmbeddingForCollectionContext(context.Background(), second.ID, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(secondPending) != 0 {
-		t.Errorf("second collection pending = %d, want 0", len(secondPending))
+	if len(secondPending) != 1 {
+		t.Errorf("second collection pending = %d, want 1 (Sync must not embed other collections)", len(secondPending))
 	}
 }
 
