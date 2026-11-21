@@ -5,6 +5,16 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **fix(uninstall): warn when the systemd timer disable or daemon-reload fails**:
+  `seek uninstall` silently ignored `systemctl --user disable --now` and
+  `daemon-reload` failures on Linux, leaving an active timer behind without a
+  warning. Both now report `WARN:` like the darwin and windows branches.
+- **security(deps): bump github.com/klauspost/compress to v1.20.5 (GO-2026-6865)
+  and add govulncheck to CI**: govulncheck found a reachable panic on two-block
+  zstd frames (via `store.Compress`) in v1.19.2; the dependency is bumped past
+  the fix and the CI quality gate now runs `govulncheck ./...` so future
+  reachable vulnerabilities fail the build.
+
 - **refactor(embed): make context-native cancellation the required embed capability**:
   the six embed capability interfaces (`QueryEmbedder`, `VLQueryEmbedder`,
   `DocumentEmbedder`, `BatchEmbedder`, `VLTextBatcher`, `VLImageBatcher`) now
