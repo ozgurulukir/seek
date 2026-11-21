@@ -5,6 +5,18 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **fix(add): refuse `--backend xberg` under offline_only before creating the
+  collection** — `seek add --backend xberg` used to print a WARN, degrade to
+  the builtin extractor, and still persist a collection row whose backend is
+  xberg; every later `seek sync` of that collection then failed permanently.
+  The refusal is now a deterministic pre-flight (`BackendRefusal`) that aborts
+  the add before any row is created, while a transiently down xberg service
+  still lets the collection be created and the failure surface from sync.
+- **refactor(indexer): one extractor precedence chain** — the `--backend`
+  override is now an `ExtractorResolver` (`NewOverrideResolver`, lazy + cached)
+  instead of a separate `Indexer.WithExtractor` mutable field, so the flag →
+  collection → config precedence lives in one resolver seam rather than three
+  implementations; `WithExtractor` is removed.
 - **fix(uninstall): warn when the systemd timer disable or daemon-reload fails**:
   `seek uninstall` silently ignored `systemctl --user disable --now` and
   `daemon-reload` failures on Linux, leaving an active timer behind without a
