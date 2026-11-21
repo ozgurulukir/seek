@@ -60,10 +60,14 @@ func (s *Store) initFTS() error {
 		}
 		return fmt.Errorf("create documents_fts: %w", err)
 	}
-	// Create vocab table for zero-memory, instant prefix autocompletion
+	// Create vocab table for zero-memory, instant prefix autocompletion.
+	// Deliberately non-fatal: some SQLite builds lack the fts5vocab module
+	// (documents_fts itself is required, vocab is an enhancement). Failure
+	// here degrades autocomplete only — keyword and vector search are
+	// unaffected — and Open must not fail over an optional acceleration
+	// table, so the error is intentionally discarded.
 	vocabDDL := `CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts_vocab USING fts5vocab(documents_fts, 'row')`
 	if _, err := runner.Exec(vocabDDL); err != nil {
-		// Non-fatal if sqlite environment lacks fts5vocab
 		_ = err
 	}
 	if tx != nil {

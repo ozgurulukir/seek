@@ -131,8 +131,15 @@ func (c *UninstallCmd) Run(cfg *config.AppConfig) error {
 					fmt.Printf("  WARN: launchctl bootout: %s\n", string(out))
 				}
 			case "linux":
-				_ = exec.Command("systemctl", "--user", "disable", "--now", "seek.timer").Run()
-				_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+				// Like darwin: warn but still remove the unit file — the file
+				// removal is what actually uninstalls; a failed disable is a
+				// stale-timer risk the user must see.
+				if out, err := exec.Command("systemctl", "--user", "disable", "--now", "seek.timer").CombinedOutput(); err != nil {
+					fmt.Printf("  WARN: systemctl disable: %s\n", string(out))
+				}
+				if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
+					fmt.Printf("  WARN: systemctl daemon-reload: %s\n", string(out))
+				}
 			}
 			if runtime.GOOS != "windows" {
 				if err := os.Remove(a.path); err != nil && !os.IsNotExist(err) {

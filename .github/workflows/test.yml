@@ -18,6 +18,16 @@ jobs:
         run: CGO_ENABLED=1 go test -tags "fts5 sqlite_fts5" ./...
       - name: Vet
         run: CGO_ENABLED=1 go vet -tags "fts5 sqlite_fts5" ./...
+      - name: Vulnerability scan
+        env:
+          # Pin the scan to the same toolchain the module's toolchain
+          # directive names, so the govulncheck binary and the go toolchain
+          # it drives cannot skew (a 1.25-built binary driving a 1.27
+          # toolchain mis-compiles the newer standard library).
+          GOTOOLCHAIN: go1.27.4
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
       - name: Gofmt
         run: test -z "$(gofmt -l cmd internal main.go)"
       - name: Stale command check

@@ -177,6 +177,11 @@ type codexContentBlock struct {
 	ImageURL string `json:"image_url"`
 }
 
+// parseCodexSessionMeta extracts the session id from a session_meta line.
+// Intentionally best-effort: a malformed or non-object payload yields ""
+// rather than failing the whole transcript parse — the session id only
+// feeds the SessionID metadata field and the image-filename prefix, so
+// transcript text is still fully indexed without it.
 func parseCodexSessionMeta(payload json.RawMessage) string {
 	var meta struct {
 		ID string `json:"id"`

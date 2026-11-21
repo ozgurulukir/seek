@@ -1,6 +1,6 @@
 module github.com/ozgurulukir/seek
 
-go 1.25.0
+go 1.27.4
 
 require (
 	github.com/alecthomas/kong v1.6.0
@@ -11,7 +11,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/renameio v1.0.1
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
-	github.com/klauspost/compress v1.19.2
+	github.com/klauspost/compress v1.20.5
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/viterin/vek v0.4.3

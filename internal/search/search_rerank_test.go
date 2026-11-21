@@ -3,13 +3,13 @@ package search_test
 import (
 	"context"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/app"
 	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/search"
 	"github.com/ozgurulukir/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/store/storetest"
 )
 
 type mockReranker struct {
@@ -28,9 +28,7 @@ func TestSearchWithReranker(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "test.db")
 	db, err := store.Open(dbPath)
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatal(err)
 	}
 	defer db.Close()

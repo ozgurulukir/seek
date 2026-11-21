@@ -2,10 +2,10 @@ package store_test
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/store/storetest"
 )
 
 func TestGetSurroundingContext(t *testing.T) {
@@ -13,9 +13,7 @@ func TestGetSurroundingContext(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "test.db")
 	db, err := store.Open(dbPath)
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatal(err)
 	}
 	defer db.Close()

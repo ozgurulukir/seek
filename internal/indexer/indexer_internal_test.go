@@ -10,6 +10,7 @@ import (
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/extractor"
 	"github.com/ozgurulukir/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/store/storetest"
 )
 
 type nopLogger struct{}
@@ -93,9 +94,7 @@ func TestSyncHandlersRegistry(t *testing.T) {
 	tmp := t.TempDir()
 	db, err := store.Open(filepath.Join(tmp, "test.db"))
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
@@ -115,9 +114,7 @@ func cleanupTestIndexer(t *testing.T) (*Indexer, *store.Store, *store.Collection
 	tmp := t.TempDir()
 	db, err := store.Open(filepath.Join(tmp, "test.db"))
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\"")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
@@ -283,9 +280,7 @@ func TestNewWithDependencies(t *testing.T) {
 	tmp := t.TempDir()
 	db, err := store.Open(filepath.Join(tmp, "test.db"))
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
@@ -325,9 +320,7 @@ func TestNew(t *testing.T) {
 	tmp := t.TempDir()
 	db, err := store.Open(filepath.Join(tmp, "test.db"))
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })

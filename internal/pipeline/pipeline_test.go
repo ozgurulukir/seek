@@ -18,6 +18,7 @@ import (
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/embed"
 	"github.com/ozgurulukir/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/store/storetest"
 )
 
 func TestEmbedVLTextChunks(t *testing.T) {
@@ -44,9 +45,7 @@ func TestEmbedVLTextChunks(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "test.db")
 	db, err := store.Open(dbPath)
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatalf("failed to open store: %v", err)
 	}
 	defer db.Close()
@@ -120,9 +119,7 @@ func TestEmbedVLImageChunks(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "test.db")
 	db, err := store.Open(dbPath)
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatalf("failed to open store: %v", err)
 	}
 	defer db.Close()
@@ -384,9 +381,7 @@ func TestEmbedBatchContext_CanceledCtx(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "test.db")
 	db, err := store.Open(dbPath)
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatalf("failed to open store: %v", err)
 	}
 	defer db.Close()

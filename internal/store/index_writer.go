@@ -166,10 +166,8 @@ func writeIndexInTx(ctx context.Context, tx *sql.Tx, req DocumentIndex, replace 
 		}
 	}
 
-	for _, ch := range req.Chunks {
-		if err := insertIndexChunk(ctx, tx, docID, ch, compressionEnabled, compressionLevel, now); err != nil {
-			return 0, err
-		}
+	if err := insertIndexChunks(ctx, tx, docID, req.Chunks, compressionEnabled, compressionLevel, now); err != nil {
+		return 0, err
 	}
 	for field, value := range req.FastFields {
 		if value == "" {
@@ -186,10 +184,50 @@ func writeIndexInTx(ctx context.Context, tx *sql.Tx, req DocumentIndex, replace 
 	return docID, nil
 }
 
-func insertIndexChunk(ctx context.Context, tx *sql.Tx, docID int64, ch IndexChunk, compressionEnabled bool, compressionLevel int, now string) error {
-	if ch.ChunkType != ChunkTypeText && ch.ChunkType != ChunkTypeImage {
-		return fmt.Errorf("insert chunk %d: unsupported chunk type %d", ch.Seq, ch.ChunkType)
+// insertIndexChunks inserts every chunk of one document. Each per-type
+// INSERT statement is prepared lazily and reused across the loop, so a
+// many-chunk document pays statement compilation once per type instead of
+// once per chunk inside this transaction.
+func insertIndexChunks(ctx context.Context, tx *sql.Tx, docID int64, chunks []IndexChunk, compressionEnabled bool, compressionLevel int, now string) error {
+	var textStmt, imageStmt *sql.Stmt
+	defer func() {
+		if textStmt != nil {
+			_ = textStmt.Close()
+		}
+		if imageStmt != nil {
+			_ = imageStmt.Close()
+		}
+	}()
+	for _, ch := range chunks {
+		var err error
+		switch ch.ChunkType {
+		case ChunkTypeText:
+			if textStmt == nil {
+				textStmt, err = tx.PrepareContext(ctx, `INSERT INTO chunks (document_id, seq, content, content_zstd, embedding, chunk_type, image_path, start_line, end_line, created_at) VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?)`)
+				if err != nil {
+					return fmt.Errorf("prepare text chunk insert: %w", err)
+				}
+			}
+			err = insertIndexChunk(ctx, textStmt, docID, ch, compressionEnabled, compressionLevel, now)
+		case ChunkTypeImage:
+			if imageStmt == nil {
+				imageStmt, err = tx.PrepareContext(ctx, `INSERT INTO chunks (document_id, seq, content, content_zstd, embedding, chunk_type, image_path, start_line, end_line, created_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`)
+				if err != nil {
+					return fmt.Errorf("prepare image chunk insert: %w", err)
+				}
+			}
+			err = insertIndexChunk(ctx, imageStmt, docID, ch, compressionEnabled, compressionLevel, now)
+		default:
+			err = fmt.Errorf("insert chunk %d: unsupported chunk type %d", ch.Seq, ch.ChunkType)
+		}
+		if err != nil {
+			return err
+		}
 	}
+	return nil
+}
+
+func insertIndexChunk(ctx context.Context, stmt *sql.Stmt, docID int64, ch IndexChunk, compressionEnabled bool, compressionLevel int, now string) error {
 	var contentZstd []byte
 	var err error
 	if compressionEnabled {
@@ -199,9 +237,9 @@ func insertIndexChunk(ctx context.Context, tx *sql.Tx, docID int64, ch IndexChun
 		}
 	}
 	if ch.ChunkType == ChunkTypeImage {
-		_, err = tx.ExecContext(ctx, `INSERT INTO chunks (document_id, seq, content, content_zstd, embedding, chunk_type, image_path, start_line, end_line, created_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`, docID, ch.Seq, ch.Content, contentZstd, ch.ChunkType, ch.ImagePath, ch.StartLine, ch.EndLine, now)
+		_, err = stmt.ExecContext(ctx, docID, ch.Seq, ch.Content, contentZstd, ch.ChunkType, ch.ImagePath, ch.StartLine, ch.EndLine, now)
 	} else {
-		_, err = tx.ExecContext(ctx, `INSERT INTO chunks (document_id, seq, content, content_zstd, embedding, chunk_type, image_path, start_line, end_line, created_at) VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?)`, docID, ch.Seq, ch.Content, contentZstd, ch.ChunkType, ch.StartLine, ch.EndLine, now)
+		_, err = stmt.ExecContext(ctx, docID, ch.Seq, ch.Content, contentZstd, ch.ChunkType, ch.StartLine, ch.EndLine, now)
 	}
 	if err != nil {
 		return fmt.Errorf("insert chunk %d: %w", ch.Seq, err)
