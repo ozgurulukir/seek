@@ -5,6 +5,17 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **fix(store): refuse the unsafe coder/hnsw per-id `Delete`; purge deleted chunk vectors eagerly where the backend allows it**:
+  probing coder/hnsw v0.6.1 showed `Graph.Delete` leaves the graph corrupted —
+  `Search` still returns the deleted node afterwards and later searches panic
+  with a nil dereference nondeterministically (map iteration order; reproducible
+  even on 10+ node graphs). `hnswIndex.Delete` now refuses with
+  `ErrVectorDeleteUnsupported` instead of silently corrupting the graph, and the
+  `Len()>dbCount` full-rebuild heuristic remains the HNSW purge path. The linear
+  backend supports safe per-id deletes: document/orphan/collection deletions and
+  per-document replace writes now purge matching vector entries inside the
+  delete transaction, so a deleted chunk can no longer displace live search
+  results until the next sync. Contract tests pin both behaviors (audit T6).
 - **fix(indexer): surface skip-check persistence failures instead of silently re-indexing**:
   `skipUnchanged` treated a document-load error the same as "file is new",
   so a transient DB failure silently degraded every file to a full re-index

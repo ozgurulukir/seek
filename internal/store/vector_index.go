@@ -3,6 +3,7 @@ package store
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,12 @@ type VectorResult struct {
 	ChunkID int64
 	Score   float64
 }
+
+// ErrVectorDeleteUnsupported is returned by vector backends whose per-id
+// Delete cannot be used safely. Callers must fall back to a full rebuild
+// (SyncVectorIndexContext / the Len()>dbCount heuristic) to purge stale
+// entries instead of treating this as a failure of the deleting operation.
+var ErrVectorDeleteUnsupported = errors.New("vector backend does not support safe per-id delete")
 
 // VectorIndex abstracts the vector search backend (HNSW or linear scan).
 type VectorIndex interface {
@@ -204,11 +211,16 @@ func (h *hnswIndex) Search(query []float32, k int) ([]VectorResult, error) {
 }
 
 func (h *hnswIndex) Delete(id int64) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.graph.Delete(id)
-	h.dirty = true
-	return nil
+	// coder/hnsw v0.6.1 Graph.Delete is unsafe to call (probe 2026-11-21):
+	// Search still returns the deleted node afterwards, and subsequent
+	// searches panic with a nil dereference nondeterministically — even on
+	// graphs of 10+ nodes, driven by map iteration order — and always on
+	// graphs left with fewer than 3 nodes. Store delete paths therefore
+	// purge stale HNSW entries via the Len()>dbCount full-rebuild heuristic
+	// in SyncVectorIndexIncrementalContext, never via per-id Delete. This
+	// method refuses loudly instead of silently corrupting the graph.
+	_ = id
+	return ErrVectorDeleteUnsupported
 }
 
 // Clear rebuilds an empty graph, preserving M/EfSearch/distance config.

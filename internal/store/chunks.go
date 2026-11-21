@@ -14,6 +14,9 @@ import (
 // --- Chunks ---
 
 func (s *Store) DeleteChunksForDocument(docID int64) error {
+	if err := s.purgeVectorEntries(context.Background(), s.db, `SELECT id FROM chunks WHERE document_id = ? AND embedding IS NOT NULL`, docID); err != nil {
+		return fmt.Errorf("purge vector entries: %w", err)
+	}
 	_, err := s.db.Exec(`DELETE FROM chunks WHERE document_id = ?`, docID)
 	return err
 }
