@@ -6,7 +6,7 @@ Guidance for AI coding agents working in this repository.
 
 `seek` is a personal hybrid search engine (BM25 full-text + vector semantic search) for markdown notes, Claude Code conversations, and Codex conversations. It stores data in SQLite (via `mattn/go-sqlite3` with FTS5) and generates embeddings through a configurable provider (default DashScope).
 
-Go 1.25 module `github.com/ozgurulukir/seek`. ~25,000 LOC across a root package plus `cmd/`, `internal/`, and `third_party/`.
+Go module `github.com/ozgurulukir/seek` (go directive 1.27.4 — the toolchain auto-downloads via `GOTOOLCHAIN=auto`; language version tracks the directive). ~25,000 LOC across a root package plus `cmd/`, `internal/`, and `third_party/`.
 
 ## Build / test / verify (always run these)
 

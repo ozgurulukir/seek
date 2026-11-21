@@ -1,8 +1,6 @@
 module github.com/ozgurulukir/seek
 
-go 1.25.0
-
-toolchain go1.27.4
+go 1.27.4
 
 require (
 	github.com/alecthomas/kong v1.6.0
