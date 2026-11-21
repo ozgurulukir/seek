@@ -152,7 +152,7 @@ func (idx *Indexer) extractorFor(col *store.Collection) (extractor.Extractor, er
 // wire (review finding: the offline guarantee previously did not cover this
 // path).
 func BackendRefusal(cfg *config.AppConfig, backend string) error {
-	if backend != "xberg" || !cfg.Config.OfflineOnly() {
+	if cfg == nil || backend != "xberg" || !cfg.Config.OfflineOnly() {
 		return nil
 	}
 	target := cfg.Config.Extractor.XbergBaseURL
