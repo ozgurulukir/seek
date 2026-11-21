@@ -5,6 +5,15 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **fix(store): batch the restore-time document purge; pin the embedding-space restore invariants**:
+  `RestoreEmbeddingSpace` deleted documents absent from the backup with a single
+  `NOT IN (...)` holding one host parameter per document, which exceeds SQLite's
+  parameter limit on large corpora; the purge is now a streamed ID scan deleted
+  in 500-ID batches like every other multi-ID store operation. New restore-path
+  tests pin the profile-row revert, the rollback-on-chunk-FK-failure invariant,
+  the empty-backup full clear, and the compatible-index fallback — the
+  invariants the planned spool-to-temp-file backup redesign (audit P1) must
+  preserve (audit T5).
 - **fix(store): refuse the unsafe coder/hnsw per-id `Delete`; purge deleted chunk vectors eagerly where the backend allows it**:
   probing coder/hnsw v0.6.1 showed `Graph.Delete` leaves the graph corrupted —
   `Search` still returns the deleted node afterwards and later searches panic
