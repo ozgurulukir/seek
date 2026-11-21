@@ -241,16 +241,10 @@ func (r *semanticStateRecorder) RecordSyncOutcome(ctx context.Context, colType s
 //     clear for a successful recompute-to-nothing with no native fields
 //     remaining (review M1).
 func (r *semanticStateRecorder) RecordBackfillCurrent(ctx context.Context, docID int64, sourceHash string, chunks []store.IndexChunk, fields map[string]string) error {
-	basis, ok, err := r.resolve(ctx)
-	if !ok {
-		if err != nil {
-			return fmt.Errorf("semantic basis unresolved: %w", err)
-		}
-		return fmt.Errorf("semantic basis unresolved: no provider")
+	desiredFP, identity, err := r.resolveDesired(ctx, chunks)
+	if err != nil {
+		return err
 	}
-	identity := basis.Compute()
-	basis.ContentHash = semanticContentHash(chunks)
-	desiredFP := basis.Compute()
 	return r.db.UpdateSemanticState(ctx, docID, desiredFP, identity, sourceHash, store.SemanticStatusCurrent, fields)
 }
 
@@ -260,17 +254,30 @@ func (r *semanticStateRecorder) RecordBackfillCurrent(ctx context.Context, docID
 // pass instead of being pinned as a permanent failure. The error status (not
 // the fingerprint) is what guarantees the retry.
 func (r *semanticStateRecorder) RecordBackfillError(ctx context.Context, docID int64, sourceHash string, chunks []store.IndexChunk) error {
-	basis, ok, err := r.resolve(ctx)
-	if !ok {
-		if err != nil {
-			return fmt.Errorf("semantic basis unresolved: %w", err)
-		}
-		return fmt.Errorf("semantic basis unresolved: no provider")
+	desiredFP, identity, err := r.resolveDesired(ctx, chunks)
+	if err != nil {
+		return err
 	}
-	identity := basis.Compute()
-	basis.ContentHash = semanticContentHash(chunks)
-	desiredFP := basis.Compute()
 	return r.db.UpdateSemanticState(ctx, docID, desiredFP, identity, sourceHash, store.SemanticStatusError, nil)
+}
+
+// resolveDesired resolves the semantic basis and derives both fingerprints:
+// identity (service identity + capability set + schema version) and desired
+// (identity + the chunk-based content hash). Every backfill-state write goes
+// through it so the fingerprint invariants and the "semantic basis
+// unresolved" wrapping exist exactly once (the wording is asserted in
+// semantic_state_test.go).
+func (r *semanticStateRecorder) resolveDesired(ctx context.Context, chunks []store.IndexChunk) (desired, identity string, err error) {
+	basis, ok, resolveErr := r.resolve(ctx)
+	if !ok {
+		if resolveErr != nil {
+			return "", "", fmt.Errorf("semantic basis unresolved: %w", resolveErr)
+		}
+		return "", "", fmt.Errorf("semantic basis unresolved: no provider")
+	}
+	identity = basis.Compute()
+	basis.ContentHash = semanticContentHash(chunks)
+	return basis.Compute(), identity, nil
 }
 
 // desiredFingerprint returns the full desired fingerprint (identity +
@@ -278,16 +285,8 @@ func (r *semanticStateRecorder) RecordBackfillError(ctx context.Context, docID i
 // error when the basis is unresolved — the same wrapping as the
 // RecordBackfill* methods.
 func (r *semanticStateRecorder) desiredFingerprint(ctx context.Context, chunks []store.IndexChunk) (string, error) {
-	basis, ok, err := r.resolve(ctx)
-	if !ok {
-		if err != nil {
-			return "", fmt.Errorf("semantic basis unresolved: %w", err)
-		}
-		return "", fmt.Errorf("semantic basis unresolved: no provider")
-	}
-	b := basis
-	b.ContentHash = semanticContentHash(chunks)
-	return b.Compute(), nil
+	desiredFP, _, err := r.resolveDesired(ctx, chunks)
+	return desiredFP, err
 }
 
 // semanticContentHash derives a stable per-document content hash over the
