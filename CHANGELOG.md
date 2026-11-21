@@ -18,6 +18,12 @@ All notable changes to `seek` are documented here. This follows
   was already capped at 2 KiB). Bounded realtime/VL batch shapes leave >3x
   headroom; the async batch-result download is deliberately uncapped since
   legitimate batch results are unbounded.
+- **refactor(store): one batched pending-embedding loader for vector syncs**:
+  full and incremental vector-index sync shared a duplicated
+  scan→decode→insert loop; the new `drainPendingEmbeddings`/
+  `addPendingEmbeddings` helpers own the "cursor closed before CPU work"
+  invariant once, and keyset pagination now advances even through
+  all-empty-blob batches.
 
 ## [0.6.9] - 2026-11-17
 
