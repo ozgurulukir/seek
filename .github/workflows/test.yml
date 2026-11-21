@@ -18,6 +18,10 @@ jobs:
         run: CGO_ENABLED=1 go test -tags "fts5 sqlite_fts5" ./...
       - name: Vet
         run: CGO_ENABLED=1 go vet -tags "fts5 sqlite_fts5" ./...
+      - name: Vulnerability scan
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
       - name: Gofmt
         run: test -z "$(gofmt -l cmd internal main.go)"
       - name: Stale command check
