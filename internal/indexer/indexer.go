@@ -43,13 +43,8 @@ type Indexer struct {
 	// one shared Indexer from silently racing (review 2026-09-17 L12). The
 	// logger is guarded because WithLogger is called per-operation, not just
 	// at composition time.
-	mu     sync.Mutex
-	report SyncReport
-	// ext is an explicit override for the extraction backend, taking precedence
-	// over both per-collection backend and the config default. Set via
-	// WithExtractor (e.g. from a --backend flag). When nil, the backend is
-	// resolved per collection (see extractorFor).
-	ext      extractor.Extractor
+	mu       sync.Mutex
+	report   SyncReport
 	resolver ExtractorResolver
 	// sem* cache the resolved semantic provider. Resolution (offline gate +
 	// one health check) happens at most once per indexer instance; handlers
@@ -85,13 +80,6 @@ func NewWithDependencies(cfg *config.AppConfig, db *store.Store, resolver Extrac
 		resolver: resolver,
 	}
 	idx.enricher = &indexerEnricher{idx: idx}
-	return idx
-}
-
-// WithExtractor overrides the extraction backend for all collections (e.g. from
-// a --backend flag). Pass nil to revert to per-collection / config resolution.
-func (idx *Indexer) WithExtractor(ext extractor.Extractor) *Indexer {
-	idx.ext = ext
 	return idx
 }
 
@@ -139,20 +127,39 @@ func (idx *Indexer) chunkSize() (int, int) {
 	return idx.cfg.Config.Chunk.MaxSize, idx.cfg.Config.Chunk.Overlap
 }
 
-// extractorFor resolves the extractor to use for a collection. Precedence:
-//  1. idx.ext (explicit override, e.g. --backend flag);
-//  2. col.Backend (per-collection override persisted at add time);
-//  3. cfg.Config.Extractor.Backend (global config default).
-//
-// Empty backend strings fall through to the configured resolver default.
+// extractorFor resolves the extractor to use for a collection by delegating
+// to the injected resolver, which owns the full precedence rule (override →
+// per-collection backend → config default; see extractor.go).
 func (idx *Indexer) extractorFor(col *store.Collection) (extractor.Extractor, error) {
-	if idx.ext != nil {
-		return idx.ext, nil
-	}
 	if idx.resolver == nil {
 		return nil, fmt.Errorf("extractor resolver is not configured")
 	}
 	return idx.resolver.Resolve(col)
+}
+
+// BackendRefusal reports the deterministic, configuration-level refusal for a
+// backend, or nil when the backend can be constructed under the current
+// config. This is the pure check (no construction, no network) behind the
+// refusal NewExtractor raises at build time, so callers that must decide
+// before persisting a collection row (seek add --backend) can pre-flight it:
+// persisting a collection whose backend can never resolve would strand every
+// later sync of it.
+//
+// The xberg backend extracts rich documents by POSTing their contents to the
+// xberg HTTP service — external data flow even when that service runs on
+// localhost. privacy.offline_only forbids every network call, so the backend
+// is refused outright rather than silently shipping document text over the
+// wire (review finding: the offline guarantee previously did not cover this
+// path).
+func BackendRefusal(cfg *config.AppConfig, backend string) error {
+	if backend != "xberg" || !cfg.Config.OfflineOnly() {
+		return nil
+	}
+	target := cfg.Config.Extractor.XbergBaseURL
+	if target == "" {
+		target = config.DefaultXbergBaseURL
+	}
+	return fmt.Errorf("offline_only is enabled: the xberg extractor sends document contents to %q; use --backend builtin (or disable offline_only)", target)
 }
 
 // NewExtractor builds the extractor named by backend. An empty backend selects
@@ -173,19 +180,8 @@ func NewExtractor(cfg *config.AppConfig, backend string) (extractor.Extractor, e
 	case "", "builtin":
 		return builtin.New(ocr, cfg.CacheDir), nil
 	case "xberg":
-		// The xberg backend extracts rich documents by POSTing their contents
-		// to the xberg HTTP service — external data flow even when that
-		// service runs on localhost. privacy.offline_only forbids every
-		// network call, so refuse the backend outright rather than silently
-		// shipping document text over the wire (review finding: the offline
-		// guarantee previously did not cover this path).
-		if cfg.Config.OfflineOnly() {
-			return nil, fmt.Errorf("offline_only is enabled: the xberg extractor sends document contents to %q; use --backend builtin (or disable offline_only)", func() string {
-				if u := cfg.Config.Extractor.XbergBaseURL; u != "" {
-					return u
-				}
-				return config.DefaultXbergBaseURL
-			}())
+		if err := BackendRefusal(cfg, backend); err != nil {
+			return nil, err
 		}
 		return xberg.NewWithHealthCheck(cfg.Config.Extractor, cfg.CacheDir)
 	default:
