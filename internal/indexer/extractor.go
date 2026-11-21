@@ -26,6 +26,51 @@ func NewConfigExtractorResolver(cfg *config.AppConfig) ExtractorResolver {
 	return &configExtractorResolver{cfg: cfg, cache: make(map[string]extractor.Extractor)}
 }
 
+// overrideResolver always yields the explicitly selected backend, ignoring
+// the collection — the --backend flag path. The extractor is constructed
+// lazily on first Resolve and cached, so an add does not pay the
+// (potentially network-probing) construction up front and a temporarily down
+// external service still lets the collection row be created (the sync then
+// surfaces the failure).
+type overrideResolver struct {
+	cfg     *config.AppConfig
+	backend string
+	mu      sync.Mutex
+	cached  extractor.Extractor
+}
+
+// NewOverrideResolver returns a resolver that always resolves the named
+// backend, taking precedence over both the per-collection backend and the
+// config default (the --backend flag path). Construction fails only on a nil
+// config; deterministic configuration conflicts (xberg under
+// privacy.offline_only) are surfaced lazily at first Resolve, and callers
+// that must decide before persisting a collection row pre-flight them via
+// BackendRefusal.
+func NewOverrideResolver(cfg *config.AppConfig, backend string) (ExtractorResolver, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("extractor resolver: nil config")
+	}
+	return &overrideResolver{cfg: cfg, backend: backend}, nil
+}
+
+func (r *overrideResolver) Resolve(*store.Collection) (extractor.Extractor, error) {
+	// r.mu is held across construction: resolve is sequential today (sync
+	// runs one pass at a time), and holding it keeps a concurrent Resolve
+	// from double-building — at the cost of blocking on an xberg health
+	// check, which is acceptable for this call pattern.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cached != nil {
+		return r.cached, nil
+	}
+	ext, err := NewExtractor(r.cfg, r.backend)
+	if err != nil {
+		return nil, err
+	}
+	r.cached = ext
+	return ext, nil
+}
+
 func (r *configExtractorResolver) Resolve(col *store.Collection) (extractor.Extractor, error) {
 	if r.cfg == nil {
 		return nil, fmt.Errorf("extractor resolver: nil config")
