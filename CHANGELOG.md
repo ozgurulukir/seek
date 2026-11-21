@@ -5,6 +5,11 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **test(pipeline): cover the Sync orchestration seam**:
+  `Pipeline.Sync` (nil-guard, indexer handoff, CollectionID defaulting, the
+  `SkipEmbed` short-circuit, and error/report propagation from the embed
+  handoff) had no direct tests; new tests pin the orchestration seam with the
+  existing real-Store + mock-provider harness (audit T4).
 - **fix(store): batch the restore-time document purge; pin the embedding-space restore invariants**:
   `RestoreEmbeddingSpace` deleted documents absent from the backup with a single
   `NOT IN (...)` holding one host parameter per document, which exceeds SQLite's
