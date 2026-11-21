@@ -26,24 +26,20 @@ func (mockExtractor) Extract(ctx context.Context, path string) (extractor.Result
 func (mockExtractor) Supports(path string) bool { return true }
 func (mockExtractor) Name() string              { return "mock" }
 
-func TestIndexer_WithExtractor(t *testing.T) {
+func TestIndexer_WithExtractorResolver(t *testing.T) {
 	cfg := &config.AppConfig{}
 	idx := New(cfg, nil)
 
 	mockExt := &mockExtractor{}
 
 	// Check fluent return
-	returnedIdx := idx.WithExtractor(mockExt)
+	returnedIdx := idx.WithExtractorResolver(overrideResolverOf(mockExt))
 	if returnedIdx != idx {
-		t.Errorf("WithExtractor did not return the indexer instance")
+		t.Errorf("WithExtractorResolver did not return the indexer instance")
 	}
 
-	// Check internal state
-	if idx.ext != mockExt {
-		t.Errorf("WithExtractor did not set the extractor correctly")
-	}
-
-	// Check extractorFor resolution priority
+	// Check extractorFor resolution priority: the injected resolver wins over
+	// the per-collection backend.
 	col := &store.Collection{Backend: "some-backend"}
 	resolvedExt, err := idx.extractorFor(col)
 	if err != nil {
@@ -51,13 +47,7 @@ func TestIndexer_WithExtractor(t *testing.T) {
 	}
 
 	if resolvedExt != mockExt {
-		t.Errorf("extractorFor did not prioritize the overridden extractor, got: %v", resolvedExt)
-	}
-
-	// Revert the override
-	idx.WithExtractor(nil)
-	if idx.ext != nil {
-		t.Errorf("WithExtractor did not revert the extractor to nil")
+		t.Errorf("extractorFor did not prioritize the injected resolver, got: %v", resolvedExt)
 	}
 }
 
@@ -273,6 +263,18 @@ type mockResolver struct{}
 
 func (mockResolver) Resolve(col *store.Collection) (extractor.Extractor, error) {
 	return nil, nil
+}
+
+// overrideResolverOf wraps an extractor in an ExtractorResolver that always
+// yields it, mirroring the --backend override path (overrideResolver).
+type stubResolver struct{ ext extractor.Extractor }
+
+func overrideResolverOf(ext extractor.Extractor) ExtractorResolver {
+	return &stubResolver{ext: ext}
+}
+
+func (r *stubResolver) Resolve(*store.Collection) (extractor.Extractor, error) {
+	return r.ext, nil
 }
 
 func TestNewWithDependencies(t *testing.T) {

@@ -375,6 +375,10 @@ func (s *AddCollectionService) addPathBased(req AddRequest, name, pattern string
 		return nil
 	}
 
+	if err := indexer.BackendRefusal(s.cfg, req.Backend); err != nil {
+		return err
+	}
+
 	if req.Type == store.CollectionTypeDocuments {
 		s.documentsNote(req.Backend)
 	}
@@ -408,6 +412,10 @@ func (s *AddCollectionService) addConversation(req AddRequest, name string) erro
 		return nil
 	}
 
+	if err := indexer.BackendRefusal(s.cfg, req.Backend); err != nil {
+		return err
+	}
+
 	col, err := s.store.CreateCollection(name, req.Type, path, "")
 	if err != nil {
 		return fmt.Errorf("create collection: %w", err)
@@ -437,6 +445,10 @@ func (s *AddCollectionService) addParser(req AddRequest, name string) error {
 
 	if s.checkExisting(name, false) {
 		return nil
+	}
+
+	if err := indexer.BackendRefusal(s.cfg, req.Backend); err != nil {
+		return err
 	}
 
 	col, err := s.store.CreateParserCollection(name, primaryPath, "*", req.Parser)
@@ -480,22 +492,29 @@ func (s *AddCollectionService) documentsNote(backend string) {
 // sync builds the indexer (applying the --backend override when set) and runs
 // the collection sync.
 func (s *AddCollectionService) sync(req AddRequest, col *store.Collection) error {
-	return s.indexer(req).SyncCollection(col)
+	idx, err := s.indexer(req)
+	if err != nil {
+		return err
+	}
+	return idx.SyncCollection(col)
 }
 
-// indexer builds an indexer, applying the --backend override when set. When
-// --backend is given it takes precedence over both the per-collection backend
-// and the config default. A bad --backend value is surfaced as a stderr WARN
-// and degrades to the default extractor rather than aborting the add.
-func (s *AddCollectionService) indexer(req AddRequest) *indexer.Indexer {
+// indexer builds an indexer, applying the --backend override when set via an
+// override resolver: --backend takes precedence over both the per-collection
+// backend and the config default, through the same ExtractorResolver seam the
+// sync path uses. The override resolver is lazy — deterministic configuration
+// conflicts (xberg under privacy.offline_only) are refused before the
+// collection row is created (BackendRefusal pre-flight in the add branches),
+// while a transiently down external service lets the row be created and the
+// failure surface from SyncCollection.
+func (s *AddCollectionService) indexer(req AddRequest) (*indexer.Indexer, error) {
 	idx := indexer.New(s.cfg, s.store)
 	if req.Backend == "" {
-		return idx
+		return idx, nil
 	}
-	ext, err := indexer.NewExtractor(s.cfg, req.Backend)
+	resolver, err := indexer.NewOverrideResolver(s.cfg, req.Backend)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "WARN: --backend %s: %v\n", req.Backend, err)
-		return idx
+		return nil, err
 	}
-	return idx.WithExtractor(ext)
+	return idx.WithExtractorResolver(resolver), nil
 }
