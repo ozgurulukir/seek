@@ -2,6 +2,8 @@ module github.com/ozgurulukir/seek
 
 go 1.25.0
 
+toolchain go1.25.3
+
 require (
 	github.com/alecthomas/kong v1.6.0
 	github.com/blevesearch/snowballstem v0.9.0
