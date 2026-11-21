@@ -22,7 +22,11 @@ func (s *CollectionService) requireDeps(names ...string) error {
 	if s == nil {
 		return notConfigured("collection service", nil)
 	}
-	return notConfigured("collection service", depView{store: s.store, cfg: s.cfg, pipeline: s.pipeline, indexer: s.indexer}.missing(names))
+	missing := depView{store: s.store, cfg: s.cfg, pipeline: s.pipeline, indexer: s.indexer}.missing(names)
+	if len(missing) > 0 {
+		return notConfigured("collection service", missing)
+	}
+	return nil
 }
 
 // collectionByName resolves a collection so a store failure keeps its cause;

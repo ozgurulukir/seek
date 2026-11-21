@@ -5,7 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ozgurulukir/seek/internal/config"
+	"github.com/ozgurulukir/seek/internal/indexer"
 	"github.com/ozgurulukir/seek/internal/pipeline"
+	"github.com/ozgurulukir/seek/internal/store"
 )
 
 // TestCollectionServiceNilDependencyGuards pins the canonical guard behavior:
@@ -75,5 +78,32 @@ func TestAddCollectionServiceNilDependencyGuards(t *testing.T) {
 		t.Error("empty Add service: expected error")
 	} else if !strings.Contains(err.Error(), "missing store") {
 		t.Errorf("Add should name the missing dependency: %v", err)
+	}
+}
+
+// TestRequireDepsSatisfiedReturnsNil pins the satisfied path of the shared
+// guard: a fully-populated service passes requireDeps with no error. This
+// path had no test and a first draft of the shared guard broke it (the
+// error was returned unconditionally) — CI caught what the earlier gate
+// run missed.
+func TestRequireDepsSatisfiedReturnsNil(t *testing.T) {
+	svc := &CollectionService{
+		store:    &store.Store{},
+		cfg:      &config.AppConfig{},
+		pipeline: &pipeline.Pipeline{},
+		indexer:  &indexer.Indexer{},
+	}
+	for _, names := range [][]string{
+		{"store"},
+		{"store", "pipeline"},
+		{"store", "pipeline", "indexer"},
+	} {
+		if err := svc.requireDeps(names...); err != nil {
+			t.Errorf("requireDeps(%v) with all deps set: unexpected error %v", names, err)
+		}
+	}
+	add := &AddCollectionService{store: &store.Store{}, cfg: &config.AppConfig{}}
+	if err := add.requireDeps("store", "cfg"); err != nil {
+		t.Errorf("AddCollectionService.requireDeps with deps set: unexpected error %v", err)
 	}
 }

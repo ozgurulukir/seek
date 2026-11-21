@@ -333,7 +333,11 @@ func (s *AddCollectionService) requireDeps(names ...string) error {
 	if s == nil {
 		return notConfigured("add service", nil)
 	}
-	return notConfigured("add service", depView{store: s.store, cfg: s.cfg}.missing(names))
+	missing := depView{store: s.store, cfg: s.cfg}.missing(names)
+	if len(missing) > 0 {
+		return notConfigured("add service", missing)
+	}
+	return nil
 }
 
 // Add creates the collection described by req and syncs it.
