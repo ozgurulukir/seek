@@ -35,13 +35,11 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 		if err := idx.ctx().Err(); err != nil {
 			return err
 		}
-		existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, f.Path)
-		if err == nil && existing.ContentHash == f.ContentHash {
-			if existing.Mtime != f.Mtime {
-				if err := idx.db.UpdateDocumentMtimeContext(idx.ctx(), existing.ID, f.Mtime); err != nil {
-					return fmt.Errorf("update markdown mtime: %w", err)
-				}
-			}
+		unchanged, err := idx.skipUnchanged(col, f.Path, f.ContentHash, f.Mtime)
+		if err != nil {
+			return fmt.Errorf("markdown skip check %s: %w", f.Path, err)
+		}
+		if unchanged {
 			skipped++
 			continue
 		}

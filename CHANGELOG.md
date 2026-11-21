@@ -24,6 +24,10 @@ All notable changes to `seek` are documented here. This follows
   `addPendingEmbeddings` helpers own the "cursor closed before CPU work"
   invariant once, and keyset pagination now advances even through
   all-empty-blob batches.
+- **fix(indexer): unchanged image and PDF documents now refresh their stored
+  mtime on skip** — the image and PDF handlers performed the content-hash skip
+  check without the mtime bump that markdown, code, and documents handlers
+  apply; all five file handlers now share one `skipUnchanged` policy.
 
 ## [0.6.9] - 2026-11-17
 

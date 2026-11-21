@@ -37,8 +37,11 @@ func (idx *Indexer) syncImage(col *store.Collection) error {
 		if err := idx.ctx().Err(); err != nil {
 			return err
 		}
-		existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, f.Path)
-		if err == nil && existing.ContentHash == f.ContentHash {
+		unchanged, err := idx.skipUnchanged(col, f.Path, f.ContentHash, f.Mtime)
+		if err != nil {
+			return fmt.Errorf("image skip check %s: %w", f.Path, err)
+		}
+		if unchanged {
 			skipped++
 			continue
 		}
@@ -103,8 +106,11 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 		if err := idx.ctx().Err(); err != nil {
 			return err
 		}
-		existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, f.Path)
-		if err == nil && existing.ContentHash == f.ContentHash {
+		unchanged, err := idx.skipUnchanged(col, f.Path, f.ContentHash, f.Mtime)
+		if err != nil {
+			return fmt.Errorf("PDF skip check %s: %w", f.Path, err)
+		}
+		if unchanged {
 			skipped++
 			continue
 		}

@@ -56,13 +56,11 @@ func (idx *Indexer) syncCode(col *store.Collection) error {
 }
 
 func (idx *Indexer) indexCodeFile(col *store.Collection, file source.CodeFileInfo) (bool, error) {
-	existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, file.Path)
-	if err == nil && existing.ContentHash == file.ContentHash {
-		if existing.Mtime != file.Mtime {
-			if err := idx.db.UpdateDocumentMtimeContext(idx.ctx(), existing.ID, file.Mtime); err != nil {
-				return false, fmt.Errorf("update code mtime: %w", err)
-			}
-		}
+	unchanged, err := idx.skipUnchanged(col, file.Path, file.ContentHash, file.Mtime)
+	if err != nil {
+		return false, fmt.Errorf("skip check %s: %w", file.Path, err)
+	}
+	if unchanged {
 		return true, nil
 	}
 
