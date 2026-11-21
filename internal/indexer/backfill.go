@@ -2,13 +2,8 @@ package indexer
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"strings"
-	"time"
 
-	"github.com/ozgurulukir/seek/internal/semantic"
 	"github.com/ozgurulukir/seek/internal/store"
 )
 
@@ -61,26 +56,29 @@ func (idx *Indexer) BackfillSemantic(ctx context.Context, col *store.Collection,
 		log = defaultLogger{}
 	}
 
-	p := idx.semanticProvider()
-	if p == nil {
+	// One recorder per pass owns the basis resolution and every
+	// UpdateSemanticState write below. A fresh instance per pass keeps the
+	// sync path's warn-once cadence independent of backfill passes (resolve
+	// failures are never memoized, so the next pass re-checks health anyway).
+	rec := newSemanticStateRecorder(idx.db, idx.cfg, idx.semanticProvider, nil)
+	basis, ok, err := rec.resolve(ctx)
+	if err != nil {
+		// Transient health failure after the provider already resolved (the
+		// service answered at resolution but is not answering /health now):
+		// degrade to a no-op pass, same as the unavailable-provider case
+		// below. Fingerprinting against an empty-capability basis instead
+		// would mismatch every persisted fingerprint and re-select — and with
+		// a half-up service, re-enrich — the whole collection, twice (this
+		// pass and the next healthy one).
+		log.Printf("  WARN: semantic backfill %s: semantic service health check failed (%v) — nothing to backfill\n", col.Name, err)
+		return report, nil
+	}
+	if !ok {
 		// Nothing to enrich with: the capability is disabled or the service
 		// is unreachable. Warn once and leave every document untouched — the
 		// plan keeps existing fields and the stale state instead of mass-
 		// failing the collection.
 		log.Printf("  WARN: semantic backfill %s: semantic enrichment unavailable (disabled or service down) — nothing to backfill\n", col.Name)
-		return report, nil
-	}
-
-	basis, err := idx.semanticFingerprintBasis(ctx, p)
-	if err != nil {
-		// Transient health failure after the provider already resolved (the
-		// service answered at resolution but is not answering /health now):
-		// degrade to a no-op pass, same as the unavailable-provider case
-		// above. Fingerprinting against an empty-capability basis instead
-		// would mismatch every persisted fingerprint and re-select — and with
-		// a half-up service, re-enrich — the whole collection, twice (this
-		// pass and the next healthy one).
-		log.Printf("  WARN: semantic backfill %s: semantic service health check failed (%v) — nothing to backfill\n", col.Name, err)
 		return report, nil
 	}
 
@@ -98,7 +96,7 @@ func (idx *Indexer) BackfillSemantic(ctx context.Context, col *store.Collection,
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
-		if err := idx.backfillDocument(ctx, cand, basis, &report); err != nil {
+		if err := idx.backfillDocument(ctx, rec, cand, &report); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return report, ctxErr
 			}
@@ -114,8 +112,10 @@ func (idx *Indexer) BackfillSemantic(ctx context.Context, col *store.Collection,
 
 // backfillDocument enriches one stale document and persists the outcome. It
 // returns an error only when the document could not be refined (enrichment
-// failure or persistence failure); the caller counts it as Failed.
-func (idx *Indexer) backfillDocument(ctx context.Context, cand store.SemanticDocumentState, basis store.SemanticFingerprint, report *BackfillReport) error {
+// failure or persistence failure); the caller counts it as Failed. All
+// semantic-state writes route through the pass recorder (rec), which owns
+// the basis resolution and the write-side decision table.
+func (idx *Indexer) backfillDocument(ctx context.Context, rec *semanticStateRecorder, cand store.SemanticDocumentState, report *BackfillReport) error {
 	doc, err := idx.db.GetDocumentByIDContext(ctx, cand.DocumentID)
 	if err != nil {
 		return fmt.Errorf("load document %d: %w", cand.DocumentID, err)
@@ -128,9 +128,13 @@ func (idx *Indexer) backfillDocument(ctx context.Context, cand store.SemanticDoc
 	// Per-document desired fingerprint: the identity basis plus a content
 	// hash over the same readable chunks the semantic service sees. A cached
 	// fingerprint that already matches is "current" — nothing to do.
-	desired := basis
-	desired.ContentHash = semanticContentHash(chunks)
-	desiredFP := desired.Compute()
+	desiredFP, err := rec.desiredFingerprint(ctx, chunks)
+	if err != nil {
+		// Unreachable after BackfillSemantic's resolve gate (the basis is
+		// memoized for the pass), but guard honestly rather than writing a
+		// fingerprint against nothing.
+		return fmt.Errorf("semantic basis unresolved for %s: %w", doc.Path, err)
+	}
 	if cand.Fingerprint == desiredFP && cand.Status == store.SemanticStatusCurrent {
 		report.Skipped++
 		return nil
@@ -140,7 +144,7 @@ func (idx *Indexer) backfillDocument(ctx context.Context, cand store.SemanticDoc
 	// Record the current fingerprint so later passes skip this document
 	// without re-reading its chunks, preserving any native fast fields.
 	if !hasReadableText(chunks) {
-		if err := idx.db.UpdateSemanticState(ctx, cand.DocumentID, desiredFP, basis.Compute(), doc.ContentHash, store.SemanticStatusCurrent, nil); err != nil {
+		if err := rec.RecordBackfillCurrent(ctx, cand.DocumentID, doc.ContentHash, chunks, nil); err != nil {
 			return fmt.Errorf("finalize empty document %s: %w", doc.Path, err)
 		}
 		report.Processed++
@@ -149,16 +153,15 @@ func (idx *Indexer) backfillDocument(ctx context.Context, cand store.SemanticDoc
 
 	fields := idx.semanticFastFields(ctx, doc.Path, chunks)
 	if fields == nil {
-		// Enrichment failed (service down, timeout, malformed response, or
-		// no readable text — the no-text case is already excluded above):
-		// degrade-on-failure. The S2 contract preserves the previously stored
-		// fast fields when the map is nil. Store the FULL desired fingerprint
-		// (basis + content hash) and mark the document error: the stale-query
-		// re-selects every document whose semantic_status = 'error', so this
-		// document is retried on the next pass instead of being pinned as a
-		// permanent failure. The error status (not the fingerprint) is what
-		// guarantees the retry.
-		if err := idx.db.UpdateSemanticState(ctx, cand.DocumentID, desiredFP, basis.Compute(), doc.ContentHash, store.SemanticStatusError, nil); err != nil {
+		// Enrichment failed (service down, timeout, malformed response — the
+		// no-text case is already excluded above): degrade-on-failure. The
+		// recorder stores the FULL desired fingerprint (basis + content hash)
+		// and marks the document error: the stale query re-selects every
+		// document whose semantic_status = 'error', so this document is
+		// retried on the next pass instead of being pinned as a permanent
+		// failure. The error status (not the fingerprint) is what guarantees
+		// the retry.
+		if err := rec.RecordBackfillError(ctx, cand.DocumentID, doc.ContentHash, chunks); err != nil {
 			return fmt.Errorf("record enrichment failure for %s: %w", doc.Path, err)
 		}
 		return fmt.Errorf("enrichment of %s failed (service down, timeout, or malformed response)", doc.Path)
@@ -188,7 +191,7 @@ func (idx *Indexer) backfillDocument(ctx context.Context, cand store.SemanticDoc
 		// would survive a genuine recomputation (review M1).
 		merged = map[string]string{}
 	}
-	if err := idx.db.UpdateSemanticState(ctx, cand.DocumentID, desiredFP, basis.Compute(), doc.ContentHash, store.SemanticStatusCurrent, merged); err != nil {
+	if err := rec.RecordBackfillCurrent(ctx, cand.DocumentID, doc.ContentHash, chunks, merged); err != nil {
 		return fmt.Errorf("persist enriched fast fields of %s: %w", doc.Path, err)
 	}
 	report.Processed++
@@ -226,183 +229,4 @@ func stripSemanticOwned(persisted map[string]string) map[string]string {
 		native[k] = v
 	}
 	return native
-}
-
-// semanticFingerprintBasis computes the identity part of the desired
-// enrichment fingerprint for one backfill pass: the service deployment
-// identity (base URL), the capability set the service reports via /health,
-// and the enrichment schema version. Per-document content hashes are layered
-// on top by backfillDocument (and recordSemanticSyncState on the sync path).
-// A health failure is an ERROR: callers skip the pass rather than fingerprint
-// against an empty capability set, which would invalidate every persisted
-// fingerprint (one transient blip would otherwise force two whole-collection
-// re-enrichment passes). A /health that RESPONDS with a partial model set is
-// not a failure — whatever capabilities are true are populated.
-//
-// Plan §3.2 calls this "service/model identity". The configured MODEL name is
-// deliberately not part of the basis: SemanticConfig has no model selector —
-// the semantic service is a single local NLP endpoint (tools/semantic) whose
-// runtime models are chosen server-side and published via /health. The base
-// URL plus the /health capability set therefore identify the deployment as
-// precisely as a model name could. If a client-side model selector is ever
-// added to SemanticConfig, it must be folded into this basis so a model
-// change invalidates documents (review minor: model-name identity).
-func (idx *Indexer) semanticFingerprintBasis(ctx context.Context, p semantic.Provider) (store.SemanticFingerprint, error) {
-	basis := store.SemanticFingerprint{
-		SchemaVersion: store.SemanticSchemaVersion,
-	}
-	if idx.cfg == nil {
-		basis.ServiceModel = ""
-		return basis, nil
-	}
-	basis.ServiceModel = idx.cfg.Config.Semantic.EffectiveBaseURL()
-
-	hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	health, err := p.Health(hctx)
-	if err != nil {
-		return basis, fmt.Errorf("semantic health check: %w", err)
-	}
-	basis.Capabilities = store.SemanticCapabilities{
-		Language:  health.Models.LID,
-		NER:       health.Models.Ner,
-		Keyphrase: health.Models.Keyphrase,
-		Topic:     health.Models.Topic,
-	}
-	return basis, nil
-}
-
-// semanticSyncBasis returns the semantic enrichment identity for the current
-// process, computed lazily and cached. A sync pass records the fingerprint
-// once per document, so the identity part (which health-checks the service)
-// must be computed once rather than once per document; the per-document
-// content hash is layered on top by the caller. WithSemanticProvider resets
-// the cache so provider swaps observe the new identity.
-func (idx *Indexer) semanticSyncBasis(ctx context.Context) (store.SemanticFingerprint, bool) {
-	idx.mu.Lock()
-	if idx.semBasisSet {
-		b := idx.semBasis
-		idx.mu.Unlock()
-		return b, true
-	}
-	idx.mu.Unlock()
-	p := idx.semanticProvider()
-	if p == nil {
-		// Disabled or service down: there is no identity to record against.
-		// The provider cache itself (semChecked/semClient) is authoritative,
-		// so do not memoize this miss.
-		return store.SemanticFingerprint{}, false
-	}
-	basis, err := idx.semanticFingerprintBasis(ctx, p)
-	if err != nil {
-		// The enrichment itself succeeded, so this is a half-up service
-		// (answering /tag but not /health). Skip recording semantic state —
-		// documents keep their previous fingerprint and are re-selected by a
-		// later healthy pass — but do not drop the failure silently, and warn
-		// only once per process/provider rather than once per document.
-		idx.mu.Lock()
-		first := !idx.semBasisFailed
-		idx.semBasisFailed = true
-		idx.mu.Unlock()
-		if first {
-			idx.warnf("  WARN: semantic state not recorded this sync (service health check failed): %v\n", err)
-		}
-		return store.SemanticFingerprint{}, false
-	}
-	idx.mu.Lock()
-	idx.semBasis = basis
-	idx.semBasisSet = true
-	idx.mu.Unlock()
-	return basis, true
-}
-
-// recordSemanticSyncState records the semantic fingerprint/status of one
-// document whose sync pass enriched it (plan §3.2). The fast fields were
-// already persisted by the replace writer via DocumentIndex.FastFields; this
-// only updates the fingerprint/status columns so `collection list/show`
-// coverage is accurate after a sync, not just after a backfill.
-//
-// The fingerprint identity matches backfill: service identity + capability
-// set + schema version, with the per-document content hash layered on top.
-//
-// Three columns are written: semantic_fingerprint (the full fingerprint, used
-// by the per-doc skip check), semantic_basis (the identity-only fingerprint,
-// the coarse stale-selection key), and semantic_source_hash (a mirror of
-// documents.content_hash so the stale query detects a content change SQL-side
-// without reading chunks).
-//
-// fastFields is the enricher's output for the document:
-//
-//   - nil: enrichment failed (service down/malformed) or was not attempted
-//     (disabled, no readable text). When semantic enrichment is enabled the
-//     document is marked stale with an empty identity basis (prior fields
-//     preserved — the nil map keeps them) so the next backfill re-selects and
-//     retries it; when semantic is disabled entirely, no state is recorded
-//     (nothing to be stale about, and the capability is simply off).
-//   - non-nil (even empty): enrichment succeeded, possibly recomputing to
-//     nothing; the document is marked current with the full desired
-//     fingerprint so later passes/backfills skip it.
-func (idx *Indexer) recordSemanticSyncState(ctx context.Context, colType store.CollectionType, docID int64, fastFields map[string]string, chunks []store.IndexChunk) error {
-	if docID == 0 || !semanticEligible(colType) {
-		return nil
-	}
-	if fastFields == nil {
-		if idx.cfg == nil || !idx.cfg.Config.Semantic.Enabled {
-			return nil
-		}
-	}
-	// Both remaining paths persist semantic state, so read the document's
-	// current content hash here: semantic_source_hash mirrors documents.content_hash.
-	doc, err := idx.db.GetDocumentByIDContext(ctx, docID)
-	if err != nil {
-		return fmt.Errorf("load document %d: %w", docID, err)
-	}
-	if fastFields == nil {
-		// Enabled but the service did not respond (or there was no text to
-		// send): record the stale state with an EMPTY identity basis so the
-		// stale query re-selects this document (semantic_basis != desiredBasis)
-		// and the next backfill re-enriches it. Pass nil fast fields so
-		// previously stored semantic fields are preserved.
-		return idx.db.UpdateSemanticState(ctx, docID, "", "", doc.ContentHash, store.SemanticStatusStale, nil)
-	}
-	basis, ok := idx.semanticSyncBasis(ctx)
-	if !ok {
-		return nil
-	}
-	// semantic_basis is the identity-only fingerprint (no content); the full
-	// fingerprint (identity + chunk-based content hash) is what the per-doc
-	// skip check compares. semantic_source_hash mirrors documents.content_hash
-	// for the SQL-side content-change signal.
-	identity := basis.Compute()
-	basis.ContentHash = semanticContentHash(chunks)
-	fullFP := basis.Compute()
-	return idx.db.UpdateSemanticState(ctx, docID, fullFP, identity, doc.ContentHash, store.SemanticStatusCurrent, nil)
-}
-
-// semanticContentHash derives a stable per-document content hash over the
-// readable chunk contents the semantic service sees (the same filter
-// semanticFastFields applies). NUL separates chunks so adjacent chunks cannot
-// merge ambiguously.
-func semanticContentHash(chunks []store.IndexChunk) string {
-	h := sha256.New()
-	sep := []byte{0}
-	for _, c := range chunks {
-		if strings.TrimSpace(c.Content) == "" {
-			continue
-		}
-		h.Write([]byte(c.Content))
-		h.Write(sep)
-	}
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-// hasReadableText reports whether any chunk carries readable text that could
-// be sent for semantic enrichment.
-func hasReadableText(chunks []store.IndexChunk) bool {
-	for _, c := range chunks {
-		if strings.TrimSpace(c.Content) != "" {
-			return true
-		}
-	}
-	return false
 }

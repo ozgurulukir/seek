@@ -56,18 +56,12 @@ type Indexer struct {
 	// run sequentially.
 	semChecked bool
 	semClient  semantic.Provider
-	// semBasis caches the semantic enrichment identity (service identity +
-	// capability set + schema version, WITHOUT the per-document content hash)
-	// used by the sync path to record fingerprints. It is computed lazily and
-	// cached because a sync pass records one fingerprint per document and must
-	// not health-check the service for every one of them; WithSemanticProvider
-	// resets it so provider swaps recompute the identity.
-	semBasis    store.SemanticFingerprint
-	semBasisSet bool
-	// semBasisFailed records that semanticSyncBasis's last health check
-	// failed, so the sync path warns once instead of once per document while
-	// still retrying the check on every call. WithSemanticProvider resets it.
-	semBasisFailed bool
+	// semState is the lazy recorder owning every documents.semantic_* write
+	// (see semantic_state.go). It holds the memoized enrichment identity
+	// basis, so the sync path health-checks the service once per instance
+	// instead of once per document; WithSemanticProvider resets it so
+	// provider swaps recompute the identity.
+	semState *semanticStateRecorder
 	// enricher is the document-finalization seam all handlers route fast
 	// fields through. Defaults to the config-backed indexerEnricher; inject
 	// via WithEnricher.
@@ -131,8 +125,9 @@ func (idx *Indexer) WithSemanticProvider(p semantic.Provider) *Indexer {
 	idx.mu.Lock()
 	idx.semChecked = true
 	idx.semClient = p
-	idx.semBasisSet = false
-	idx.semBasisFailed = false
+	// Reset the semantic-state recorder so a swapped provider is
+	// re-identity-checked and no stale basis survives the swap.
+	idx.semState = nil
 	idx.mu.Unlock()
 	return idx
 }
