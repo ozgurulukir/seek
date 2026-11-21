@@ -461,6 +461,18 @@ func (s *Store) BackupEmbeddingSpace(ctx context.Context) (*EmbeddingSpaceBackup
 	return &EmbeddingSpaceBackup{profile: profile, documents: documents, chunks: chunks, fastFields: fastFields}, nil
 }
 
+// restoreDeleteBatchSize bounds the batched document purge during a restore
+// (SQLite host-parameter limit; see the batching convention in AGENTS.md).
+const restoreDeleteBatchSize = 500
+
+func batchToInterfaces(ids []int64) []interface{} {
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	return args
+}
+
 func (s *Store) RestoreEmbeddingSpace(ctx context.Context, backup *EmbeddingSpaceBackup) error {
 	if backup == nil {
 		return nil
@@ -475,13 +487,41 @@ func (s *Store) RestoreEmbeddingSpace(ctx context.Context, backup *EmbeddingSpac
 			return fmt.Errorf("clear documents for restore: %w", err)
 		}
 	} else {
-		args := make([]interface{}, 0, len(backup.documents))
-		for documentID := range backup.documents {
-			args = append(args, documentID)
+		// Collect the document IDs absent from the backup, then delete them in
+		// 500-ID batches: a single NOT IN (...) with one placeholder per
+		// document exceeds SQLite's host-parameter limit on large corpora
+		// (audit T5, 2026-11-21 — the same batching convention every other
+		// multi-ID store operation follows).
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM documents`)
+		if err != nil {
+			return fmt.Errorf("list documents absent from restore: %w", err)
 		}
-		deleteQuery := `DELETE FROM documents WHERE id NOT IN (` + sqlPlaceholders(len(backup.documents)) + `)`
-		if _, err := tx.ExecContext(ctx, deleteQuery, args...); err != nil {
-			return fmt.Errorf("remove documents absent from restore: %w", err)
+		var absentIDs []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan document id for restore purge: %w", err)
+			}
+			if _, present := backup.documents[id]; !present {
+				absentIDs = append(absentIDs, id)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterate document ids for restore purge: %w", err)
+		}
+		rows.Close()
+		for start := 0; start < len(absentIDs); start += restoreDeleteBatchSize {
+			end := start + restoreDeleteBatchSize
+			if end > len(absentIDs) {
+				end = len(absentIDs)
+			}
+			batch := absentIDs[start:end]
+			query := `DELETE FROM documents WHERE id IN (` + sqlPlaceholders(len(batch)) + `)`
+			if _, err := tx.ExecContext(ctx, query, batchToInterfaces(batch)...); err != nil {
+				return fmt.Errorf("remove documents absent from restore: %w", err)
+			}
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM fast_fields`); err != nil && !strings.Contains(err.Error(), "no such table") {
