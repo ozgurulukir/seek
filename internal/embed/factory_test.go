@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"context"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/config"
@@ -8,7 +9,7 @@ import (
 
 type typedNilQueryEmbedder struct{}
 
-func (*typedNilQueryEmbedder) EmbedQuery(string) ([]float32, error) {
+func (*typedNilQueryEmbedder) EmbedQueryContext(context.Context, string) ([]float32, error) {
 	return nil, nil
 }
 

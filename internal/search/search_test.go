@@ -18,7 +18,7 @@ import (
 
 type typedNilCustomQueryEmbedder struct{}
 
-func (*typedNilCustomQueryEmbedder) EmbedQuery(string) ([]float32, error) {
+func (*typedNilCustomQueryEmbedder) EmbedQueryContext(context.Context, string) ([]float32, error) {
 	return nil, nil
 }
 

@@ -5,6 +5,14 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **refactor(embed): make context-native cancellation the required embed capability**:
+  the six embed capability interfaces (`QueryEmbedder`, `VLQueryEmbedder`,
+  `DocumentEmbedder`, `BatchEmbedder`, `VLTextBatcher`, `VLImageBatcher`) now
+  take a `context.Context` as part of their method set and the six `Context*`
+  variant aliases plus the non-Context fallback methods are deleted. The
+  pipeline's four and search's two type-assertion fallback branches collapse
+  to direct cancellable calls; behavior is unchanged for real providers.
+
 ## [0.6.9] - 2026-11-17
 
 - **fix(defaults): make config the single source of truth for engine defaults**:

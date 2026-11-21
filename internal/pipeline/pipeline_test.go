@@ -363,10 +363,6 @@ func TestStdoutLogger_Printf(t *testing.T) {
 
 type fakeBatchEmbedder struct{}
 
-func (fakeBatchEmbedder) BatchEmbedAsync(texts []string, onProgress func(string, time.Duration)) ([][]float32, error) {
-	return nil, fmt.Errorf("non-Context path should not be used")
-}
-
 func (fakeBatchEmbedder) BatchEmbedAsyncContext(ctx context.Context, texts []string, onProgress func(string, time.Duration)) ([][]float32, error) {
 	embeddings := make([][]float32, len(texts))
 	for i := range embeddings {

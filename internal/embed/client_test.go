@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -75,7 +76,7 @@ func TestEmbedRequestShape(t *testing.T) {
 		})
 	})
 
-	_, err := c.EmbedDocuments([]string{"hello"})
+	_, err := c.EmbedDocumentsContext(context.Background(), []string{"hello"})
 	if err != nil {
 		t.Fatalf("EmbedDocuments: %v", err)
 	}
@@ -105,7 +106,7 @@ func TestEmbedOmitsDimensionsWhenZero(t *testing.T) {
 	})
 	c.dimensions = 0
 
-	if _, err := c.EmbedDocuments([]string{"x"}); err != nil {
+	if _, err := c.EmbedDocumentsContext(context.Background(), []string{"x"}); err != nil {
 		t.Fatalf("EmbedDocuments: %v", err)
 	}
 	if gotBody.Dimensions != 0 {
@@ -126,7 +127,7 @@ func TestEmbedReordersByIndex(t *testing.T) {
 		})
 	})
 
-	got, err := c.EmbedDocuments([]string{"a", "b", "c"})
+	got, err := c.EmbedDocumentsContext(context.Background(), []string{"a", "b", "c"})
 	if err != nil {
 		t.Fatalf("EmbedDocuments: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestEmbedHTTPError(t *testing.T) {
 		w.Write([]byte("boom"))
 	})
 
-	_, err := c.EmbedDocuments([]string{"a"})
+	_, err := c.EmbedDocumentsContext(context.Background(), []string{"a"})
 	if err == nil {
 		t.Fatal("expected error for non-200 status")
 	}
@@ -161,7 +162,7 @@ func TestEmbedHTTPErrorBodyBounded(t *testing.T) {
 		w.Write([]byte(strings.Repeat("x", bodyLen)))
 	})
 
-	_, err := c.EmbedDocuments([]string{"a"})
+	_, err := c.EmbedDocumentsContext(context.Background(), []string{"a"})
 	if err == nil {
 		t.Fatal("expected error for non-200 status")
 	}
@@ -186,7 +187,7 @@ func TestEmbedSuccessFullyReadsBody(t *testing.T) {
 		writeEmbeddings(w, 1)
 	})
 
-	got, err := c.EmbedDocuments([]string{"a"})
+	got, err := c.EmbedDocumentsContext(context.Background(), []string{"a"})
 	if err != nil {
 		t.Fatalf("EmbedDocuments: %v", err)
 	}
@@ -207,7 +208,7 @@ func TestEmbedAPIErrorField(t *testing.T) {
 		})
 	})
 
-	_, err := c.EmbedDocuments([]string{"a"})
+	_, err := c.EmbedDocumentsContext(context.Background(), []string{"a"})
 	if err == nil {
 		t.Fatal("expected error for API error field")
 	}
@@ -226,7 +227,7 @@ func TestEmbedQuery(t *testing.T) {
 		})
 	})
 
-	got, err := c.EmbedQuery("hello")
+	got, err := c.EmbedQueryContext(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("EmbedQuery: %v", err)
 	}
@@ -243,7 +244,7 @@ func TestEmbedMissingResponseErrors(t *testing.T) {
 		json.NewEncoder(w).Encode(embeddingResponse{})
 	})
 
-	if _, err := c.EmbedQuery("hello"); err == nil {
+	if _, err := c.EmbedQueryContext(context.Background(), "hello"); err == nil {
 		t.Fatal("expected error for missing embedding in response")
 	} else if !strings.Contains(err.Error(), "returned 0 embeddings, expected 1") {
 		t.Errorf("error = %q, want count mismatch mention", err.Error())
@@ -261,7 +262,7 @@ func TestEmbedPartialResponseErrors(t *testing.T) {
 		})
 	})
 
-	if _, err := c.EmbedDocuments([]string{"a", "b"}); err == nil {
+	if _, err := c.EmbedDocumentsContext(context.Background(), []string{"a", "b"}); err == nil {
 		t.Fatal("expected error for partial embedding response")
 	} else if !strings.Contains(err.Error(), "returned 1 embeddings, expected 2") {
 		t.Errorf("error = %q, want count mismatch mention", err.Error())
@@ -280,7 +281,7 @@ func TestEmbedDuplicateIndexErrors(t *testing.T) {
 		})
 	})
 
-	if _, err := c.EmbedDocuments([]string{"a", "b"}); err == nil {
+	if _, err := c.EmbedDocumentsContext(context.Background(), []string{"a", "b"}); err == nil {
 		t.Fatal("expected error for duplicate embedding index")
 	} else if !strings.Contains(err.Error(), "no embedding for input 1") {
 		t.Errorf("error = %q, want missing-input mention", err.Error())
@@ -367,7 +368,7 @@ func TestEmbedDocumentsAppliesDocumentPrefix(t *testing.T) {
 	})
 	c.taskPrefix = TaskPrefix{Query: "search_query: ", Document: "search_document: "}
 
-	if _, err := c.EmbedDocuments([]string{"alpha", "beta"}); err != nil {
+	if _, err := c.EmbedDocumentsContext(context.Background(), []string{"alpha", "beta"}); err != nil {
 		t.Fatalf("EmbedDocuments: %v", err)
 	}
 	want := []string{"search_document: alpha", "search_document: beta"}
@@ -384,7 +385,7 @@ func TestEmbedQueryAppliesQueryPrefix(t *testing.T) {
 	})
 	c.taskPrefix = TaskPrefix{Query: "search_query: ", Document: "search_document: "}
 
-	if _, err := c.EmbedQuery("hello"); err != nil {
+	if _, err := c.EmbedQueryContext(context.Background(), "hello"); err != nil {
 		t.Fatalf("EmbedQuery: %v", err)
 	}
 	if !reflect.DeepEqual(gotBody.Input, []string{"search_query: hello"}) {
@@ -401,10 +402,10 @@ func TestTaskPrefixZeroValueSendsRawText(t *testing.T) {
 		writeEmbeddings(w, len(body.Input))
 	})
 
-	if _, err := c.EmbedDocuments([]string{"plain"}); err != nil {
+	if _, err := c.EmbedDocumentsContext(context.Background(), []string{"plain"}); err != nil {
 		t.Fatalf("EmbedDocuments: %v", err)
 	}
-	if _, err := c.EmbedQuery("plain query"); err != nil {
+	if _, err := c.EmbedQueryContext(context.Background(), "plain query"); err != nil {
 		t.Fatalf("EmbedQuery: %v", err)
 	}
 
@@ -430,10 +431,10 @@ func TestTaskPrefixIdempotent(t *testing.T) {
 	c.taskPrefix = TaskPrefix{Query: "search_query: ", Document: "search_document: "}
 
 	// Pass already prefixed strings
-	if _, err := c.EmbedDocuments([]string{"search_document: doc1", "doc2"}); err != nil {
+	if _, err := c.EmbedDocumentsContext(context.Background(), []string{"search_document: doc1", "doc2"}); err != nil {
 		t.Fatalf("EmbedDocuments: %v", err)
 	}
-	if _, err := c.EmbedQuery("search_query: query1"); err != nil {
+	if _, err := c.EmbedQueryContext(context.Background(), "search_query: query1"); err != nil {
 		t.Fatalf("EmbedQuery: %v", err)
 	}
 

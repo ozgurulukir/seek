@@ -382,16 +382,9 @@ func embedVLTextContext(ctx context.Context, db *store.Store, vlClient embed.VLT
 		texts[i] = ch.Content
 	}
 	updated := 0
-	var err error
-	if batcher, ok := vlClient.(embed.ContextVLTextBatcher); ok {
-		_, err = batcher.EmbedTextsInBatchesContext(ctx, texts, config.DefaultVLMaxContents, 200*time.Millisecond, func(batchStart int, embeddings [][]float32) error {
-			return updateTextEmbeddings(ctx, db, textChunks, batchStart, embeddings, &updated, log, deferVectorUpdate)
-		})
-	} else {
-		_, err = vlClient.EmbedTextsInBatches(texts, config.DefaultVLMaxContents, 200*time.Millisecond, func(batchStart int, embeddings [][]float32) error {
-			return updateTextEmbeddings(ctx, db, textChunks, batchStart, embeddings, &updated, log, deferVectorUpdate)
-		})
-	}
+	_, err := vlClient.EmbedTextsInBatchesContext(ctx, texts, config.DefaultVLMaxContents, 200*time.Millisecond, func(batchStart int, embeddings [][]float32) error {
+		return updateTextEmbeddings(ctx, db, textChunks, batchStart, embeddings, &updated, log, deferVectorUpdate)
+	})
 	if err != nil {
 		return updated, fmt.Errorf("text batch: %w", err)
 	}
@@ -451,7 +444,6 @@ func embedVLImagesContext(ctx context.Context, db *store.Store, vlClient embed.V
 		items[i] = embed.ImageBatchItem{ImagePath: ch.ImagePath, Text: ch.Content}
 	}
 	imageUpdated := 0
-	var err error
 	callback := func(batchStart int, embeddings [][]float32, validIndices []int) error {
 		if err := persistEmbeddingBatch(ctx, db, imageChunks, embeddings, func(j int) int {
 			if j >= len(validIndices) {
@@ -464,11 +456,7 @@ func embedVLImagesContext(ctx context.Context, db *store.Store, vlClient embed.V
 		log.Printf("\r  images: %d/%d", imageUpdated, len(imageChunks))
 		return nil
 	}
-	if batcher, ok := vlClient.(embed.ContextVLImageBatcher); ok {
-		_, err = batcher.EmbedImagesInBatchesContext(ctx, items, config.DefaultVLMaxImages, 500*time.Millisecond, callback)
-	} else {
-		_, err = vlClient.EmbedImagesInBatches(items, config.DefaultVLMaxImages, 500*time.Millisecond, callback)
-	}
+	_, err := vlClient.EmbedImagesInBatchesContext(ctx, items, config.DefaultVLMaxImages, 500*time.Millisecond, callback)
 	if err != nil {
 		return imageUpdated, fmt.Errorf("image batch: %w", err)
 	}
@@ -482,15 +470,10 @@ func embedBatchContext(ctx context.Context, db *store.Store, client embed.BatchE
 	}
 	log.Printf("Using Batch API (async, 50%% cheaper)...\n")
 	var embeddings [][]float32
-	var err error
 	progress := func(status string, elapsed time.Duration) {
 		log.Printf("\r  [%s] %s", elapsed.Round(time.Second), status)
 	}
-	if batcher, ok := client.(embed.ContextBatchEmbedder); ok {
-		embeddings, err = batcher.BatchEmbedAsyncContext(ctx, texts, progress)
-	} else {
-		embeddings, err = client.BatchEmbedAsync(texts, progress)
-	}
+	embeddings, err := client.BatchEmbedAsyncContext(ctx, texts, progress)
 	log.Printf("\n")
 	if err != nil {
 		return 0, fmt.Errorf("batch embed: %w", err)
@@ -517,13 +500,7 @@ func embedRealtimeContext(ctx context.Context, db *store.Store, client embed.Doc
 		if end > len(chunks) {
 			end = len(chunks)
 		}
-		var embeddings [][]float32
-		var err error
-		if contextClient, ok := client.(embed.ContextDocumentEmbedder); ok {
-			embeddings, err = contextClient.EmbedDocumentsContext(ctx, texts[i:end])
-		} else {
-			embeddings, err = client.EmbedDocuments(texts[i:end])
-		}
+		embeddings, err := client.EmbedDocumentsContext(ctx, texts[i:end])
 		if err != nil {
 			return updated, fmt.Errorf("batch %d-%d: %w", i, end, err)
 		}

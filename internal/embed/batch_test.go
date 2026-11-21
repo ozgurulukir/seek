@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -296,7 +297,7 @@ func TestBatchEmbedAsync(t *testing.T) {
 		}
 	})
 
-	got, err := c.BatchEmbedAsync([]string{"hello"}, nil)
+	got, err := c.BatchEmbedAsyncContext(context.Background(), []string{"hello"}, nil)
 	if err != nil {
 		t.Fatalf("BatchEmbedAsync: %v", err)
 	}
@@ -312,9 +313,9 @@ func TestBatchEmbedAsync(t *testing.T) {
 
 func TestBatchEmbedAsyncEmpty(t *testing.T) {
 	c := NewClient("https://api.example/v1", "k", "m", 8, TaskPrefix{})
-	got, err := c.BatchEmbedAsync(nil, nil)
+	got, err := c.BatchEmbedAsyncContext(context.Background(), nil, nil)
 	if err != nil {
-		t.Fatalf("BatchEmbedAsync(nil): %v", err)
+		t.Fatalf("BatchEmbedAsyncContext(nil): %v", err)
 	}
 	if got != nil {
 		t.Errorf("embeddings = %v, want nil", got)

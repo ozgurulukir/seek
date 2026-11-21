@@ -141,20 +141,12 @@ func (e *Engine) searchVectorRaw(ctx context.Context, query string, limit int, o
 	var qEmb []float32
 	var err error
 	if e.vlClient != nil {
-		if contextual, ok := e.vlClient.(embed.ContextVLQueryEmbedder); ok {
-			qEmb, err = contextual.EmbedTextContext(ctx, query)
-		} else {
-			qEmb, err = e.vlClient.EmbedText(query)
-		}
+		qEmb, err = e.vlClient.EmbedTextContext(ctx, query)
 		if err != nil {
 			return nil, err
 		}
 	} else if e.embedClient != nil {
-		if contextual, ok := e.embedClient.(embed.ContextQueryEmbedder); ok {
-			qEmb, err = contextual.EmbedQueryContext(ctx, query)
-		} else {
-			qEmb, err = e.embedClient.EmbedQuery(query)
-		}
+		qEmb, err = e.embedClient.EmbedQueryContext(ctx, query)
 		if err != nil {
 			return nil, err
 		}

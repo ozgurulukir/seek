@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,7 +37,7 @@ func BenchmarkEmbedImagesInBatches(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		// Mock onBatch to avoid real network call
-		_, _ = c.EmbedImagesInBatches(items, 100, 0, func(batchStart int, embeddings [][]float32, validIndices []int) error {
+		_, _ = c.EmbedImagesInBatchesContext(context.Background(), items, 100, 0, func(batchStart int, embeddings [][]float32, validIndices []int) error {
 			return nil
 		})
 	}

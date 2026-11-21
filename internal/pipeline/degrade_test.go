@@ -247,7 +247,7 @@ type mockDocEmbedder struct {
 	vec   []float32
 }
 
-func (m *mockDocEmbedder) EmbedDocuments(texts []string) ([][]float32, error) {
+func (m *mockDocEmbedder) EmbedDocumentsContext(_ context.Context, texts []string) ([][]float32, error) {
 	m.calls++
 	out := make([][]float32, len(texts))
 	for i := range texts {
@@ -330,10 +330,6 @@ func TestPipelineEmbedPendingScopesCollection(t *testing.T) {
 
 type cancelingDocumentEmbedder struct {
 	started chan struct{}
-}
-
-func (m *cancelingDocumentEmbedder) EmbedDocuments([]string) ([][]float32, error) {
-	return nil, context.Canceled
 }
 
 func (m *cancelingDocumentEmbedder) EmbedDocumentsContext(ctx context.Context, _ []string) ([][]float32, error) {
