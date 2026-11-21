@@ -2,8 +2,10 @@ package indexer
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -57,7 +59,7 @@ func healthyFake() *fakeSemanticProvider {
 	return &fakeSemanticProvider{healthOk: true, health: semanticHealthAll(), response: fakeTagResult("golang")}
 }
 
-// warnCapture is a warnf sink recording each message.
+// warnCapture is a warnf sink recording each interpolated message.
 type warnCapture struct {
 	mu  sync.Mutex
 	got []string
@@ -66,7 +68,7 @@ type warnCapture struct {
 func (w *warnCapture) warnf(format string, v ...interface{}) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.got = append(w.got, format)
+	w.got = append(w.got, fmt.Sprintf(format, v...))
 }
 
 func semanticStateOf(t *testing.T, db *store.Store, docID int64) store.SemanticState {
@@ -79,128 +81,128 @@ func semanticStateOf(t *testing.T, db *store.Store, docID int64) store.SemanticS
 }
 
 func TestSemanticStateRecorderSyncOutcome(t *testing.T) {
-	tests := []struct {
-		name string
-		// setup runs before the recorder call and may seed state.
-		run func(t *testing.T, db *store.Store, cfg *config.AppConfig, docID int64, cap *warnCapture)
-		// check runs after the recorder call.
-		check func(t *testing.T, db *store.Store, docID int64, cap *warnCapture)
-	}{
+	type syncCase struct {
+		name        string
+		enabled     bool
+		fields      map[string]string
+		colType     store.CollectionType
+		zeroID      bool // call RecordSyncOutcome with docID 0 (the guard row)
+		noProvider  bool
+		healthFails bool
+		wantStatus  store.SemanticStatus
+		wantFP      bool   // expect a non-empty fingerprint
+		wantWarns   int    // total warnings after two calls
+		wantWarnSub string // substring every captured warning must carry
+	}
+
+	tests := []syncCase{
 		{
-			name: "success records current with layered fingerprint",
-			run: func(t *testing.T, db *store.Store, cfg *config.AppConfig, docID int64, cap *warnCapture) {
-				enabledCfg(cfg, "http://127.0.0.1:1")
-			},
-			check: func(t *testing.T, db *store.Store, docID int64, cap *warnCapture) {
-				st := semanticStateOf(t, db, docID)
-				if st.Status != store.SemanticStatusCurrent || st.Fingerprint == "" {
-					t.Fatalf("state = %+v, want current with a fingerprint", st)
-				}
-			},
+			name:       "success records current with layered fingerprint",
+			enabled:    true,
+			fields:     map[string]string{"topics": "t1"},
+			colType:    store.CollectionTypeClaude,
+			wantStatus: store.SemanticStatusCurrent,
+			wantFP:     true,
 		},
 		{
-			name: "nil fields while enabled records stale-empty",
-			run: func(t *testing.T, db *store.Store, cfg *config.AppConfig, docID int64, cap *warnCapture) {
-				enabledCfg(cfg, "http://127.0.0.1:1")
-			},
-			check: func(t *testing.T, db *store.Store, docID int64, cap *warnCapture) {
-				st := semanticStateOf(t, db, docID)
-				if st.Status != store.SemanticStatusStale || st.Fingerprint != "" {
-					t.Fatalf("state = %+v, want stale with empty fingerprint", st)
-				}
-			},
+			name:       "nil fields while enabled records stale-empty",
+			enabled:    true,
+			fields:     nil,
+			colType:    store.CollectionTypeClaude,
+			wantStatus: store.SemanticStatusStale,
 		},
 		{
-			name: "nil fields while disabled records nothing",
-			check: func(t *testing.T, db *store.Store, docID int64, cap *warnCapture) {
-				st := semanticStateOf(t, db, docID)
-				if st.Status != store.SemanticStatusNone || st.Fingerprint != "" {
-					t.Fatalf("state = %+v, want untouched none", st)
-				}
-			},
+			name:       "nil fields while disabled records nothing",
+			enabled:    false,
+			fields:     nil,
+			colType:    store.CollectionTypeClaude,
+			wantStatus: store.SemanticStatusNone,
 		},
 		{
-			name: "ineligible collection type records nothing",
-			run: func(t *testing.T, db *store.Store, cfg *config.AppConfig, docID int64, cap *warnCapture) {
-				enabledCfg(cfg, "http://127.0.0.1:1")
-			},
-			check: func(t *testing.T, db *store.Store, docID int64, cap *warnCapture) {
-				st := semanticStateOf(t, db, docID)
-				if st.Status != store.SemanticStatusNone {
-					t.Fatalf("state = %+v, want untouched none", st)
-				}
-			},
+			name:       "ineligible collection type records nothing",
+			enabled:    true,
+			fields:     map[string]string{"topics": "t1"},
+			colType:    store.CollectionTypeMarkdown,
+			wantStatus: store.SemanticStatusNone,
 		},
 		{
-			name: "health failure records nothing and warns once per recorder",
-			run: func(t *testing.T, db *store.Store, cfg *config.AppConfig, docID int64, cap *warnCapture) {
-				enabledCfg(cfg, "http://127.0.0.1:1")
-			},
-			check: func(t *testing.T, db *store.Store, docID int64, cap *warnCapture) {
-				st := semanticStateOf(t, db, docID)
-				if st.Status != store.SemanticStatusNone {
-					t.Fatalf("state = %+v, want untouched none after health failure", st)
-				}
-				if len(cap.got) != 1 {
-					t.Fatalf("warnings after two failed calls = %d, want exactly 1 (warn-once)", len(cap.got))
-				}
-			},
+			name:       "zero doc id records nothing",
+			enabled:    true,
+			fields:     map[string]string{"topics": "t1"},
+			colType:    store.CollectionTypeClaude,
+			zeroID:     true,
+			wantStatus: store.SemanticStatusNone,
 		},
 		{
-			name: "zero doc id records nothing",
-			run: func(t *testing.T, db *store.Store, cfg *config.AppConfig, docID int64, cap *warnCapture) {
-				enabledCfg(cfg, "http://127.0.0.1:1")
-			},
-			check: func(t *testing.T, db *store.Store, docID int64, cap *warnCapture) {
-				st := semanticStateOf(t, db, docID)
-				if st.Status != store.SemanticStatusNone {
-					t.Fatalf("state = %+v, want untouched none", st)
-				}
-			},
+			name:        "health failure records nothing and warns once per recorder",
+			enabled:     true,
+			fields:      map[string]string{"topics": "t1"},
+			colType:     store.CollectionTypeClaude,
+			healthFails: true,
+			wantStatus:  store.SemanticStatusNone,
+			wantWarns:   1,
+			wantWarnSub: "service health check failed",
+		},
+		{
+			// A provider-nil resolve records nothing and stays silent — the
+			// disabled capability is not a failure worth warning about.
+			name:       "provider nil with non-nil fields records nothing",
+			enabled:    true,
+			fields:     map[string]string{"topics": "t1"},
+			colType:    store.CollectionTypeClaude,
+			noProvider: true,
+			wantStatus: store.SemanticStatusNone,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db, cfg, docID := recorderTestDoc(t)
+			enabledCfg(cfg, "http://127.0.0.1:1")
+			cfg.Config.Semantic.Enabled = tt.enabled
 			cap := &warnCapture{}
-			if tt.run != nil {
-				tt.run(t, db, cfg, docID, cap)
-			}
 
-			// The healthy fake backs every non-failure case; the failure case
-			// deliberately flips healthOk so resolve() reports the outage.
 			fake := healthyFake()
-			provider := semantic.Provider(fake)
-			if tt.name == "health failure records nothing and warns once per recorder" {
-				fake.healthOk = false
+			fake.healthOk = !tt.healthFails
+			var provider semantic.Provider = fake
+			if tt.noProvider {
+				provider = nil
 			}
 			rec := newSemanticStateRecorder(db, cfg, func() semantic.Provider { return provider }, cap.warnf)
 
-			chunks := []store.IndexChunk{{Content: "alpha"}, {Content: "beta"}}
-			// The eligible type for the sync matrix; the setup collection is
-			// markdown (its own type is deliberately not sync-enriched).
-			colType := store.CollectionTypeClaude
 			docIDArg := docID
-			if tt.name == "zero doc id records nothing" {
+			if tt.zeroID {
+				// The zero-id row targets the guard itself; the assertion
+				// below still reads the real document's untouched state.
 				docIDArg = 0
 			}
-			if tt.name == "ineligible collection type records nothing" {
-				colType = store.CollectionTypeMarkdown
-			}
-			fields := map[string]string{"topics": "t1"}
-			if tt.name == "nil fields while enabled records stale-empty" ||
-				tt.name == "nil fields while disabled records nothing" {
-				fields = nil
-			}
 
+			chunks := []store.IndexChunk{{Content: "alpha"}, {Content: "beta"}}
 			// Call twice to exercise the memoized resolve and warn-once paths.
 			for i := 0; i < 2; i++ {
-				if err := rec.RecordSyncOutcome(context.Background(), colType, docIDArg, fields, chunks); err != nil {
+				if err := rec.RecordSyncOutcome(context.Background(), tt.colType, docIDArg, tt.fields, chunks); err != nil {
 					t.Fatalf("RecordSyncOutcome: %v", err)
 				}
 			}
-			tt.check(t, db, docID, cap)
+
+			st := semanticStateOf(t, db, docID)
+			if st.Status != tt.wantStatus {
+				t.Fatalf("status = %q, want %q", st.Status, tt.wantStatus)
+			}
+			if tt.wantFP && st.Fingerprint == "" {
+				t.Fatal("fingerprint is empty, want a full fingerprint")
+			}
+			if !tt.wantFP && st.Fingerprint != "" {
+				t.Fatalf("fingerprint = %q, want empty", st.Fingerprint)
+			}
+			if len(cap.got) != tt.wantWarns {
+				t.Fatalf("warnings after two calls = %d (%v), want %d", len(cap.got), cap.got, tt.wantWarns)
+			}
+			for _, w := range cap.got {
+				if !strings.Contains(w, tt.wantWarnSub) {
+					t.Fatalf("warning %q does not contain %q", w, tt.wantWarnSub)
+				}
+			}
 		})
 	}
 }

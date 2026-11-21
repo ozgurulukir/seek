@@ -55,6 +55,9 @@ type semanticStateRecorder struct {
 	provider func() semantic.Provider
 	// warnf reports the sync-path resolve failure once per recorder
 	// instance; nil discards (the backfill warns through its own pass log).
+	// A bare func (not the Logger interface) is deliberate: the sync path
+	// must warn through idx.warnf so the failure also counts toward
+	// report.Warnings, which a plain Logger call would not do.
 	warnf func(format string, v ...any)
 	// mu guards the memoized basis and the warn-once flag. Sync runs
 	// sequentially today, but the recorder is shared across documents, so
@@ -125,8 +128,9 @@ func (r *semanticStateRecorder) resolve(ctx context.Context) (store.SemanticFing
 // runtime models are chosen server-side and published via /health. The base
 // URL plus the /health capability set therefore identify the deployment as
 // precisely as a model name could. If a client-side model selector is ever
-// added to SemanticConfig, it must be folded into this basis resolve() so a
-// model change invalidates documents (review minor: model-name identity).
+// added to SemanticConfig, it must be folded into the basis resolve()
+// computes so a model change invalidates documents (review minor:
+// model-name identity).
 func (r *semanticStateRecorder) computeBasis(ctx context.Context, p semantic.Provider) (store.SemanticFingerprint, error) {
 	basis := store.SemanticFingerprint{SchemaVersion: store.SemanticSchemaVersion}
 	if r.cfg == nil {
@@ -174,7 +178,7 @@ func (r *semanticStateRecorder) computeBasis(ctx context.Context, p semantic.Pro
 //     retries it; when semantic is disabled entirely, no state is recorded
 //     (nothing to be stale about, and the capability is simply off).
 //   - non-nil (even empty): enrichment succeeded, possibly recomputing to
-//     nothing; the document was marked current with the full desired
+//     nothing; the document is marked current with the full desired
 //     fingerprint so later passes/backfills skip it.
 func (r *semanticStateRecorder) RecordSyncOutcome(ctx context.Context, colType store.CollectionType, docID int64, fastFields map[string]string, chunks []store.IndexChunk) error {
 	if docID == 0 || !semanticEligible(colType) {
