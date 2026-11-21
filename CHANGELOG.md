@@ -14,7 +14,14 @@ All notable changes to `seek` are documented here. This follows
   zstd frames (via `store.Compress`) in v1.19.2; the dependency is bumped past
   the fix and the CI quality gate now runs `govulncheck ./...` so future
   reachable vulnerabilities fail the build.
-
+- **refactor(indexer): one semantic state recorder owns fingerprint persistence**:
+  the sync and backfill paths each hand-assembled the same 7-argument
+  `UpdateSemanticState` write (five call sites) with two differently-implemented
+  basis caches; the new `semanticStateRecorder` owns the write-side decision
+  table (Current/Stale/Error transitions), the nil-vs-empty merge contract, and
+  the lazy, memoized enrichment-identity resolution once. Persisted
+  fingerprints, statuses, and warning cadence are byte-identical; new
+  decision-table tests pin the recorder's branches.
 - **refactor(embed): make context-native cancellation the required embed capability**:
   the six embed capability interfaces (`QueryEmbedder`, `VLQueryEmbedder`,
   `DocumentEmbedder`, `BatchEmbedder`, `VLTextBatcher`, `VLImageBatcher`) now
