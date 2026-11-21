@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/store/storetest"
 )
 
 // startFakeSemantic returns a fake semantic service (contract v0.2.0) and
@@ -215,9 +216,7 @@ func TestSyncPdfWritesSemanticFastFields(t *testing.T) {
 	tmp := t.TempDir()
 	db, err := store.Open(filepath.Join(tmp, "test.db"))
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
@@ -298,9 +297,7 @@ func TestSyncPdfServiceDownMarksStaleAndPreservesFields(t *testing.T) {
 	tmp := t.TempDir()
 	db, err := store.Open(filepath.Join(tmp, "test.db"))
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })

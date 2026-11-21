@@ -10,6 +10,7 @@ import (
 	"github.com/ozgurulukir/seek/cmd"
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/store/storetest"
 )
 
 // writeSampleRepo creates a small repo so code/document sync has files to read.
@@ -41,9 +42,7 @@ func TestAddCmd_TypeCode(t *testing.T) {
 
 	addCmd := &cmd.AddCmd{Path: repoDir, Name: "sample-repo", Type: "code"}
 	if err := addCmd.Run(cfg); err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatalf("AddCmd.Run(--type code) failed: %v", err)
 	}
 
@@ -84,9 +83,7 @@ func TestAddCmd_TypeDocuments(t *testing.T) {
 	// assert the per-collection backend is persisted.
 	addCmd := &cmd.AddCmd{Path: docDir, Name: "docs", Type: "documents", Backend: "builtin"}
 	if err := addCmd.Run(cfg); err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatalf("AddCmd.Run(--type documents) failed: %v", err)
 	}
 

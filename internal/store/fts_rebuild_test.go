@@ -3,8 +3,9 @@ package store
 import (
 	"context"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/ozgurulukir/seek/internal/store/storetest"
 )
 
 // TestFTSNeedsRebuildWhenTableMissing pins the crash-healing contract: a
@@ -34,9 +35,7 @@ func TestFTSRebuildHealsMissingTableOnReopen(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "heal.db")
 	s, err := Open(dbPath)
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatalf("Open: %v", err)
 	}
 

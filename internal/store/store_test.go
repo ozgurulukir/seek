@@ -6,15 +6,15 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/ozgurulukir/seek/internal/store/storetest"
 )
 
 func newTestStore(t testing.TB) *Store {
 	t.Helper()
 	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })

@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/semantic"
 	"github.com/ozgurulukir/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/store/storetest"
 )
 
 // fakeSemanticProvider is a controllable semantic.Provider for tests. It
@@ -81,9 +81,7 @@ func openBackfillStore(t *testing.T) *store.Store {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })

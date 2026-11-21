@@ -14,6 +14,7 @@ import (
 	"github.com/ozgurulukir/seek/internal/config"
 	"github.com/ozgurulukir/seek/internal/indexer"
 	"github.com/ozgurulukir/seek/internal/store"
+	"github.com/ozgurulukir/seek/internal/store/storetest"
 )
 
 type nopLogger struct{}
@@ -24,9 +25,7 @@ func openTestStore(t *testing.T, dbPath string) *store.Store {
 	t.Helper()
 	db, err := store.Open(dbPath)
 	if err != nil {
-		if strings.Contains(err.Error(), "SQLite FTS5 not enabled") {
-			t.Skip("SQLite FTS5 not enabled. Run tests with: go test -tags \"fts5 sqlite_fts5\" ./... or make test")
-		}
+		storetest.SkipIfFTS5Disabled(t, err)
 		t.Fatal(err)
 	}
 	return db
