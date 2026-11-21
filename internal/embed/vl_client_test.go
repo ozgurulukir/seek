@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -62,7 +63,7 @@ func TestVLClientTaskPrefixes(t *testing.T) {
 	var texts []string
 	c := newTestVLClient(t, &texts)
 
-	if _, err := c.EmbedText("query"); err != nil {
+	if _, err := c.EmbedTextContext(context.Background(), "query"); err != nil {
 		t.Fatalf("EmbedText: %v", err)
 	}
 	if _, err := c.EmbedBatch([]EmbedItem{{Text: "doc"}}); err != nil {
@@ -85,7 +86,7 @@ func TestVLClientZeroPrefixSendsRawText(t *testing.T) {
 	c := newTestVLClient(t, &texts)
 	c.taskPrefix = TaskPrefix{}
 
-	if _, err := c.EmbedText("plain query"); err != nil {
+	if _, err := c.EmbedTextContext(context.Background(), "plain query"); err != nil {
 		t.Fatalf("EmbedText: %v", err)
 	}
 	if len(texts) != 1 || texts[0] != "plain query" {
@@ -129,7 +130,7 @@ func TestNewVLClientOfflineRefusesNonLoopback(t *testing.T) {
 	if !c.refuseNetwork {
 		t.Fatal("refuseNetwork = false for non-loopback offline client, want true")
 	}
-	_, err := c.EmbedText("secret")
+	_, err := c.EmbedTextContext(context.Background(), "secret")
 	if err == nil {
 		t.Fatal("expected refusal, got nil error")
 	}
@@ -171,7 +172,7 @@ func TestNewVLClientOfflineAllowsLoopback(t *testing.T) {
 	}
 	c.http = srv.Client()
 
-	if _, err := c.EmbedText("local"); err != nil {
+	if _, err := c.EmbedTextContext(context.Background(), "local"); err != nil {
 		if strings.Contains(err.Error(), "offline_only") {
 			t.Errorf("loopback offline request was refused: %v", err)
 		}
@@ -183,7 +184,7 @@ func TestNewVLClientOfflineAllowsLoopback(t *testing.T) {
 func TestVLClientSuccessPathStillWorks(t *testing.T) {
 	var texts []string
 	c := newTestVLClient(t, &texts)
-	if _, err := c.EmbedText("hello"); err != nil {
+	if _, err := c.EmbedTextContext(context.Background(), "hello"); err != nil {
 		t.Fatalf("EmbedText: %v", err)
 	}
 	if len(texts) != 1 || texts[0] != "search_query: hello" {
@@ -201,7 +202,7 @@ func TestEmbedImagesInBatchesReportsReadFailures(t *testing.T) {
 		{ImagePath: filepath.Join(t.TempDir(), "missing1.png")},
 		{ImagePath: filepath.Join(t.TempDir(), "missing2.png")},
 	}
-	updated, err := c.EmbedImagesInBatches(items, 5, 0, nil)
+	updated, err := c.EmbedImagesInBatchesContext(context.Background(), items, 5, 0, nil)
 	if err == nil {
 		t.Fatal("expected read failures to produce an error, got nil")
 	}

@@ -334,12 +334,8 @@ func (c *Client) DownloadBatchResultsContext(ctx context.Context, fileID string)
 	return results, nil
 }
 
-// BatchEmbed runs the full batch embedding flow:
+// BatchEmbedAsyncContext runs the full batch embedding flow:
 // prepare JSONL → upload → create batch → poll → download → return embeddings.
-func (c *Client) BatchEmbedAsync(texts []string, onStatus func(status string, elapsed time.Duration)) ([][]float32, error) {
-	return c.BatchEmbedAsyncContext(context.Background(), texts, onStatus)
-}
-
 func (c *Client) BatchEmbedAsyncContext(ctx context.Context, texts []string, onStatus func(status string, elapsed time.Duration)) ([][]float32, error) {
 	if c.offline {
 		return nil, fmt.Errorf("offline_only is enabled: refusing to send %d text(s) to %q", len(texts), c.model)

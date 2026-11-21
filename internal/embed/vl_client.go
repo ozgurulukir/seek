@@ -102,12 +102,8 @@ type vlResponse struct {
 	Message string `json:"message,omitempty"`
 }
 
-// EmbedText embeds a search query via the VL API, prepending the configured
-// query task prefix.
-func (c *VLClient) EmbedText(text string) ([]float32, error) {
-	return c.EmbedTextContext(context.Background(), text)
-}
-
+// EmbedTextContext embeds a search query via the VL API, prepending the
+// configured query task prefix.
 func (c *VLClient) EmbedTextContext(ctx context.Context, text string) ([]float32, error) {
 	results, err := c.embedRawContext(ctx, []EmbedItem{{Text: c.taskPrefix.applyQuery(text)}})
 	if err != nil {
@@ -303,11 +299,7 @@ func ImagePathToMediaType(path string) string {
 	}
 }
 
-// EmbedTextsInBatches embeds text strings in batches with rate-limiting pauses.
-func (c *VLClient) EmbedTextsInBatches(texts []string, batchSize int, pause time.Duration, onBatch func(batchStart int, embeddings [][]float32) error) (int, error) {
-	return c.EmbedTextsInBatchesContext(context.Background(), texts, batchSize, pause, onBatch)
-}
-
+// EmbedTextsInBatchesContext embeds text strings in batches with rate-limiting pauses.
 func (c *VLClient) EmbedTextsInBatchesContext(ctx context.Context, texts []string, batchSize int, pause time.Duration, onBatch func(batchStart int, embeddings [][]float32) error) (int, error) {
 	if batchSize <= 0 {
 		batchSize = vlMaxContents
@@ -362,11 +354,7 @@ type ImageBatchItem struct {
 	Text      string
 }
 
-// EmbedImagesInBatches reads images concurrently, formats data URIs, and embeds them in batches.
-func (c *VLClient) EmbedImagesInBatches(items []ImageBatchItem, batchSize int, pause time.Duration, onBatch func(batchStart int, embeddings [][]float32, validIndices []int) error) (int, error) {
-	return c.EmbedImagesInBatchesContext(context.Background(), items, batchSize, pause, onBatch)
-}
-
+// EmbedImagesInBatchesContext reads images concurrently, formats data URIs, and embeds them in batches.
 func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []ImageBatchItem, batchSize int, pause time.Duration, onBatch func(batchStart int, embeddings [][]float32, validIndices []int) error) (int, error) {
 	if batchSize <= 0 {
 		batchSize = vlMaxImages

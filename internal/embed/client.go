@@ -95,12 +95,8 @@ type embeddingResponse struct {
 	} `json:"error"`
 }
 
-// embed sends the raw texts to the embeddings endpoint without any
+// embedContext sends the raw texts to the embeddings endpoint without any
 // task-prefix transformation. Public methods layer prefixes on top.
-func (c *Client) embed(texts []string) ([][]float32, error) {
-	return c.embedContext(context.Background(), texts)
-}
-
 func (c *Client) embedContext(ctx context.Context, texts []string) ([][]float32, error) {
 	if c.offline {
 		return nil, fmt.Errorf("offline_only is enabled: refusing to send %d text(s) to %q", len(texts), c.model)
@@ -123,22 +119,14 @@ func (c *Client) embedContext(ctx context.Context, texts []string) ([][]float32,
 	return reorderEmbeddings("embedding", embResp.Data, len(texts))
 }
 
-// EmbedDocuments embeds indexed document texts, prepending the configured
-// document task prefix (e.g. "search_document: " for Nomic models).
-func (c *Client) EmbedDocuments(texts []string) ([][]float32, error) {
-	return c.embed(c.taskPrefix.applyDocuments(texts))
-}
-
+// EmbedDocumentsContext embeds indexed document texts, prepending the
+// configured document task prefix (e.g. "search_document: " for Nomic models).
 func (c *Client) EmbedDocumentsContext(ctx context.Context, texts []string) ([][]float32, error) {
 	return c.embedContext(ctx, c.taskPrefix.applyDocuments(texts))
 }
 
-// EmbedQuery embeds a search query, prepending the configured query task
-// prefix (e.g. "search_query: " for Nomic models).
-func (c *Client) EmbedQuery(text string) ([]float32, error) {
-	return c.EmbedQueryContext(context.Background(), text)
-}
-
+// EmbedQueryContext embeds a search query, prepending the configured query
+// task prefix (e.g. "search_query: " for Nomic models).
 func (c *Client) EmbedQueryContext(ctx context.Context, text string) ([]float32, error) {
 	results, err := c.embedContext(ctx, []string{c.taskPrefix.applyQuery(text)})
 	if err != nil {
@@ -163,7 +151,7 @@ func (c *Client) BatchEmbed(texts []string, batchSize int) ([][]float32, error) 
 		if end > len(texts) {
 			end = len(texts)
 		}
-		batch, err := c.EmbedDocuments(texts[i:end])
+		batch, err := c.EmbedDocumentsContext(context.Background(), texts[i:end])
 		if err != nil {
 			return nil, fmt.Errorf("batch %d-%d: %w", i, end, err)
 		}
