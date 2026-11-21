@@ -12,6 +12,12 @@ All notable changes to `seek` are documented here. This follows
   variant aliases plus the non-Context fallback methods are deleted. The
   pipeline's four and search's two type-assertion fallback branches collapse
   to direct cancellable calls; behavior is unchanged for real providers.
+- **security(embed): cap the HTTP success-path response body at 64 MiB**:
+  `postJSON` now bounds 200 responses with an explicit limit error instead of
+  buffering arbitrarily large provider responses into memory (the error path
+  was already capped at 2 KiB). Bounded realtime/VL batch shapes leave >3x
+  headroom; the async batch-result download is deliberately uncapped since
+  legitimate batch results are unbounded.
 
 ## [0.6.9] - 2026-11-17
 

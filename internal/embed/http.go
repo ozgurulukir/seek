@@ -17,6 +17,15 @@ import (
 // being dumped verbatim into errors/logs (potential secret/response leakage).
 const maxErrorBody = 2 << 10 // 2KiB
 
+// maxResponseBody bounds how many bytes of a successful (HTTP 200) JSON
+// response body are read before an explicit error. Bounded request shapes
+// (realtime batches of 25, VL batches by config) cap legitimate responses at
+// ~20 MB, so 64 MiB leaves >3x headroom while a misconfigured or hostile
+// endpoint can no longer exhaust memory on the success path. The async batch
+// result download does NOT go through postJSON because legitimate batch
+// results are unbounded.
+const maxResponseBody = 64 << 20 // 64 MiB
+
 // boundedErrorSnippet returns at most the first maxErrorBody bytes of an
 // already-read response body, for safe inclusion in error messages.
 func boundedErrorSnippet(body []byte) string {
@@ -30,8 +39,9 @@ func boundedErrorSnippet(body []byte) string {
 // marshal req, POST it as JSON with a Bearer Authorization header, require
 // HTTP 200, and unmarshal the body into resp. Transport and status errors
 // carry opName ("embedding", "vl", "ocr", "rerank") as their prefix; non-200
-// bodies are capped at maxErrorBody so provider output can't flood logs.
-// An empty apiKey omits the Authorization header (open endpoints).
+// bodies are capped at maxErrorBody so provider output can't flood logs, and
+// 200 bodies are capped at maxResponseBody so a misconfigured endpoint can't
+// exhaust memory. An empty apiKey omits the Authorization header (open endpoints).
 func postJSON(ctx context.Context, httpClient *http.Client, endpoint, apiKey, opName string, req, resp any) error {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -57,9 +67,12 @@ func postJSON(ctx context.Context, httpClient *http.Client, endpoint, apiKey, op
 		return fmt.Errorf("%s API %d: %s", opName, respMsg.StatusCode, string(snippet))
 	}
 
-	respBody, err := io.ReadAll(respMsg.Body)
+	respBody, err := io.ReadAll(io.LimitReader(respMsg.Body, maxResponseBody+1))
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
+	}
+	if len(respBody) > maxResponseBody {
+		return fmt.Errorf("%s API response exceeds %d MiB limit", opName, maxResponseBody>>20)
 	}
 	if err := json.Unmarshal(respBody, resp); err != nil {
 		return fmt.Errorf("parse response: %w", err)
