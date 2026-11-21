@@ -473,7 +473,7 @@ func embedBatchContext(ctx context.Context, db *store.Store, client embed.BatchE
 	progress := func(status string, elapsed time.Duration) {
 		log.Printf("\r  [%s] %s", elapsed.Round(time.Second), status)
 	}
-	embeddings, err := client.BatchEmbedAsyncContext(ctx, texts, progress)
+	embeddings, err := client.BatchEmbedAsyncContext(ctx, texts, progress, log)
 	log.Printf("\n")
 	if err != nil {
 		return 0, fmt.Errorf("batch embed: %w", err)

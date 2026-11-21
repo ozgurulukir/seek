@@ -360,7 +360,7 @@ func TestStdoutLogger_Printf(t *testing.T) {
 
 type fakeBatchEmbedder struct{}
 
-func (fakeBatchEmbedder) BatchEmbedAsyncContext(ctx context.Context, texts []string, onProgress func(string, time.Duration)) ([][]float32, error) {
+func (fakeBatchEmbedder) BatchEmbedAsyncContext(ctx context.Context, texts []string, onProgress func(string, time.Duration), warn embed.WarnLogger) ([][]float32, error) {
 	embeddings := make([][]float32, len(texts))
 	for i := range embeddings {
 		embeddings[i] = []float32{0.1, 0.2, 0.3}

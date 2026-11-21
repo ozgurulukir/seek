@@ -22,6 +22,15 @@ All notable changes to `seek` are documented here. This follows
   the lazy, memoized enrichment-identity resolution once. Persisted
   fingerprints, statuses, and warning cadence are byte-identical; new
   decision-table tests pin the recorder's branches.
+- **refactor(app): one shared nil-dependency guard for both services**: the
+  two "mirroring" `requireDeps` copies (Add/Collection services) collapse
+  into a shared `depView`/`notConfigured` helper; error messages are
+  byte-identical (pinned by guards_test).
+- **refactor(embed): route the batch-download warning through a WarnLogger seam**:
+  the partial-failure summary emitted during async batch downloads was the
+  only remaining stdlib-`log` site in library code (timestamped and
+  un-silenceable); it now flows through the caller's logger (pipeline passes
+  its own quiet-aware logger), and a nil logger discards it.
 - **refactor(embed): make context-native cancellation the required embed capability**:
   the six embed capability interfaces (`QueryEmbedder`, `VLQueryEmbedder`,
   `DocumentEmbedder`, `BatchEmbedder`, `VLTextBatcher`, `VLImageBatcher`) now
