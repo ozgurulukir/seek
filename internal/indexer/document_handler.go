@@ -73,14 +73,12 @@ const (
 )
 
 func (idx *Indexer) syncDocumentFile(col *store.Collection, f source.DocumentFile, ext extractor.Extractor) docSyncStatus {
-	existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, f.Path)
-	if err == nil && existing.ContentHash == f.ContentHash {
-		if existing.Mtime != f.Mtime {
-			if err := idx.db.UpdateDocumentMtimeContext(idx.ctx(), existing.ID, f.Mtime); err != nil {
-				idx.recordFailure(f.Path, "persistence", err)
-				return docStatusFailed
-			}
-		}
+	unchanged, err := idx.skipUnchanged(col, f.Path, f.ContentHash, f.Mtime)
+	if err != nil {
+		idx.recordFailure(f.Path, "persistence", err)
+		return docStatusFailed
+	}
+	if unchanged {
 		return docStatusSkipped
 	}
 	if !ext.Supports(f.Path) {
