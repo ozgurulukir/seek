@@ -6,10 +6,12 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"github.com/viterin/vek/vek32"
 	"math"
 	"sort"
+
+	"github.com/viterin/vek/vek32"
 )
 
 // Vector semantic search and the HNSW index sync lifecycle. Extracted from
@@ -141,6 +143,56 @@ func (s *Store) syncVectorIndexFullContext(ctx context.Context) (int, error) {
 	return added, nil
 }
 
+// vectorRowQuerier is satisfied by both *sql.DB and *sql.Tx.
+type vectorRowQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// purgeVectorEntries removes the vector-graph entries of every embedded chunk
+// matched by query, streaming the ID scan so a large purge never materializes
+// an ID list. It is called INSIDE the deleting transaction, before the chunk
+// rows are removed: if the transaction later rolls back, the rows survive and
+// the next incremental sync simply re-adds the deleted IDs (self-healing).
+// Backends without a safe per-id Delete (HNSW — coder/hnsw v0.6.1 Delete leaks
+// deleted nodes into Search results and panics nondeterministically, see
+// hnswIndex.Delete) are skipped and left to the Len()>dbCount full-rebuild
+// heuristic in SyncVectorIndexIncrementalContext (audit T6, 2026-11-21).
+func (s *Store) purgeVectorEntries(ctx context.Context, q vectorRowQuerier, query string, args ...any) error {
+	idx := s.vector()
+	if idx == nil {
+		return nil
+	}
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("scan vector entries to purge: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("scan vector purge id: %w", err)
+		}
+		if !idx.Contains(id) {
+			continue
+		}
+		if err := idx.Delete(id); err != nil {
+			if errors.Is(err, ErrVectorDeleteUnsupported) {
+				// Backend (HNSW) purges stale entries via the full-rebuild
+				// heuristic instead; leave this entry to it.
+				continue
+			}
+			return fmt.Errorf("delete vector entry %d: %w", id, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate vector purge ids: %w", err)
+	}
+	return nil
+}
+
 // SyncVectorIndexIncremental adds newly embedded chunks that are not yet in the vector index.
 // If the vector index is empty or contains stale entries from deleted documents, it runs a full sync.
 // It scans only chunk IDs first to avoid loading megabytes of embedding BLOBs into memory.
@@ -162,8 +214,9 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 		return 0, err
 	}
 
-	// If index has more entries than DB has embedded chunks, chunks were deleted;
-	// perform full sync to purge stale entries from the HNSW graph.
+	// Safety net (restore paths, crash windows between a SQLite delete and its
+	// graph purge): if the index has more entries than the DB has embedded
+	// chunks, chunks were deleted; perform a full sync to purge stale entries.
 	if s.vector().Len() > dbCount {
 		return s.syncVectorIndexFullContext(ctx)
 	}

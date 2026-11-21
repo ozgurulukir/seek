@@ -134,6 +134,9 @@ func (s *Store) DeleteCollection(id int64) error {
 	if _, err := tx.Exec(`DELETE FROM documents_fts WHERE rowid IN (SELECT id FROM documents WHERE collection_id = ?)`, id); err != nil {
 		return fmt.Errorf("delete fts: %w", err)
 	}
+	if err := s.purgeVectorEntries(context.Background(), tx, `SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id WHERE d.collection_id = ? AND c.embedding IS NOT NULL`, id); err != nil {
+		return fmt.Errorf("purge vector entries: %w", err)
+	}
 	if _, err := tx.Exec(`DELETE FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE collection_id = ?)`, id); err != nil {
 		return fmt.Errorf("delete chunks: %w", err)
 	}

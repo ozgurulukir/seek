@@ -57,7 +57,7 @@ func (s *Store) writeIndex(ctx context.Context, req DocumentIndex, replace bool)
 	}
 	defer tx.Rollback()
 
-	docID, err := writeIndexInTx(ctx, tx, req, replace, s.compressionEnabled, s.compressionLevel, time.Now().UTC().Format(time.RFC3339))
+	docID, err := writeIndexInTx(ctx, s, tx, req, replace, s.compressionEnabled, s.compressionLevel, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return 0, err
 	}
@@ -91,7 +91,7 @@ func (s *Store) UpsertAndReplaceIndexBatchContext(ctx context.Context, reqs []Do
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
 		for _, req := range reqs[start:end] {
-			if _, err := writeIndexInTx(ctx, tx, req, true, s.compressionEnabled, s.compressionLevel, now); err != nil {
+			if _, err := writeIndexInTx(ctx, s, tx, req, true, s.compressionEnabled, s.compressionLevel, now); err != nil {
 				return errors.Join(err, tx.Rollback())
 			}
 		}
@@ -102,7 +102,7 @@ func (s *Store) UpsertAndReplaceIndexBatchContext(ctx context.Context, reqs []Do
 	return nil
 }
 
-func writeIndexInTx(ctx context.Context, tx *sql.Tx, req DocumentIndex, replace bool, compressionEnabled bool, compressionLevel int, now string) (int64, error) {
+func writeIndexInTx(ctx context.Context, s *Store, tx *sql.Tx, req DocumentIndex, replace bool, compressionEnabled bool, compressionLevel int, now string) (int64, error) {
 	var docID int64
 	err := tx.QueryRowContext(ctx, `
 		INSERT INTO documents (collection_id, path, title, content_hash, mtime, line_count, created_at, updated_at)
@@ -150,6 +150,13 @@ func writeIndexInTx(ctx context.Context, tx *sql.Tx, req DocumentIndex, replace 
 	}
 
 	if replace {
+		// Remove the replaced chunks' vector-graph entries in the same
+		// transaction: without this, the stale entries survived until the
+		// Len()>dbCount heuristic triggered a full rebuild, displacing live
+		// search results in the window (audit T6, 2026-11-21).
+		if err := s.purgeVectorEntries(ctx, tx, `SELECT id FROM chunks WHERE document_id = ? AND embedding IS NOT NULL`, docID); err != nil {
+			return 0, fmt.Errorf("purge vector entries: %w", err)
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM chunks WHERE document_id = ?`, docID); err != nil {
 			return 0, fmt.Errorf("delete chunks: %w", err)
 		}

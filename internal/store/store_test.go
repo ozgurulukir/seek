@@ -323,18 +323,22 @@ func TestSyncVectorIndexIncremental(t *testing.T) {
 		t.Errorf("expected index length 2, got %d", vi.Len())
 	}
 
-	// 4. Delete document (and its chunks) -> verify ghost cleanup on next sync
+	// 4. Delete document (and its chunks) -> the delete path purges the
+	// graph entries in the same transaction (audit T6), so the index is
+	// immediately consistent; the Len()>dbCount full-rebuild heuristic
+	// remains only a safety net.
 	if err := store.DeleteDocumentContext(context.Background(), docID); err != nil {
 		t.Fatalf("DeleteDocument: %v", err)
 	}
-	// At this point vi still has 2 vectors, but DB has 0 embedded chunks.
-	// Next incremental sync should detect vi.Len() > dbCount and purge stale vectors.
+	if vi.Len() != 0 {
+		t.Errorf("expected index length 0 immediately after delete, got %d", vi.Len())
+	}
 	_, err = store.SyncVectorIndexIncremental()
 	if err != nil {
 		t.Fatalf("SyncVectorIndexIncremental after delete: %v", err)
 	}
 	if vi.Len() != 0 {
-		t.Errorf("expected index length 0 after ghost purge, got %d", vi.Len())
+		t.Errorf("expected index length 0 after post-delete sync, got %d", vi.Len())
 	}
 }
 

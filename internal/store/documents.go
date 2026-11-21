@@ -93,6 +93,9 @@ func (s *Store) DeleteDocumentContext(ctx context.Context, docID int64) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM documents_fts WHERE rowid = ?`, docID); err != nil {
 		return fmt.Errorf("delete fts entry: %w", err)
 	}
+	if err := s.purgeVectorEntries(ctx, tx, `SELECT id FROM chunks WHERE document_id = ? AND embedding IS NOT NULL`, docID); err != nil {
+		return fmt.Errorf("purge vector entries: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM chunks WHERE document_id = ?`, docID); err != nil {
 		return fmt.Errorf("delete chunks: %w", err)
 	}
@@ -128,6 +131,9 @@ func (s *Store) DeleteOrphansContext(ctx context.Context, collectionID int64, li
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM documents_fts WHERE rowid IN (SELECT id FROM documents WHERE collection_id = ?)`, collectionID); err != nil {
 			return 0, fmt.Errorf("delete orphan fts: %w", err)
+		}
+		if err := s.purgeVectorEntries(ctx, tx, `SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id WHERE d.collection_id = ? AND c.embedding IS NOT NULL`, collectionID); err != nil {
+			return 0, fmt.Errorf("purge vector entries: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE collection_id = ?)`, collectionID); err != nil {
 			return 0, fmt.Errorf("delete orphan chunks: %w", err)
@@ -197,6 +203,9 @@ func (s *Store) DeleteOrphansContext(ctx context.Context, collectionID int64, li
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM documents_fts WHERE rowid IN ("+inClause+")", args...); err != nil {
 			return 0, fmt.Errorf("delete orphan fts: %w", err)
+		}
+		if err := s.purgeVectorEntries(ctx, tx, "SELECT id FROM chunks WHERE document_id IN ("+inClause+") AND embedding IS NOT NULL", args...); err != nil {
+			return 0, fmt.Errorf("purge vector entries: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM chunks WHERE document_id IN ("+inClause+")", args...); err != nil {
 			return 0, fmt.Errorf("delete orphan chunks: %w", err)
