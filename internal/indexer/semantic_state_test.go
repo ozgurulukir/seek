@@ -160,7 +160,7 @@ func TestSemanticStateRecorderSyncOutcome(t *testing.T) {
 			db, cfg, docID := recorderTestDoc(t)
 			enabledCfg(cfg, "http://127.0.0.1:1")
 			cfg.Config.Semantic.Enabled = tt.enabled
-			cap := &warnCapture{}
+			warns := &warnCapture{}
 
 			fake := healthyFake()
 			fake.healthOk = !tt.healthFails
@@ -168,7 +168,7 @@ func TestSemanticStateRecorderSyncOutcome(t *testing.T) {
 			if tt.noProvider {
 				provider = nil
 			}
-			rec := newSemanticStateRecorder(db, cfg, func() semantic.Provider { return provider }, cap.warnf)
+			rec := newSemanticStateRecorder(db, cfg, func() semantic.Provider { return provider }, warns.warnf)
 
 			docIDArg := docID
 			if tt.zeroID {
@@ -195,10 +195,10 @@ func TestSemanticStateRecorderSyncOutcome(t *testing.T) {
 			if !tt.wantFP && st.Fingerprint != "" {
 				t.Fatalf("fingerprint = %q, want empty", st.Fingerprint)
 			}
-			if len(cap.got) != tt.wantWarns {
-				t.Fatalf("warnings after two calls = %d (%v), want %d", len(cap.got), cap.got, tt.wantWarns)
+			if len(warns.got) != tt.wantWarns {
+				t.Fatalf("warnings after two calls = %d (%v), want %d", len(warns.got), warns.got, tt.wantWarns)
 			}
-			for _, w := range cap.got {
+			for _, w := range warns.got {
 				if !strings.Contains(w, tt.wantWarnSub) {
 					t.Fatalf("warning %q does not contain %q", w, tt.wantWarnSub)
 				}
@@ -305,11 +305,11 @@ func TestSemanticStateRecorderBasisMemoized(t *testing.T) {
 
 	// Per-document desired fingerprint, a Current write, an Error write, and
 	// another fingerprint must all share the single resolved basis.
-	if _, ok := rec.desiredFingerprint(ctx, chunks); !ok {
-		t.Fatal("desiredFingerprint reported unresolved basis")
+	if _, err := rec.desiredFingerprint(ctx, chunks); err != nil {
+		t.Fatalf("desiredFingerprint: %v", err)
 	}
-	if _, ok := rec.desiredFingerprint(ctx, chunks); !ok {
-		t.Fatal("second desiredFingerprint reported unresolved basis")
+	if _, err := rec.desiredFingerprint(ctx, chunks); err != nil {
+		t.Fatalf("second desiredFingerprint: %v", err)
 	}
 	if err := rec.RecordBackfillCurrent(ctx, docID, "h", chunks, nil); err != nil {
 		t.Fatalf("RecordBackfillCurrent: %v", err)

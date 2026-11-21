@@ -274,16 +274,20 @@ func (r *semanticStateRecorder) RecordBackfillError(ctx context.Context, docID i
 }
 
 // desiredFingerprint returns the full desired fingerprint (identity +
-// chunk-based content hash) for the per-document skip check, reporting
-// ok=false when the basis is unresolved.
-func (r *semanticStateRecorder) desiredFingerprint(ctx context.Context, chunks []store.IndexChunk) (string, bool) {
-	basis, ok, _ := r.resolve(ctx)
+// chunk-based content hash) for the per-document skip check, reporting an
+// error when the basis is unresolved — the same wrapping as the
+// RecordBackfill* methods.
+func (r *semanticStateRecorder) desiredFingerprint(ctx context.Context, chunks []store.IndexChunk) (string, error) {
+	basis, ok, err := r.resolve(ctx)
 	if !ok {
-		return "", false
+		if err != nil {
+			return "", fmt.Errorf("semantic basis unresolved: %w", err)
+		}
+		return "", fmt.Errorf("semantic basis unresolved: no provider")
 	}
 	b := basis
 	b.ContentHash = semanticContentHash(chunks)
-	return b.Compute(), true
+	return b.Compute(), nil
 }
 
 // semanticContentHash derives a stable per-document content hash over the

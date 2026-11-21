@@ -128,12 +128,12 @@ func (idx *Indexer) backfillDocument(ctx context.Context, rec *semanticStateReco
 	// Per-document desired fingerprint: the identity basis plus a content
 	// hash over the same readable chunks the semantic service sees. A cached
 	// fingerprint that already matches is "current" — nothing to do.
-	desiredFP, ok := rec.desiredFingerprint(ctx, chunks)
-	if !ok {
+	desiredFP, err := rec.desiredFingerprint(ctx, chunks)
+	if err != nil {
 		// Unreachable after BackfillSemantic's resolve gate (the basis is
 		// memoized for the pass), but guard honestly rather than writing a
 		// fingerprint against nothing.
-		return fmt.Errorf("semantic basis unresolved for %s", doc.Path)
+		return fmt.Errorf("semantic basis unresolved for %s: %w", doc.Path, err)
 	}
 	if cand.Fingerprint == desiredFP && cand.Status == store.SemanticStatusCurrent {
 		report.Skipped++
