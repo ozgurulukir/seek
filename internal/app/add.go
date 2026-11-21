@@ -326,29 +326,14 @@ func NewAddCollectionService(s *store.Store, cfg *config.AppConfig) *AddCollecti
 	return &AddCollectionService{store: s, cfg: cfg}
 }
 
-// requireDeps is the canonical nil-dependency guard for AddCollectionService,
-// mirroring CollectionService.requireDeps. Supported names: "store", "cfg".
+// requireDeps is the canonical nil-dependency guard for AddCollectionService.
+// Supported names: "store", "cfg"; the check-and-format logic is shared via
+// depView/notConfigured (see deps.go).
 func (s *AddCollectionService) requireDeps(names ...string) error {
 	if s == nil {
-		return fmt.Errorf("add service: not configured")
+		return notConfigured("add service", nil)
 	}
-	var missing []string
-	for _, n := range names {
-		var ok bool
-		switch n {
-		case "store":
-			ok = s.store != nil
-		case "cfg":
-			ok = s.cfg != nil
-		}
-		if !ok {
-			missing = append(missing, n)
-		}
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("add service: not configured (missing %s)", strings.Join(missing, ", "))
-	}
-	return nil
+	return notConfigured("add service", depView{store: s.store, cfg: s.cfg}.missing(names))
 }
 
 // Add creates the collection described by req and syncs it.
