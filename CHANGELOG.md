@@ -31,6 +31,12 @@ All notable changes to `seek` are documented here. This follows
   only remaining stdlib-`log` site in library code (timestamped and
   un-silenceable); it now flows through the caller's logger (pipeline passes
   its own quiet-aware logger), and a nil logger discards it.
+- **fix(indexer): every file handler records persistence failures in the sync report**:
+  markdown, code, image, and PDF syncs only warned and bumped the failed
+  counter when a document write failed, so the machine-readable
+  `SyncReport.Errors` lost the failing path (only the documents handler kept
+  it); all five file handlers now record `{path, kind: persistence, error}`.
+  The PDF summary line also says "unchanged" like the other handlers.
 - **refactor(embed): make context-native cancellation the required embed capability**:
   the six embed capability interfaces (`QueryEmbedder`, `VLQueryEmbedder`,
   `DocumentEmbedder`, `BatchEmbedder`, `VLTextBatcher`, `VLImageBatcher`) now

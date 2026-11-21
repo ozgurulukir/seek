@@ -36,6 +36,7 @@ func (idx *Indexer) syncCode(col *store.Collection) error {
 		isSkipped, err := idx.indexCodeFile(col, file)
 		if err != nil {
 			idx.warnf("  WARN: %v\n", err)
+			idx.recordFailure(file.Path, "persistence", err)
 			failed++
 			continue
 		}

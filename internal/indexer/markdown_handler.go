@@ -59,6 +59,7 @@ func (idx *Indexer) syncMarkdown(col *store.Collection) error {
 		})
 		if err != nil {
 			idx.warnf("  WARN: index %s: %v\n", f.Path, err)
+			idx.recordFailure(f.Path, "persistence", err)
 			failed++
 			continue
 		}
