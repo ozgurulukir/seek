@@ -5,6 +5,22 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **fix(indexer): surface skip-check persistence failures instead of silently re-indexing**:
+  `skipUnchanged` treated a document-load error the same as "file is new",
+  so a transient DB failure silently degraded every file to a full re-index
+  (including re-embedding). Missing rows (genuinely new documents) still
+  re-index; other load errors now abort the file as a recorded persistence
+  failure, matching the documented skip policy.
+- **refactor(indexer): one `resolveDesired` helper owns the semantic fingerprint derivation**:
+  `RecordBackfillCurrent`, `RecordBackfillError`, and `desiredFingerprint`
+  each duplicated the basis-resolve error wrapping and the identity/content
+  hash assembly; the invariants now exist exactly once.
+- **test(config): pin the hosted/local/ollama provider classification**:
+  `DetectProviderKind` (which feeds the persisted embedding profile and
+  async-batch eligibility) and `isLocalEndpoint` (the loopback/localhost
+  security stance) are now covered by table tests, including lookalike-host
+  and hosts-file-spoofing cases.
+
 - **fix(uninstall): warn when the systemd timer disable or daemon-reload fails**:
   `seek uninstall` silently ignored `systemctl --user disable --now` and
   `daemon-reload` failures on Linux, leaving an active timer behind without a
