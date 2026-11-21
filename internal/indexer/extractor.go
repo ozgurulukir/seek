@@ -54,6 +54,10 @@ func NewOverrideResolver(cfg *config.AppConfig, backend string) (ExtractorResolv
 }
 
 func (r *overrideResolver) Resolve(*store.Collection) (extractor.Extractor, error) {
+	// r.mu is held across construction: resolve is sequential today (sync
+	// runs one pass at a time), and holding it keeps a concurrent Resolve
+	// from double-building — at the cost of blocking on an xberg health
+	// check, which is acceptable for this call pattern.
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.cached != nil {
