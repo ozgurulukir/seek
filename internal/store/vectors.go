@@ -28,6 +28,53 @@ type pendingEmbedding struct {
 	emb []byte
 }
 
+// drainPendingEmbeddings drains one batch of (id, embedding) rows into
+// pendingEmbedding items, skipping empty blobs, and closes the cursor before
+// any decode/Add work runs against it. scanned counts every row seen (empty
+// blobs included) so keyset pagination callers can detect the last batch, and
+// lastScannedID reports the highest row id seen so pagination advances even
+// through all-empty batches. errPrefix names the caller in row-iteration errors.
+func drainPendingEmbeddings(rows *sql.Rows, errPrefix string) (items []pendingEmbedding, scanned int, lastScannedID int64, err error) {
+	items = make([]pendingEmbedding, 0)
+	for rows.Next() {
+		var chunkID int64
+		var embBlob []byte
+		if err := rows.Scan(&chunkID, &embBlob); err != nil {
+			rows.Close()
+			return nil, scanned, lastScannedID, fmt.Errorf("%s: %w", errPrefix, err)
+		}
+		scanned++
+		lastScannedID = chunkID
+		if len(embBlob) == 0 {
+			continue
+		}
+		items = append(items, pendingEmbedding{id: chunkID, emb: embBlob})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, scanned, lastScannedID, fmt.Errorf("%s: %w", errPrefix, err)
+	}
+	rows.Close()
+	return items, scanned, lastScannedID, nil
+}
+
+// addPendingEmbeddings decodes and inserts pending items into idx under the
+// given context, returning how many were added. It is the single ctx-checked
+// decode→Add loop shared by the full and incremental vector syncs.
+func addPendingEmbeddings(ctx context.Context, idx VectorIndex, items []pendingEmbedding) (int, error) {
+	added := 0
+	for i := range items {
+		if err := ctx.Err(); err != nil {
+			return added, err
+		}
+		if err := idx.Add(items[i].id, decodeEmbedding(items[i].emb)); err != nil {
+			return added, err
+		}
+		added++
+	}
+	return added, nil
+}
+
 func (s *Store) syncVectorIndexFullContext(ctx context.Context) (int, error) {
 	current := s.vector()
 	if current == nil {
@@ -67,36 +114,20 @@ func (s *Store) syncVectorIndexFullContext(ctx context.Context) (int, error) {
 			return added, err
 		}
 
-		items := make([]pendingEmbedding, 0, fullSyncBatch)
-		scanned := 0
-		for rows.Next() {
-			var chunkID int64
-			var embBlob []byte
-			if err := rows.Scan(&chunkID, &embBlob); err != nil {
-				rows.Close()
-				return added, err
-			}
-			lastID = chunkID
-			scanned++
-			if len(embBlob) == 0 {
-				continue
-			}
-			items = append(items, pendingEmbedding{id: chunkID, emb: embBlob})
+		items, scanned, batchLastID, err := drainPendingEmbeddings(rows, "sync vector index rows")
+		if err != nil {
+			return added, err
 		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return added, fmt.Errorf("sync vector index rows: %w", err)
+		// Advance the keyset cursor even through batches with empty blobs so
+		// pagination can never stall on a run of all-empty rows.
+		if scanned > 0 {
+			lastID = batchLastID
 		}
-		rows.Close()
 
-		for i := range items {
-			if err := ctx.Err(); err != nil {
-				return added, err
-			}
-			if err := target.Add(items[i].id, decodeEmbedding(items[i].emb)); err != nil {
-				return added, err
-			}
-			added++
+		batchAdded, err := addPendingEmbeddings(ctx, target, items)
+		added += batchAdded
+		if err != nil {
+			return added, err
 		}
 		if scanned < fullSyncBatch {
 			break
@@ -191,39 +222,15 @@ func (s *Store) SyncVectorIndexIncrementalContext(ctx context.Context) (int, err
 			return added, fmt.Errorf("load embeddings batch: %w", err)
 		}
 
-		items := make([]pendingEmbedding, 0, len(batchIDs))
-
-		for rows.Next() {
-			if err := ctx.Err(); err != nil {
-				rows.Close()
-				return added, err
-			}
-			var chunkID int64
-			var embBlob []byte
-			if err := rows.Scan(&chunkID, &embBlob); err != nil {
-				rows.Close()
-				return added, fmt.Errorf("scan chunk %d embedding: %w", chunkID, err)
-			}
-			if len(embBlob) == 0 {
-				continue
-			}
-			items = append(items, pendingEmbedding{id: chunkID, emb: embBlob})
+		items, _, _, err := drainPendingEmbeddings(rows, "load embeddings batch rows")
+		if err != nil {
+			return added, err
 		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return added, fmt.Errorf("load embeddings batch rows: %w", err)
-		}
-		rows.Close()
 
-		for j := range items {
-			if err := ctx.Err(); err != nil {
-				return added, err
-			}
-			emb := decodeEmbedding(items[j].emb)
-			if err := s.vector().Add(items[j].id, emb); err != nil {
-				return added, err
-			}
-			added++
+		batchAdded, err := addPendingEmbeddings(ctx, s.vector(), items)
+		added += batchAdded
+		if err != nil {
+			return added, err
 		}
 	}
 
