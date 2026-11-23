@@ -5,6 +5,15 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **fix(release): pin linux-amd64 release build to ubuntu-24.04 runner**:
+  the `v0.6.10` release binary was built on the floating `ubuntu-latest`
+  runner, which has drifted to Ubuntu 26.04 (glibc 2.43); the resulting
+  binary requires `GLIBC_2.43` and failed to start on hosts with older glibc
+  (e.g. Debian 13 / glibc 2.41), causing the installer smoke test to roll back
+  the install. The release workflow now pins the linux-amd64 build to the
+  stable `ubuntu-24.04` runner (glibc 2.39), keeping released binaries
+  installable across a wider Linux population.
+
 ## [0.6.10] - 2026-11-23
 
 - **fix(indexer): route every per-file failure into `SyncReport.Errors`**:
