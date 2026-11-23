@@ -5,6 +5,8 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-11-23
+
 - **fix(indexer): route every per-file failure into `SyncReport.Errors`**:
   the parser sync's index-write failures, the PDF handler's extraction
   failures, and five conversation-sync failure paths (document lookup, line
