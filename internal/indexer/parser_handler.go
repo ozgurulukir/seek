@@ -101,6 +101,7 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 		})
 		if err != nil {
 			idx.warnf("  WARN: index %s: %v\n", docPath, err)
+			idx.recordFailure(docPath, "persistence", err)
 			failed++
 			continue
 		}

@@ -5,6 +5,13 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **fix(indexer): route every per-file failure into `SyncReport.Errors`**:
+  the parser sync's index-write failures, the PDF handler's extraction
+  failures, and five conversation-sync failure paths (document lookup, line
+  count, parse, base-seq lookup, index write) only warned and bumped the
+  `failed` counter — the failing path never reached the machine-readable
+  `SyncReport.Errors` (PR #209 covered the other handlers; these were missed).
+  Tests pin the parser, PDF, and conversation paths.
 - **test(pipeline): cover the Sync orchestration seam**:
   `Pipeline.Sync` (nil-guard, indexer handoff, CollectionID defaulting, the
   `SkipEmbed` short-circuit, and error/report propagation from the embed
