@@ -22,6 +22,9 @@ func TestFileSyncPersistenceFailuresRecordedInReport(t *testing.T) {
 	tests := []struct {
 		name   string
 		addCol func(t *testing.T, db *store.Store, root string) *store.Collection
+		// wantKind defaults to "persistence"; PDF fails earlier, at extract.
+		wantKind        string
+		skipErrContains bool
 	}{
 		{
 			name: "markdown",
@@ -71,6 +74,47 @@ func TestFileSyncPersistenceFailuresRecordedInReport(t *testing.T) {
 				return col
 			},
 		},
+		{
+			name: "claude conversation",
+			addCol: func(t *testing.T, db *store.Store, root string) *store.Collection {
+				// Claude scans ~/.claude/projects; point the home dir at the
+				// temp root so the scan sees a real JSONL session.
+				line := `{"type":"user","message":{"role":"user","content":"Hello there"}}` + "\n"
+				proj := filepath.Join(root, ".claude", "projects", "proj")
+				if err := os.MkdirAll(proj, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(proj, "session.jsonl"), []byte(line), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("HOME", root)
+				t.Setenv("USERPROFILE", root)
+				col, err := db.CreateCollection("conv", store.CollectionTypeClaude, root, "*.jsonl")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return col
+			},
+		},
+		{
+			name: "pdf",
+			addCol: func(t *testing.T, db *store.Store, root string) *store.Collection {
+				// Garbage bytes: the PDF scanner accepts the extension, the
+				// extractor fails, and the handler must record the failure.
+				if err := os.WriteFile(filepath.Join(root, "broken.pdf"), []byte("not a pdf at all\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				col, err := db.CreateCollection("docs", store.CollectionTypePDF, root, "*.pdf")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return col
+			},
+			// The extractor's message for garbage input is an implementation
+			// detail; only the kind and path are pinned here.
+			wantKind:        "extraction",
+			skipErrContains: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -108,11 +152,21 @@ func TestFileSyncPersistenceFailuresRecordedInReport(t *testing.T) {
 				t.Fatalf("report.Errors = %+v, want exactly one persistence entry", report.Errors)
 			}
 			got := report.Errors[0]
-			if got.Kind != "persistence" {
-				t.Errorf("failure kind = %q, want persistence", got.Kind)
+			wantKind := tt.wantKind
+			if wantKind == "" {
+				wantKind = "persistence"
+			}
+			if got.Kind != wantKind {
+				t.Errorf("failure kind = %q, want %s", got.Kind, wantKind)
 			}
 			if got.Path == "" {
 				t.Error("failure path is empty; the report lost the failing file")
+			}
+			if got.Error == "" {
+				t.Error("failure error text is empty")
+			}
+			if tt.skipErrContains {
+				return
 			}
 			if !strings.Contains(got.Error, boom.Error()) {
 				// code's indexCodeFile wraps the write error with its own
