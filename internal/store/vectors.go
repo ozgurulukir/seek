@@ -377,6 +377,26 @@ type chunkRow struct {
 	Collection string
 }
 
+// searchResult projects a chunk row into a SearchResult without a score;
+// callers assign Score themselves (cosine in the linear scan, VectorResult in
+// the HNSW fetch). One constructor keeps the 11 mapped fields from drifting
+// between the two vector-search paths.
+func (r chunkRow) searchResult() SearchResult {
+	return SearchResult{
+		ChunkID:    r.ChunkID,
+		DocumentID: r.DocumentID,
+		Seq:        r.Seq,
+		Title:      r.Title,
+		Path:       r.Path,
+		Collection: r.Collection,
+		Content:    r.Content,
+		ChunkType:  r.ChunkType,
+		ImagePath:  r.ImagePath,
+		StartLine:  r.StartLine,
+		EndLine:    r.EndLine,
+	}
+}
+
 // chunkRowColumns is the SELECT projection matching scanChunkRows. The leading
 // COALESCE placeholder must be bound to ChunkTypeText as the first query arg.
 const chunkRowColumns = `ch.id, ch.document_id, ch.seq, ch.content, ch.content_zstd,
@@ -470,20 +490,8 @@ func (s *Store) linearSearchVectorContext(ctx context.Context, queryEmb []float3
 	for i, r := range chunkRows {
 		emb := decodeEmbedding(embBlobs[i])
 		all = append(all, scored{
-			SearchResult: SearchResult{
-				ChunkID:    r.ChunkID,
-				DocumentID: r.DocumentID,
-				Seq:        r.Seq,
-				Title:      r.Title,
-				Path:       r.Path,
-				Collection: r.Collection,
-				Content:    r.Content,
-				ChunkType:  r.ChunkType,
-				ImagePath:  r.ImagePath,
-				StartLine:  r.StartLine,
-				EndLine:    r.EndLine,
-			},
-			score: cosineSimilarity(queryEmb, emb),
+			SearchResult: r.searchResult(),
+			score:        cosineSimilarity(queryEmb, emb),
 		})
 	}
 
@@ -558,20 +566,9 @@ func (s *Store) fetchSearchResultsContext(ctx context.Context, results []VectorR
 		if !ok {
 			continue
 		}
-		out = append(out, SearchResult{
-			ChunkID:    r.ChunkID,
-			Score:      r.Score,
-			DocumentID: cr.DocumentID,
-			Seq:        cr.Seq,
-			Title:      cr.Title,
-			Path:       cr.Path,
-			Collection: cr.Collection,
-			Content:    cr.Content,
-			ChunkType:  cr.ChunkType,
-			ImagePath:  cr.ImagePath,
-			StartLine:  cr.StartLine,
-			EndLine:    cr.EndLine,
-		})
+		result := cr.searchResult()
+		result.ChunkID, result.Score = r.ChunkID, r.Score
+		out = append(out, result)
 	}
 	return out, nil
 }

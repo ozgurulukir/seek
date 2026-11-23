@@ -281,15 +281,9 @@ func (r ftsRepository) searchContext(ctx context.Context, query string, limit in
 		 WHERE documents_fts MATCH ?`
 	var args []interface{}
 	args = append(args, FTSTitleWeight, query)
-	if filters != nil {
-		clause, fargs, err := filters.ToSQL()
-		if err != nil {
-			return nil, err
-		}
-		if clause != "" {
-			sqlQuery += " AND " + clause
-			args = append(args, fargs...)
-		}
+	sqlQuery, args, err := appendFilterClause(sqlQuery, filters, args)
+	if err != nil {
+		return nil, err
 	}
 	sqlQuery += " ORDER BY bm25(documents_fts, ?, 1.0) LIMIT ?"
 	args = append(args, FTSTitleWeight, limit)
@@ -384,15 +378,9 @@ func (r ftsRepository) countMatchingContext(ctx context.Context, query string, f
 		 WHERE documents_fts MATCH ?`
 	var args []interface{}
 	args = append(args, query)
-	if filters != nil {
-		clause, fargs, err := filters.ToSQL()
-		if err != nil {
-			return 0, err
-		}
-		if clause != "" {
-			sqlQuery += " AND " + clause
-			args = append(args, fargs...)
-		}
+	sqlQuery, args, err := appendFilterClause(sqlQuery, filters, args)
+	if err != nil {
+		return 0, err
 	}
 	var count int64
 	if err := r.db.QueryRowContext(ctx, sqlQuery, args...).Scan(&count); err != nil {
