@@ -119,6 +119,7 @@ func (idx *Indexer) syncPdf(col *store.Collection) error {
 		res, err := ext.Extract(idx.ctx(), f.Path)
 		if err != nil {
 			idx.warnf("  WARN: extract %s: %v\n", f.Path, err)
+			idx.recordFailure(f.Path, "extraction", err)
 			failed++
 			continue
 		}

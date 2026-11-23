@@ -353,6 +353,7 @@ func (idx *Indexer) syncConversation(
 			// trigger a wasteful full re-parse or a spurious failure with no
 			// root cause (review 2026-09-17 L14).
 			idx.warnf("  WARN: look up document %s: %v\n", f.Path, err)
+			idx.recordFailure(f.Path, "persistence", err)
 			failed++
 			continue
 		}
@@ -364,6 +365,7 @@ func (idx *Indexer) syncConversation(
 		lineCount, err := source.CountLinesContext(idx.ctx(), f.Path)
 		if err != nil {
 			idx.warnf("  WARN: count lines %s: %v\n", f.Path, err)
+			idx.recordFailure(f.Path, "scan", err)
 			failed++
 			continue
 		}
@@ -381,6 +383,7 @@ func (idx *Indexer) syncConversation(
 		batch, err := parseFile(f.Path, fromLine)
 		if err != nil {
 			idx.warnf("  WARN: parse %s: %v\n", f.Path, err)
+			idx.recordFailure(f.Path, "scan", err)
 			failed++
 			continue
 		}
@@ -402,6 +405,7 @@ func (idx *Indexer) syncConversation(
 		baseSeq, err := idx.conversationBaseSeq(existing, fromLine, f.Path)
 		if err != nil {
 			idx.warnf("  WARN: %v\n", err)
+			idx.recordFailure(f.Path, "persistence", err)
 			failed++
 			continue
 		}
@@ -430,6 +434,7 @@ func (idx *Indexer) syncConversation(
 		docID, err := idx.writeConversationDocument(request, fromLine)
 		if err != nil {
 			idx.warnf("  WARN: index %s: %v\n", f.Path, err)
+			idx.recordFailure(f.Path, "persistence", err)
 			failed++
 			continue
 		}

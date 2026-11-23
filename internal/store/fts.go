@@ -176,22 +176,9 @@ func rebuildFTSFromDocuments(runner statementRunner) error {
 			}
 			curID, curTitle, started = id, title, true
 		}
-		text := ""
-		if len(contentZstd) > 0 {
-			decomp, err := DecompressString(contentZstd)
-			switch {
-			case err == nil:
-				text = decomp
-			case content.Valid && content.String != "":
-				// A corrupt zstd blob must not silently drop the chunk from
-				// the reconstructed FTS document; fall back to the raw
-				// content column when it survived (review 2026-09-17 L4).
-				text = content.String
-			default:
-				return fmt.Errorf("decompress chunk seq %d of document %d: %w", seq.Int64, curID, err)
-			}
-		} else if content.Valid {
-			text = content.String
+		text := content.String
+		if text, err = decodeChunkText(text, contentZstd, fmt.Sprintf("chunk seq %d of document %d", seq.Int64, curID)); err != nil {
+			return err
 		}
 		if text != "" {
 			if b.Len() > 0 {
