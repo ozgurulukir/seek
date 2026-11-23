@@ -60,3 +60,24 @@ func DecompressString(data []byte) (string, error) {
 	}
 	return string(b), nil
 }
+
+// decodeChunkText resolves a chunk's readable text from its two storage
+// columns. The write path always stores plaintext `content` alongside
+// `content_zstd`, so a corrupt zstd blob falls back to the raw column when it
+// survived; only when both are unusable does it fail loudly. This is the
+// single policy for every chunk-read path (surrounding context, FTS rebuild,
+// vector search, GetChunkContent, chunk listings) — sites must not re-hand-roll
+// their own fallback (review 2026-09-17 L4, audit follow-up).
+func decodeChunkText(raw string, zstd []byte, errLabel string) (string, error) {
+	if len(zstd) == 0 {
+		return raw, nil
+	}
+	decompressed, err := DecompressString(zstd)
+	if err == nil {
+		return decompressed, nil
+	}
+	if raw != "" {
+		return raw, nil
+	}
+	return "", fmt.Errorf("decompress %s: %w", errLabel, err)
+}

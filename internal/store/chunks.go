@@ -61,11 +61,8 @@ func (s *Store) ListChunksForDocumentContext(ctx context.Context, docID int64) (
 		if err := rows.Scan(&c.Seq, &c.Content, &contentZstd, &c.ChunkType, &c.ImagePath, &c.StartLine, &c.EndLine); err != nil {
 			return nil, err
 		}
-		if len(contentZstd) > 0 {
-			c.Content, err = DecompressString(contentZstd)
-			if err != nil {
-				return nil, fmt.Errorf("decompress chunk %d: %w", c.Seq, err)
-			}
+		if c.Content, err = decodeChunkText(c.Content, contentZstd, fmt.Sprintf("chunk %d", c.Seq)); err != nil {
+			return nil, err
 		}
 		chunks = append(chunks, c)
 	}
@@ -139,19 +136,8 @@ func (s *Store) GetSurroundingContextWithContext(ctx context.Context, docID int6
 		if err := rows.Scan(&sNum, &content, &contentZstd, &sLine, &eLine); err != nil {
 			return "", 0, 0, fmt.Errorf("scan surrounding chunk: %w", err)
 		}
-		if len(contentZstd) > 0 {
-			decomp, err := DecompressString(contentZstd)
-			switch {
-			case err == nil:
-				content = decomp
-			case content != "":
-				// Corrupt zstd blob: keep the raw content column rather than
-				// silently dropping the chunk from the context window;
-				// without a usable fallback, fail loudly — mirroring the FTS
-				// rebuild path (review 2026-09-17 L4 follow-up).
-			default:
-				return "", 0, 0, fmt.Errorf("decompress chunk seq %d: %w", sNum, err)
-			}
+		if content, err = decodeChunkText(content, contentZstd, fmt.Sprintf("chunk seq %d", sNum)); err != nil {
+			return "", 0, 0, err
 		}
 		if content != "" {
 			contents = append(contents, content)
@@ -397,11 +383,8 @@ func (s *Store) GetChunksWithoutEmbeddingForCollectionContext(ctx context.Contex
 		if err := rows.Scan(&c.ID, &c.DocumentID, &c.Seq, &c.Content, &contentZstd, &c.ChunkType, &c.ImagePath); err != nil {
 			return nil, err
 		}
-		if len(contentZstd) > 0 {
-			c.Content, err = DecompressString(contentZstd)
-			if err != nil {
-				return nil, fmt.Errorf("decompress chunk %d: %w", c.ID, err)
-			}
+		if c.Content, err = decodeChunkText(c.Content, contentZstd, fmt.Sprintf("chunk %d", c.ID)); err != nil {
+			return nil, err
 		}
 		chunks = append(chunks, c)
 	}
@@ -448,11 +431,8 @@ func (s *Store) getChunksWithoutEmbeddingContext(ctx context.Context, force bool
 		if err := rows.Scan(&ch.ID, &ch.DocumentID, &ch.Seq, &ch.Content, &contentZstd, &ch.ChunkType, &ch.ImagePath); err != nil {
 			return nil, err
 		}
-		if len(contentZstd) > 0 {
-			ch.Content, err = DecompressString(contentZstd)
-			if err != nil {
-				return nil, fmt.Errorf("decompress chunk %d: %w", ch.ID, err)
-			}
+		if ch.Content, err = decodeChunkText(ch.Content, contentZstd, fmt.Sprintf("chunk %d", ch.ID)); err != nil {
+			return nil, err
 		}
 		chunks = append(chunks, ch)
 	}
