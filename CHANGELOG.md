@@ -5,6 +5,8 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+## [0.6.11] - 2026-11-23
+
 - **fix(release): pin linux-amd64 release build to ubuntu-24.04 runner**:
   the `v0.6.10` release binary was built on the floating `ubuntu-latest`
   runner, which has drifted to Ubuntu 26.04 (glibc 2.43); the resulting
