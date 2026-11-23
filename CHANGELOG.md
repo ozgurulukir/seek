@@ -12,6 +12,15 @@ All notable changes to `seek` are documented here. This follows
   `failed` counter — the failing path never reached the machine-readable
   `SyncReport.Errors` (PR #209 covered the other handlers; these were missed).
   Tests pin the parser, PDF, and conversation paths.
+- **fix(store): one chunk-text decode policy behind `decodeChunkText`**:
+  the seven chunk-read paths (chunk listings, surrounding context, FTS
+  rebuild, vector scan, `GetChunkContent`) each hand-rolled their own zstd
+  fallback with divergent error semantics. They now share one seam: a corrupt
+  zstd blob falls back to the raw `content` column when it survived (the
+  write path always stores plaintext alongside the blob), and fails loudly
+  only when both are unusable. The five paths that previously propagated the
+  decompress error now also recover via the raw column — a rare-path behavior
+  change that turns query failures into correct results.
 - **test(pipeline): cover the Sync orchestration seam**:
   `Pipeline.Sync` (nil-guard, indexer handoff, CollectionID defaulting, the
   `SkipEmbed` short-circuit, and error/report propagation from the embed

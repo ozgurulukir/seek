@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
 
 // The Store is the compatibility facade exposed to the rest of the
@@ -91,14 +92,11 @@ func (r chunkRepository) contentContext(ctx context.Context, chunkID int64) (str
 	if err := r.db.QueryRowContext(ctx, `SELECT content, content_zstd FROM chunks WHERE id = ?`, chunkID).Scan(&content, &compressed); err != nil {
 		return "", err
 	}
-	if len(compressed) == 0 {
-		return content, nil
-	}
-	decompressed, err := DecompressString(compressed)
+	content, err := decodeChunkText(content, compressed, fmt.Sprintf("chunk %d", chunkID))
 	if err != nil {
 		return "", err
 	}
-	return decompressed, nil
+	return content, nil
 }
 
 type ftsRepository struct{ db *sql.DB }

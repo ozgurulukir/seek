@@ -422,11 +422,8 @@ func scanChunkRows(rows *sql.Rows, wantEmbedding bool) ([]chunkRow, [][]byte, er
 		if err != nil {
 			return nil, nil, fmt.Errorf("scan chunk row: %w", err)
 		}
-		if len(contentZstd) > 0 {
-			r.Content, err = DecompressString(contentZstd)
-			if err != nil {
-				return nil, nil, fmt.Errorf("decompress chunk %d: %w", r.ChunkID, err)
-			}
+		if r.Content, err = decodeChunkText(r.Content, contentZstd, fmt.Sprintf("chunk %d", r.ChunkID)); err != nil {
+			return nil, nil, err
 		}
 		out = append(out, r)
 		if wantEmbedding {
