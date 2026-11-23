@@ -50,7 +50,7 @@ jobs:
           # Linux x86_64
           - os: linux
             arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             artifact_name: linux-amd64
             archive_ext: tar.gz
 
