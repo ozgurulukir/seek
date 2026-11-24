@@ -188,7 +188,7 @@ func (c *SearchCmd) runAutocomplete(cfg *config.AppConfig) (err error) {
 		lead := query[:lastSpace+1]
 		word := query[lastSpace+1:]
 		if word != "" {
-			completions, err := db.AutocompleteTerms(word, c.AutocompleteMax)
+			completions, err := db.AutocompleteTerms(word, clampAutocompleteMax(c.AutocompleteMax))
 			if err != nil {
 				return fmt.Errorf("autocomplete: %w", err)
 			}
@@ -198,7 +198,7 @@ func (c *SearchCmd) runAutocomplete(cfg *config.AppConfig) (err error) {
 		}
 	} else {
 		var err error
-		results, err = db.AutocompleteTerms(query, c.AutocompleteMax)
+		results, err = db.AutocompleteTerms(query, clampAutocompleteMax(c.AutocompleteMax))
 		if err != nil {
 			return fmt.Errorf("autocomplete: %w", err)
 		}

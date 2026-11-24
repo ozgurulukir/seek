@@ -2,6 +2,7 @@ package cmd_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -178,5 +179,57 @@ func TestSearchCmd_Execution(t *testing.T) {
 	})
 	if !strings.Contains(out, "find search") {
 		t.Errorf("autocomplete output missing 'find search' suggestion, got: %q", out)
+	}
+}
+
+// TestSearchCmd_AutocompleteClampsMax proves the CLI path applies the same
+// 100-result ceiling as MCP, so a huge --autocomplete-max cannot materialize
+// the entire vocabulary.
+func TestSearchCmd_AutocompleteClampsMax(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		storetest.SkipIfFTS5Disabled(t, err)
+		t.Fatal(err)
+	}
+	defer db.Close()
+	col, err := db.CreateCollection("notes", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := db.UpsertDocument(col.ID, "/tmp/vocab.md", "Vocab", "h1", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for i := 0; i < 150; i++ {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "term%03d", i)
+	}
+	if err := db.UpsertFTSContext(context.Background(), docID, "Vocab", b.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.AppConfig{DBPath: dbPath}
+	autoCmd := &cmd.SearchCmd{
+		Query:           "term",
+		Autocomplete:    true,
+		AutocompleteMax: 10000,
+	}
+	out := captureStdout(t, func() {
+		if err := autoCmd.Run(cfg); err != nil {
+			t.Errorf("SearchCmd.Run autocomplete failed: %v", err)
+		}
+	})
+	count := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "term") {
+			count++
+		}
+	}
+	if count != 100 {
+		t.Fatalf("autocomplete suggestions = %d, want the 100-result ceiling; output: %q", count, out)
 	}
 }

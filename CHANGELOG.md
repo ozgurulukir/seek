@@ -86,7 +86,8 @@ All notable changes to `seek` are documented here. This follows
   the real JSON path with `-C 1` and asserts identical, genuinely widened spans.
 - **fix(mcp): cap `seek_autocomplete`'s `max` at 100**: large values were
   forwarded uncapped, letting a client force the whole FTS vocabulary to be
-  materialized. The cap now mirrors the `seek_search` result cap.
+  materialized. The cap now mirrors the `seek_search` result cap; the CLI's
+  `seek search --autocomplete` uses the same shared clamp.
 - **fix(cli): sort aggregation keys before human rendering**: Go map iteration
   produced nondeterministic section order in `seek search --aggs`; specs are
   now sorted, with a regression test pinning stable output.

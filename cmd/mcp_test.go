@@ -389,8 +389,8 @@ func TestMCPAutocompleteMax(t *testing.T) {
 		{100000, maxMCPResults},
 	}
 	for _, tc := range cases {
-		if got := mcpAutocompleteMax(tc.in); got != tc.want {
-			t.Errorf("mcpAutocompleteMax(%d) = %d, want %d", tc.in, got, tc.want)
+		if got := clampAutocompleteMax(tc.in); got != tc.want {
+			t.Errorf("clampAutocompleteMax(%d) = %d, want %d", tc.in, got, tc.want)
 		}
 	}
 }
