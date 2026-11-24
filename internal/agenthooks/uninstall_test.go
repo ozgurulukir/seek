@@ -172,3 +172,34 @@ func TestUninstallHook_RemovesOnlyRequestedTargetInSharedEntry(t *testing.T) {
 		})
 	}
 }
+
+// TestUninstallHook_MissingTargetLeavesOtherTargetIntact covers the case the
+// shared-entry test cannot: only one target is installed, and uninstalling a
+// different target must be an honest no-op rather than removing the installed
+// hook through the broad legacy matcher.
+func TestUninstallHook_MissingTargetLeavesOtherTargetIntact(t *testing.T) {
+	const content = `{"hooks": {"Stop": [
+		{"matcher": "", "hooks": [
+			{"type": "command", "command": "seek hooks sync --agent codex"}
+		]}
+	]}}`
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	claude := Target{name: "claude", agent: "claude", settingsPath: func() string { return path }, event: "Stop"}
+	codex := Target{name: "codex", agent: "codex", settingsPath: func() string { return path }, event: "Stop"}
+
+	var out strings.Builder
+	if err := uninstallHook(claude, &out); err != nil {
+		t.Fatalf("uninstallHook(claude): %v", err)
+	}
+	if !strings.Contains(out.String(), "not installed") {
+		t.Errorf("output = %q, want a not-installed message", out.String())
+	}
+	settings := readTestSettings(t, path)
+	if findTargetSeekHookIndex(settings, codex) < 0 {
+		data, _ := os.ReadFile(path)
+		t.Fatalf("codex hook was removed while uninstalling claude: %s", data)
+	}
+}

@@ -68,7 +68,9 @@ All notable changes to `seek` are documented here. This follows
   targets shared one matcher entry, uninstall used the broad seek matcher and
   removed the first seek command regardless of target. Uninstall now prefers
   the target-specific matcher and keeps the broad matcher only for legacy
-  commands.
+  commands. The fallback now skips another target's command, so uninstalling a
+  target that is not installed no longer deletes a different target's hook or
+  claims success.
 - **fix(hooks): collision-resistant settings backups with bounded retention**:
   backup names used a second-resolution timestamp, so two processes could
   clobber each other's snapshot. Names now include nanoseconds and the PID,

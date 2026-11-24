@@ -206,8 +206,15 @@ func uninstallHook(t Target, out io.Writer) error {
 		return nil
 	}
 
-	if _, err := stripSeekHookFromEntry(settings, t.event, idx, &t); err != nil {
+	removed, err := stripSeekHookFromEntry(settings, t.event, idx, &t)
+	if err != nil {
 		return err
+	}
+	if !removed {
+		// The broad matcher found another target's hook, not a legacy command
+		// belonging to this target. Report an honest no-op.
+		fmt.Fprintf(out, "%s hook not installed.\n", t.name)
+		return nil
 	}
 
 	if err := WriteSettings(path, settings); err != nil {
@@ -263,15 +270,17 @@ func stripSeekHookFromEntry(settings map[string]interface{}, event string, idx i
 				continue
 			}
 			command, _ := hookMap["command"].(string)
-			if isSeekHookCommand(command) {
+			if isSeekHookCommand(command) && (target == nil || !seekCommandBelongsToOtherTarget(command, *target)) {
 				removeIdx = hookIdx
 				break
 			}
 		}
 	}
-	if removeIdx >= 0 {
-		hookList = append(hookList[:removeIdx], hookList[removeIdx+1:]...)
+	removed := removeIdx >= 0
+	if !removed {
+		return false, nil
 	}
+	hookList = append(hookList[:removeIdx], hookList[removeIdx+1:]...)
 
 	if len(hookList) == 0 {
 		eventHooks = append(eventHooks[:idx], eventHooks[idx+1:]...)
@@ -283,5 +292,5 @@ func stripSeekHookFromEntry(settings map[string]interface{}, event string, idx i
 	} else {
 		hooks[event] = eventHooks
 	}
-	return true, nil
+	return removed, nil
 }
