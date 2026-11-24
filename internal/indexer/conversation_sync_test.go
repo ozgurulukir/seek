@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ozgurulukir/seek/internal/semantic"
 	"github.com/ozgurulukir/seek/internal/source"
 	"github.com/ozgurulukir/seek/internal/store"
 )
@@ -366,6 +367,70 @@ func TestSyncConversationAppendCarriesSemanticFields(t *testing.T) {
 	}
 	if st := states[doc.ID]; st.Status != store.SemanticStatusCurrent || st.Fingerprint == "" {
 		t.Fatalf("semantic state after append = %+v, want current with a fingerprint", st)
+	}
+}
+
+// TestSyncConversationAppendDropsStaleSemanticFields pins the coupling with
+// the store PR: an append re-enriches over the whole conversation and writes a
+// complete field map, so a field the new pass no longer produces must be
+// removed rather than lingering from the old pass.
+func TestSyncConversationAppendDropsStaleSemanticFields(t *testing.T) {
+	idx, db, col := cleanupTestIndexer(t)
+	col.Type = store.CollectionTypeClaude
+
+	fake := &fakeSemanticProvider{
+		healthOk: true,
+		health:   semanticHealthAll(),
+		response: semantic.Response{
+			Results: []semantic.TagResult{{
+				ID: 0, Tags: []string{"golang"},
+				Topics: []semantic.Topic{{Label: "topic-1", Score: 0.9}},
+			}},
+			CorpusLang: "en",
+		},
+	}
+	idx.WithSemanticProvider(fake)
+
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(path, []byte("alpha question\nalpha answer\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scanFiles, parseFile, hash := syncConversationFixture(t, idx, col, path)
+
+	if err := idx.syncConversation(col, scanFiles, parseFile, nil); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := db.GetDocumentContext(context.Background(), col.ID, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := db.FastFields().Get(doc.ID, "topics"); err != nil || v != "topic-1" {
+		t.Fatalf("topics after initial sync = %v (%v), want topic-1", v, err)
+	}
+
+	// The second pass produces tags but no topics. The append must replace the
+	// stored field set, not merge into it.
+	if err := os.WriteFile(path, []byte("alpha question\nalpha answer\nbeta question\nbeta answer\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	*hash = "hash-v2"
+	fake.response = semantic.Response{
+		Results:    []semantic.TagResult{{ID: 0, Tags: []string{"rust"}}},
+		CorpusLang: "en",
+	}
+
+	if err := idx.syncConversation(col, scanFiles, parseFile, nil); err != nil {
+		t.Fatal(err)
+	}
+	doc, err = db.GetDocumentContext(context.Background(), col.ID, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := db.FastFields().Get(doc.ID, "tags"); err != nil || v != "rust" {
+		t.Fatalf("tags after append = %v (%v), want rust", v, err)
+	}
+	if v, err := db.FastFields().Get(doc.ID, "topics"); err != nil || (v != nil && v != "") {
+		t.Errorf("topics after append = %v (%v), want the stale field removed", v, err)
 	}
 }
 
