@@ -1,6 +1,7 @@
 package agenthooks
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -128,5 +129,46 @@ func TestRemoveAllSeekEntries_KeepsForeignCommandInMixedEntry(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"Stop"`) {
 		t.Errorf("entry should survive with the foreign command: %s", data)
+	}
+}
+
+// Two seek targets can share one matcher entry (e.g. a hand-edited settings
+// file). Uninstalling one must not delete the other target's command.
+func TestUninstallHook_RemovesOnlyRequestedTargetInSharedEntry(t *testing.T) {
+	const content = `{"hooks": {"Stop": [
+		{"matcher": "", "hooks": [
+			{"type": "command", "command": "seek hooks sync --agent claude"},
+			{"type": "command", "command": "seek hooks sync --agent codex"}
+		]}
+	]}}`
+	cases := []struct {
+		name   string
+		remove string
+		keep   string
+	}{
+		{"remove first command", "claude", "codex"},
+		{"remove second command", "codex", "claude"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.json")
+			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			remove := Target{name: tc.remove, agent: tc.remove, settingsPath: func() string { return path }, event: "Stop"}
+			keep := Target{name: tc.keep, agent: tc.keep, settingsPath: func() string { return path }, event: "Stop"}
+
+			if err := uninstallHook(remove, io.Discard); err != nil {
+				t.Fatalf("uninstallHook(%s): %v", tc.remove, err)
+			}
+			settings := readTestSettings(t, path)
+			if findTargetSeekHookIndex(settings, remove) >= 0 {
+				t.Errorf("%s hook still present after uninstall", tc.remove)
+			}
+			if findTargetSeekHookIndex(settings, keep) < 0 {
+				data, _ := os.ReadFile(path)
+				t.Fatalf("%s hook was removed along with %s: %s", tc.keep, tc.remove, data)
+			}
+		})
 	}
 }

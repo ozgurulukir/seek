@@ -64,6 +64,19 @@ All notable changes to `seek` are documented here. This follows
   HTTP 413, counting bytes as they are streamed into a spooled temp file rather
   than trusting `Content-Length`, and passes the file object directly to the
   parsers (#224).
+- **fix(hooks): uninstall only the requested target's hook**: when two seek
+  targets shared one matcher entry, uninstall used the broad seek matcher and
+  removed the first seek command regardless of target. Uninstall now prefers
+  the target-specific matcher and keeps the broad matcher only for legacy
+  commands.
+- **fix(hooks): collision-resistant settings backups with bounded retention**:
+  backup names used a second-resolution timestamp, so two processes could
+  clobber each other's snapshot. Names now include nanoseconds and the PID,
+  and only the five newest backups per settings file are kept.
+- **fix(service): validate binary paths on every platform**: control characters
+  in the resolved seek binary were only rejected for Windows Task Scheduler;
+  systemd and launchd definitions embedded them verbatim. One validator now
+  runs in `seekBinary()` before any service definition is generated.
 
 ## [0.6.11] - 2026-11-23
 

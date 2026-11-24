@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -34,8 +35,8 @@ func ReadSettings(path string) (map[string]interface{}, error) {
 }
 
 // WriteSettings atomically rewrites an agent settings file with a
-// one-per-run timestamped backup, preserving the existing file's permission
-// bits (new files are written 0600).
+// one-per-run, collision-resistant backup (oldest snapshots are pruned),
+// preserving the existing file's permission bits (new files are written 0600).
 func WriteSettings(path string, settings map[string]interface{}) error {
 	if err := os.MkdirAll(filepath.Dir(path), config.DefaultPrivateDirPerms); err != nil {
 		return err
@@ -70,6 +71,33 @@ var (
 	hookSettingsBackedUp   = map[string]bool{}
 )
 
+// hookSettingsBackupKeep is the number of most recent backups retained per
+// settings file. Older snapshots are pruned after each new backup so the
+// rollback safety net cannot grow without bound.
+const hookSettingsBackupKeep = 5
+
+// hookSettingsBackupPath builds a collision-resistant backup name. The old
+// second-resolution timestamp let two processes clobber each other's snapshot;
+// nanoseconds plus the PID make concurrent writes distinct. The timestamp
+// prefix keeps names sortable by creation time for pruning.
+func hookSettingsBackupPath(path string, now time.Time, pid int) string {
+	return fmt.Sprintf("%s.bak-%s-%d", path, now.Format("20060102-150405.000000000"), pid)
+}
+
+// pruneHookSettingsBackups keeps the newest hookSettingsBackupKeep backups for
+// path. Removal is best effort: a locked or already-removed snapshot must not
+// fail the settings write this backup accompanies.
+func pruneHookSettingsBackups(path string) {
+	backups, err := filepath.Glob(path + ".bak-*")
+	if err != nil || len(backups) <= hookSettingsBackupKeep {
+		return
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(backups)))
+	for _, old := range backups[hookSettingsBackupKeep:] {
+		_ = os.Remove(old)
+	}
+}
+
 func backupHookSettings(path string) error {
 	hookSettingsBackedUpMu.Lock()
 	backedUp := hookSettingsBackedUp[path]
@@ -84,10 +112,11 @@ func backupHookSettings(path string) error {
 		}
 		return err
 	}
-	backup := path + ".bak-" + time.Now().Format("20060102-150405")
+	backup := hookSettingsBackupPath(path, time.Now(), os.Getpid())
 	if err := os.WriteFile(backup, data, config.DefaultPrivateFilePerms); err != nil {
 		return err
 	}
+	pruneHookSettingsBackups(path)
 	hookSettingsBackedUpMu.Lock()
 	hookSettingsBackedUp[path] = true
 	hookSettingsBackedUpMu.Unlock()
