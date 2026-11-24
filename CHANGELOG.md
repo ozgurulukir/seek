@@ -104,7 +104,8 @@ All notable changes to `seek` are documented here. This follows
   globally, `contents: write` only on `publish`). Manual `workflow_dispatch`
   now takes an explicit `version`, defaults to a draft/pre-release, feeds that
   version into both the binary and the release tag, and cannot publish a
-  mis-tagged dev build.
+  mis-tagged dev build. Dispatched versions are validated as semver before any
+  artifact is built.
 
 ## [0.6.11] - 2026-11-23
 

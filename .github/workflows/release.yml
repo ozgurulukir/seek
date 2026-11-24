@@ -128,6 +128,18 @@ jobs:
           go env GOOS GOARCH CGO_ENABLED CC CXX
           gcc --version | Select-Object -First 1
 
+      - name: Validate dispatched version
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          # A manual dispatch has no v* ref to constrain the version, and it
+          # flows into ldflags, archive names and tag_name. Reject anything
+          # that is not a semver before building or publishing.
+          if ! printf '%s' "${VERSION}" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "Manual dispatch requires a semver version (X.Y.Z or vX.Y.Z); got '${VERSION}'" >&2
+            exit 1
+          fi
+
       - name: Build binary
         shell: bash
         run: |
