@@ -42,6 +42,11 @@ type jsonlSessionRow struct {
 	windowPrevOffset int64
 	windowStarted    bool
 	windowWarned     bool
+	// windowDriftLine is the first line with a structurally unexpected window
+	// (missing offset / messages not an array). Non-zero means some turns were
+	// not parsed, so the caller must surface the failure and withhold the
+	// mtime cursor instead of committing a "done" checkpoint for the file.
+	windowDriftLine int
 }
 
 // detectJSONLSource discovers JSONL files matching the source spec.
@@ -207,10 +212,13 @@ func scanJSONLFileContext(ctx context.Context, filePath string, ver *VersionSpec
 				// plus a global offset; dedup by global index. A structurally
 				// unexpected line is a schema/format drift — warn once per
 				// file instead of indexing a silently empty session.
-				if _, drifted := parseJSONLWindowLine(line, topLevel.Type, ver, row); drifted && !row.windowWarned {
-					row.windowWarned = true
-					fmt.Fprintf(os.Stderr, "WARN: %s: window line %d missing %q or %q is not an array\n",
-						filepath.Base(filePath), lineNo, ver.Messages.OffsetField, ver.Messages.MessagesPath)
+				if _, drifted := parseJSONLWindowLine(line, topLevel.Type, ver, row); drifted {
+					if !row.windowWarned {
+						row.windowWarned = true
+						row.windowDriftLine = lineNo
+						fmt.Fprintf(os.Stderr, "WARN: %s: window line %d missing %q or %q is not an array\n",
+							filepath.Base(filePath), lineNo, ver.Messages.OffsetField, ver.Messages.MessagesPath)
+					}
 				}
 			} else if msg, ok := parseJSONLMessageLine(line, topLevel.Type, ver); ok {
 				row.messages = append(row.messages, msg)

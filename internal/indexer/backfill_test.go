@@ -298,8 +298,11 @@ func TestBackfillSemanticHealthFailureNoOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BackfillSemantic: %v", err)
 	}
-	if report != (BackfillReport{}) {
-		t.Fatalf("report = %+v, want an all-zero no-op pass", report)
+	if report.Processed != 0 || report.Skipped != 0 || report.Failed != 0 {
+		t.Fatalf("report = %+v, want all-zero counts for a no-op pass", report)
+	}
+	if !report.HealthFailed {
+		t.Fatalf("report = %+v, want HealthFailed set on health-check failure", report)
 	}
 	// Prior state is untouched (not re-fingerprinted against an empty basis).
 	v, err := db.FastFields().Get(prior, "tags")
@@ -322,6 +325,73 @@ func TestBackfillSemanticHealthFailureNoOps(t *testing.T) {
 	}
 	if st := states[other]; st.Status != store.SemanticStatusNone {
 		t.Fatalf("other state = %+v, want none", st)
+	}
+}
+
+// TestBackfillSemanticProviderUnavailableFlagsDegradedNoOp pins the case
+// where no provider resolves at all (the service was down when semantics were
+// first requested). The 0/0/0 no-op must still be flagged as degraded, so it
+// cannot be mistaken for a healthy empty backlog.
+func TestBackfillSemanticProviderUnavailableFlagsDegradedNoOp(t *testing.T) {
+	tmp := t.TempDir()
+	db := openBackfillStore(t)
+	cfg := cfgFromTest(t, tmp, filepath.Join(tmp, "test.db"))
+	cfg.Config.Semantic.Enabled = true
+	col, err := db.CreateCollection("notes", store.CollectionTypeMarkdown, tmp, "*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A nil injected provider marks resolution as already attempted with no
+	// provider available — the same shape as a service-down resolution, but
+	// without a network call in the test.
+	idx := New(cfg, db).WithLogger(nopLogger{}).WithSemanticProvider(nil)
+
+	report, err := idx.BackfillSemantic(context.Background(), col, nopLogger{})
+	if err != nil {
+		t.Fatalf("BackfillSemantic: %v", err)
+	}
+	if report.Processed != 0 || report.Skipped != 0 || report.Failed != 0 {
+		t.Fatalf("report = %+v, want all-zero counts for a no-op pass", report)
+	}
+	if !report.HealthFailed {
+		t.Fatalf("report = %+v, want HealthFailed when the provider is unavailable", report)
+	}
+}
+
+// TestBackfillSemanticHealthyEmptyBacklogNotDegraded pins the other side of
+// the observability contract: a healthy service with nothing stale is a
+// successful 0/0/0 pass and must NOT set the degraded flag.
+func TestBackfillSemanticHealthyEmptyBacklogNotDegraded(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "a.md"), []byte("# Title\n\nBody text.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db := openBackfillStore(t)
+	cfg := cfgFromTest(t, tmp, filepath.Join(tmp, "test.db"))
+	col, err := db.CreateCollection("notes", store.CollectionTypeMarkdown, tmp, "*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := New(cfg, db).WithLogger(nopLogger{})
+	if err := idx.SyncCollection(col); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeSemanticProvider{healthOk: true, health: semanticHealthAll(), response: fakeTagResult("golang")}
+	idx.WithSemanticProvider(fake)
+
+	// First pass enriches the only candidate and marks it current.
+	first, err := idx.BackfillSemantic(context.Background(), col, nopLogger{})
+	if err != nil || first.Processed != 1 {
+		t.Fatalf("first backfill = %+v (%v), want 1 processed", first, err)
+	}
+
+	// Second pass: healthy service, no stale documents → clean 0/0/0 pass.
+	second, err := idx.BackfillSemantic(context.Background(), col, nopLogger{})
+	if err != nil {
+		t.Fatalf("second BackfillSemantic: %v", err)
+	}
+	if second != (BackfillReport{}) {
+		t.Fatalf("healthy empty backfill report = %+v, want all-zero no-op with no degraded flag", second)
 	}
 }
 

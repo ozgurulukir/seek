@@ -115,6 +115,15 @@ func (s *Store) UpdateDocumentContentHashContext(ctx context.Context, docID int6
 	return err
 }
 
+// UpdateDocumentContentHashAndLineCountContext records the content fingerprint
+// and line count together. Conversation appends that parse to no new lines
+// must advance both, or the next append computes its start line from a stale
+// count and re-reads already-scanned lines.
+func (s *Store) UpdateDocumentContentHashAndLineCountContext(ctx context.Context, docID int64, contentHash string, lineCount int) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE documents SET content_hash = ?, line_count = ? WHERE id = ?`, contentHash, lineCount, docID)
+	return err
+}
+
 // DeleteOrphansContext removes stale documents and their projections as one
 // transaction. A nil livePaths map means the entire collection is stale.
 func (s *Store) DeleteOrphansContext(ctx context.Context, collectionID int64, livePaths map[string]bool) (int, error) {

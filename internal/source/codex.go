@@ -27,17 +27,17 @@ type CodexConversation struct {
 }
 
 // ScanCodexFiles scans ~/.codex/ for conversation JSONL file paths without parsing them.
-func ScanCodexFiles() ([]ConversationFile, error) {
+func ScanCodexFiles() ([]ConversationFile, []ScanIssue, error) {
 	return ScanCodexFilesContext(context.Background())
 }
 
-func ScanCodexFilesContext(ctx context.Context) ([]ConversationFile, error) {
+func ScanCodexFilesContext(ctx context.Context) ([]ConversationFile, []ScanIssue, error) {
 	home, _ := os.UserHomeDir()
 	if home == "" {
 		// Without a home directory the default session dirs would resolve to
 		// CWD-relative paths — scanning the wrong directory is worse than
 		// finding nothing (review 2026-09-17 L17).
-		return nil, fmt.Errorf("cannot resolve home directory; pass the Codex sessions path explicitly")
+		return nil, nil, fmt.Errorf("cannot resolve home directory; pass the Codex sessions path explicitly")
 	}
 
 	dirs := []string{
@@ -46,6 +46,7 @@ func ScanCodexFilesContext(ctx context.Context) ([]ConversationFile, error) {
 	}
 
 	var files []ConversationFile
+	var issues []ScanIssue
 
 	for _, dir := range dirs {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -64,18 +65,26 @@ func ScanCodexFilesContext(ctx context.Context) ([]ConversationFile, error) {
 			if filepath.Base(path) == "session_index.jsonl" {
 				return nil
 			}
+			hash, err := hashFileContext(ctx, path)
+			if err != nil {
+				// Keep scanning: a single unreadable JSONL file is a per-file
+				// failure, not a reason to abandon the collection.
+				issues = append(issues, ScanIssue{Path: path, Err: err})
+				return nil
+			}
 			files = append(files, ConversationFile{
-				Path:  path,
-				Mtime: float64(info.ModTime().UnixNano()) / 1e9,
+				Path:        path,
+				Mtime:       float64(info.ModTime().UnixNano()) / 1e9,
+				ContentHash: hash,
 			})
 			return nil
 		})
 		if err != nil {
-			return files, fmt.Errorf("scan Codex conversations in %s: %w", dir, err)
+			return files, issues, fmt.Errorf("scan Codex conversations in %s: %w", dir, err)
 		}
 	}
 
-	return files, nil
+	return files, issues, nil
 }
 
 // LoadCodexThreadNames loads session index for title lookup.

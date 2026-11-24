@@ -347,3 +347,36 @@ func TestTruncate(t *testing.T) {
 		})
 	}
 }
+
+// TestScanClaudeFilesReportsUnreadableTranscript verifies that a transcript
+// which cannot be hashed is reported as a per-file issue instead of aborting
+// the whole scan (which would leave every other session unindexed).
+func TestScanClaudeFilesReportsUnreadableTranscript(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	projects := filepath.Join(home, ".claude", "projects")
+	if err := os.MkdirAll(projects, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	good := filepath.Join(projects, "good.jsonl")
+	if err := os.WriteFile(good, []byte("{\"role\":\"user\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A dangling symlink has a .jsonl name but cannot be read for hashing.
+	dangling := filepath.Join(projects, "dangling.jsonl")
+	if err := os.Symlink(filepath.Join(home, "missing-target"), dangling); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	files, issues, err := ScanClaudeFiles()
+	if err != nil {
+		t.Fatalf("ScanClaudeFiles: %v", err)
+	}
+	if len(files) != 1 || files[0].Path != good || files[0].ContentHash == "" {
+		t.Fatalf("files = %v, want the readable transcript with a hash", files)
+	}
+	if len(issues) != 1 || issues[0].Path != dangling {
+		t.Fatalf("issues = %v, want one issue for the unreadable transcript", issues)
+	}
+}

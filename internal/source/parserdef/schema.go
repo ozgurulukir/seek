@@ -114,6 +114,12 @@ type Message struct {
 type SessionError struct {
 	SessionID string
 	Err       error
+	// ScanIncomplete marks an error that prevented an entire source file or
+	// database from being enumerated. Callers must skip orphan cleanup when
+	// any such error occurred, because an unseen session could otherwise be
+	// deleted. Per-session errors (format drift, bad cursor, failed message
+	// fetch) leave the scan complete and must not suppress cleanup.
+	ScanIncomplete bool
 }
 
 // knownDrivers are the supported source drivers.

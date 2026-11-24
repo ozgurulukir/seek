@@ -713,8 +713,8 @@ func TestCollectionServiceBackfill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Backfill: %v", err)
 	}
-	if report.Processed != 1 || report.Failed != 0 || report.Skipped != 0 {
-		t.Fatalf("backfill report = %+v, want 1 processed", report)
+	if report.Processed != 1 || report.Failed != 0 || report.Skipped != 0 || report.HealthFailed {
+		t.Fatalf("backfill report = %+v, want 1 processed and no degraded flag", report)
 	}
 
 	got, err := rt.Store.FastFields().Get(doc.ID, "tags")

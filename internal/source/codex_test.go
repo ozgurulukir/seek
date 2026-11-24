@@ -276,7 +276,7 @@ func TestScanCodexFilesNoDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	files, err := ScanCodexFiles()
+	files, _, err := ScanCodexFiles()
 	if err != nil {
 		t.Fatalf("ScanCodexFiles: %v", err)
 	}

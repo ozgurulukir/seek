@@ -22,6 +22,13 @@ type BackfillReport struct {
 	// stored fast fields are preserved and the semantic status records the
 	// failure.
 	Failed int
+
+	// HealthFailed marks a pass that did no work because the semantic
+	// service's /health check failed after the provider had already resolved.
+	// It keeps the no-op state contract (no writes) but lets callers tell this
+	// degraded outcome apart from a genuinely empty backlog (all counts zero,
+	// HealthFailed false).
+	HealthFailed bool
 }
 
 // BackfillSemantic runs a collection-scoped semantic fast-field backfill
@@ -71,13 +78,20 @@ func (idx *Indexer) BackfillSemantic(ctx context.Context, col *store.Collection,
 		// a half-up service, re-enrich — the whole collection, twice (this
 		// pass and the next healthy one).
 		log.Printf("  WARN: semantic backfill %s: semantic service health check failed (%v) — nothing to backfill\n", col.Name, err)
+		report.HealthFailed = true
 		return report, nil
 	}
 	if !ok {
 		// Nothing to enrich with: the capability is disabled or the service
 		// is unreachable. Warn once and leave every document untouched — the
 		// plan keeps existing fields and the stale state instead of mass-
-		// failing the collection.
+		// failing the collection. When enrichment is enabled but no provider
+		// resolves (most commonly the service was down at resolution), flag
+		// the pass as degraded so a 0/0/0 no-op is not mistaken for a healthy
+		// empty backlog.
+		if idx.cfg != nil && idx.cfg.Config.Semantic.Enabled {
+			report.HealthFailed = true
+		}
 		log.Printf("  WARN: semantic backfill %s: semantic enrichment unavailable (disabled or service down) — nothing to backfill\n", col.Name)
 		return report, nil
 	}

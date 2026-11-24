@@ -9,7 +9,7 @@ import (
 )
 
 func (idx *Indexer) syncClaude(col *store.Collection) error {
-	return idx.syncConversation(col, func() ([]source.ConversationFile, error) {
+	return idx.syncConversation(col, func() ([]source.ConversationFile, []source.ScanIssue, error) {
 		return source.ScanClaudeFilesContext(idx.ctx())
 	}, func(path string, fromLine int) (ConversationBatch, error) {
 		convID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
@@ -30,7 +30,7 @@ func (idx *Indexer) syncClaude(col *store.Collection) error {
 
 func (idx *Indexer) syncCodex(col *store.Collection) error {
 	threadNames := source.LoadCodexThreadNamesContext(idx.ctx())
-	return idx.syncConversation(col, func() ([]source.ConversationFile, error) {
+	return idx.syncConversation(col, func() ([]source.ConversationFile, []source.ScanIssue, error) {
 		return source.ScanCodexFilesContext(idx.ctx())
 	}, func(path string, fromLine int) (ConversationBatch, error) {
 		msgs, sessionID, imgs, err := source.ParseCodexFileWithImagesContext(idx.ctx(), path, fromLine)

@@ -29,30 +29,32 @@ type ClaudeConversation struct {
 
 // ConversationFile represents a discovered JSONL file (lightweight, no parsing).
 type ConversationFile struct {
-	Path  string
-	Mtime float64
+	Path        string
+	Mtime       float64
+	ContentHash string
 }
 
 // ScanClaudeFiles scans ~/.claude/projects/ for conversation JSONL file paths without parsing them.
-func ScanClaudeFiles() ([]ConversationFile, error) {
+func ScanClaudeFiles() ([]ConversationFile, []ScanIssue, error) {
 	return ScanClaudeFilesContext(context.Background())
 }
 
-func ScanClaudeFilesContext(ctx context.Context) ([]ConversationFile, error) {
+func ScanClaudeFilesContext(ctx context.Context) ([]ConversationFile, []ScanIssue, error) {
 	home, _ := os.UserHomeDir()
 	if home == "" {
 		// Without a home directory the default projects dir would resolve to
 		// a CWD-relative path — scanning the wrong directory is worse than
 		// finding nothing (review 2026-09-17 L17).
-		return nil, fmt.Errorf("cannot resolve home directory; pass the Claude projects path explicitly")
+		return nil, nil, fmt.Errorf("cannot resolve home directory; pass the Claude projects path explicitly")
 	}
 	projectsDir := filepath.Join(home, ".claude", "projects")
 
 	if _, err := os.Stat(projectsDir); os.IsNotExist(err) {
-		return nil, fmt.Errorf("%w: claude projects directory not found: %s", ErrUnavailable, projectsDir)
+		return nil, nil, fmt.Errorf("%w: claude projects directory not found: %s", ErrUnavailable, projectsDir)
 	}
 
 	var files []ConversationFile
+	var issues []ScanIssue
 
 	err := filepath.Walk(projectsDir, func(path string, info os.FileInfo, walkErr error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -64,17 +66,25 @@ func ScanClaudeFilesContext(ctx context.Context) ([]ConversationFile, error) {
 		if info.IsDir() || filepath.Ext(path) != ".jsonl" {
 			return nil
 		}
+		hash, err := hashFileContext(ctx, path)
+		if err != nil {
+			// One unreadable transcript must not abort the whole collection;
+			// report it like other scan failures and keep indexing the rest.
+			issues = append(issues, ScanIssue{Path: path, Err: err})
+			return nil
+		}
 		files = append(files, ConversationFile{
-			Path:  path,
-			Mtime: float64(info.ModTime().UnixNano()) / 1e9,
+			Path:        path,
+			Mtime:       float64(info.ModTime().UnixNano()) / 1e9,
+			ContentHash: hash,
 		})
 		return nil
 	})
 
 	if err != nil {
-		return files, fmt.Errorf("scan Claude conversations: %w", err)
+		return files, issues, fmt.Errorf("scan Claude conversations: %w", err)
 	}
-	return files, nil
+	return files, issues, nil
 }
 
 // ParseClaudeFile parses a single Claude JSONL file starting from a line offset.
