@@ -52,8 +52,9 @@ make release VERSION=X.Y.Z RELEASE_ARGS=--dry-run   # preview; changes nothing
 
 `scripts/release.sh` validates the version, branch, clean tracked tree, and tag
 uniqueness; runs the same quality gate as `.github/workflows/release.yml`
-(build, vet, gofmt, tests); bumps `plugin.json`, `.claude-plugin/plugin.json`,
-and `.codex-plugin/plugin.json`; promotes the top `## [Unreleased]` CHANGELOG
+(build, vet, gofmt, tests, vulnerability scan, stale-command check); bumps
+`plugin.json`, `.claude-plugin/plugin.json`, and `.codex-plugin/plugin.json`;
+promotes the top `## [Unreleased]` CHANGELOG
 heading to `## [<version>] - <date>` (reopening a fresh `[Unreleased]` above
 it); then commits, creates an annotated `v<version>` tag, and pushes the branch
 and tag. Pushing the tag triggers the Release workflow. Untracked files do not

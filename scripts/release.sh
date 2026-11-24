@@ -10,8 +10,9 @@
 # The script:
 #   1. validates the version, branch, a clean tracked tree, and that the tag
 #      does not already exist locally or on the remote;
-#   2. runs the release quality gate (build, vet, gofmt, tests) — the same gate
-#      as .github/workflows/release.yml — unless --no-test / SKIP_TESTS=1;
+#   2. runs the release quality gate (build, vet, gofmt, tests, vulnerability
+#      scan, stale-command check) — the same gate as
+#      .github/workflows/release.yml — unless --no-test / SKIP_TESTS=1;
 #   3. bumps "version" in plugin.json, .claude-plugin/plugin.json, and
 #      .codex-plugin/plugin.json and rewrites the top "## [Unreleased]"
 #      CHANGELOG heading into "## [<version>] - <YYYY-MM-DD>", reopening a
@@ -39,7 +40,7 @@ usage: scripts/release.sh <version> [--dry-run] [--yes] [--no-test]
   <version>     bare semver to release, e.g. X.Y.Z (a leading "v" is stripped)
   --dry-run     show what would change without writing, committing, or pushing
   -y, --yes     do not prompt before pushing
-  --no-test     skip the build/vet/gofmt/test gate (CI still gates the tag)
+  --no-test     skip the quality gate (CI still gates the tag)
   -h, --help    show this help
 EOF
 }
@@ -184,15 +185,22 @@ bump_plugin() {
 }
 
 run_gate() {
-	echo "release: quality gate — build, vet, gofmt, test" >&2
+	echo "release: quality gate — build, vet, gofmt, test, vuln scan, stale commands" >&2
 	CGO_ENABLED=1 go build -tags "fts5 sqlite_fts5" -o /dev/null .
 	CGO_ENABLED=1 go vet -tags "fts5 sqlite_fts5" ./...
-	if [ -n "$(gofmt -l cmd internal main.go)" ]; then
+	if [ -n "$(gofmt -l cmd internal main.go third_party)" ]; then
 		echo "release: gofmt reported unformatted files:" >&2
-		gofmt -l cmd internal main.go >&2
+		gofmt -l cmd internal main.go third_party >&2
 		return 1
 	fi
 	CGO_ENABLED=1 go test -tags "fts5 sqlite_fts5" ./...
+	# Vulnerability scan — mirrors .github/workflows/test.yml. Pin GOTOOLCHAIN
+	# to the module's toolchain so the govulncheck binary and the go toolchain
+	# it drives cannot skew. `go run ...@latest` avoids relying on GOPATH/bin
+	# being on PATH (which `go install` + a bare `govulncheck` would need).
+	GOTOOLCHAIN=go1.27.4 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	# Stale command check — mirrors .github/workflows/test.yml.
+	bash scripts/check-stale-commands.sh
 }
 
 if [ "$SKIP_TESTS" != "1" ]; then

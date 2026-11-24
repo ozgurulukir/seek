@@ -94,6 +94,18 @@ All notable changes to `seek` are documented here. This follows
 - **fix(sync): emit nothing on a missing-collection failure**: in JSON mode
   `seek sync <missing> --json` wrote a success-shaped `[]` to stdout before
   returning the not-found error; the check now runs before any emission.
+- **ci(release): harden the release gate and manual-dispatch safety**:
+  `make test` now sets `CGO_ENABLED=1` so the cgo SQLite/FTS5 tests pass under
+  a cgo-disabled ambient environment. The release gate (both
+  `.github/workflows/release.yml` and `scripts/release.sh`) now runs the same
+  checks as `test.yml` — the pinned `govulncheck` vulnerability scan and the
+  stale-command check — and uses the canonical `gofmt` scope including
+  `third_party`. Release permissions are least-privilege (`contents: read`
+  globally, `contents: write` only on `publish`). Manual `workflow_dispatch`
+  now takes an explicit `version`, defaults to a draft/pre-release, feeds that
+  version into both the binary and the release tag, and cannot publish a
+  mis-tagged dev build. Dispatched versions are validated as semver before any
+  artifact is built.
 
 ## [0.6.11] - 2026-11-23
 

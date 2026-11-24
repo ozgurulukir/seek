@@ -5,23 +5,32 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    # Manual dispatch has no v* ref, so the version must be supplied explicitly.
+    # It defaults to a draft/pre-release so a dispatch can never publish a
+    # public release with a dev binary. A normal v* tag push is unaffected.
     inputs:
+      version:
+        description: 'Version/tag to build and draft (e.g. v1.2.3); tag pushes derive it from the ref'
+        type: string
+        required: true
       draft:
         description: 'Create a draft release'
         type: boolean
-        default: false
+        default: true
       prerelease:
         description: 'Mark as a pre-release'
         type: boolean
-        default: false
+        default: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # Quality gate: the same checks as test.yml must pass on the tagged commit
   # before any release artifact is built or published. A red test run must
-  # never ship (v0.2.8 regression: publish only depended on build).
+  # never ship (v0.2.8 regression: publish only depended on build). Keep this
+  # job in lockstep with test.yml (build, test, vet, govulncheck, gofmt,
+  # stale-command check).
   test:
     name: Test (release gate)
     runs-on: ubuntu-latest
@@ -36,13 +45,29 @@ jobs:
         run: CGO_ENABLED=1 go test -tags "fts5 sqlite_fts5" ./...
       - name: Vet
         run: CGO_ENABLED=1 go vet -tags "fts5 sqlite_fts5" ./...
+      - name: Vulnerability scan
+        env:
+          # Pin the scan to the same toolchain the module's toolchain
+          # directive names, so the govulncheck binary and the go toolchain
+          # it drives cannot skew (a 1.25-built binary driving a 1.27
+          # toolchain mis-compiles the newer standard library).
+          GOTOOLCHAIN: go1.27.4
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
       - name: Gofmt
-        run: test -z "$(gofmt -l cmd internal main.go)"
+        run: test -z "$(gofmt -l cmd internal main.go third_party)"
+      - name: Stale command check
+        run: bash scripts/check-stale-commands.sh
 
   build:
     needs: test
     name: Build ${{ matrix.os }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
+    env:
+      # Tag push: derive from the ref (e.g. v1.2.3). Manual dispatch: use the
+      # requested version so the binary, archive, and release tag agree.
+      VERSION: ${{ inputs.version || github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -103,10 +128,22 @@ jobs:
           go env GOOS GOARCH CGO_ENABLED CC CXX
           gcc --version | Select-Object -First 1
 
+      - name: Validate dispatched version
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          # A manual dispatch has no v* ref to constrain the version, and it
+          # flows into ldflags, archive names and tag_name. Reject anything
+          # that is not a semver before building or publishing.
+          if ! printf '%s' "${VERSION}" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "Manual dispatch requires a semver version (X.Y.Z or vX.Y.Z); got '${VERSION}'" >&2
+            exit 1
+          fi
+
       - name: Build binary
         shell: bash
         run: |
-          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION:-}"
           if [ -z "$VERSION" ] || [ "$VERSION" = "main" ]; then
             VERSION="dev-$(git rev-parse --short HEAD)"
           fi
@@ -145,7 +182,7 @@ jobs:
       - name: Package release archive
         shell: bash
         run: |
-          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION:-}"
           if [ -z "$VERSION" ] || [ "$VERSION" = "main" ]; then
             VERSION="dev-$(git rev-parse --short HEAD)"
           fi
@@ -177,7 +214,11 @@ jobs:
     name: Publish Release
     needs: [test, build]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    # A v* tag push publishes exactly as before. Manual dispatch may only
+    # produce a draft (default), never a public release with a dev binary.
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.draft == 'true')
+    permissions:
+      contents: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -194,6 +235,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.version || github.ref_name }}
           files: |
             release_assets/*
           generate_release_notes: true
