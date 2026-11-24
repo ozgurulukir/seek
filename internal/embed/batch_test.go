@@ -453,3 +453,40 @@ func TestReassembleBatchEmbeddings(t *testing.T) {
 		t.Fatal("incomplete results: expected error, got nil")
 	}
 }
+
+// TestDownloadBatchResultsLongLine verifies the enlarged Scanner buffer: a
+// single JSONL line larger than the default 64 KiB scanner limit must still
+// parse (large embedding vectors produce long lines).
+func TestDownloadBatchResultsLongLine(t *testing.T) {
+	var body strings.Builder
+	for i := 0; i < 3; i++ {
+		if i > 0 {
+			body.WriteByte('\n')
+		}
+		fmt.Fprintf(&body, `{"custom_id":"chunk-%d","response":{"status_code":200,"body":{"data":[{"embedding":[`, i)
+		for j := 0; j < 25000; j++ {
+			if j > 0 {
+				body.WriteByte(',')
+			}
+			body.WriteString("0.5")
+		}
+		body.WriteString(`],"index":0}]}}}`)
+	}
+
+	c := newTestBatchClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/jsonl")
+		w.Write([]byte(body.String()))
+	})
+	got, err := c.DownloadBatchResults("file-out")
+	if err != nil {
+		t.Fatalf("DownloadBatchResults: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("results = %d lines, want 3", len(got))
+	}
+	for i := 0; i < 3; i++ {
+		if len(got[fmt.Sprintf("chunk-%d", i)]) != 25000 {
+			t.Errorf("chunk-%d embedding length = %d, want 25000", i, len(got[fmt.Sprintf("chunk-%d", i)]))
+		}
+	}
+}

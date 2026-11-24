@@ -10,14 +10,19 @@
 # ]
 # ///
 
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from typing import List, Optional
-import io
 import uvicorn
 from bs4 import BeautifulSoup
 import docx
 import pypdf
 import openpyxl
+
+# Bounded upload reading lives in a stdlib-only module so it can be tested
+# without the parsing dependencies. MAX_UPLOAD_BYTES defaults to 100 MiB and
+# can be overridden with XBERG_MAX_UPLOAD_BYTES (invalid values fall back to
+# the default).
+from upload_limit import MAX_UPLOAD_BYTES, UploadTooLargeError, read_upload_limited
 
 app = FastAPI(title="xberg serve compatible API")
 
@@ -40,21 +45,31 @@ def formats():
 
 @app.post("/extract")
 async def extract(file: UploadFile = File(...), output_format: Optional[str] = Form("markdown")):
-    content_bytes = await file.read()
     filename = file.filename or "unknown.txt"
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    # Content-Length is advisory: reject an obviously oversized upload early,
+    # but rely on read_upload_limited below to count the bytes actually read.
+    if file.size is not None and file.size > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Uploaded file exceeds {MAX_UPLOAD_BYTES} byte limit")
+
+    try:
+        spooled = await read_upload_limited(file, MAX_UPLOAD_BYTES)
+    except UploadTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
 
     extracted_text = ""
     mime_type = "text/plain"
 
     try:
+        spooled.seek(0)
         if ext == ".docx":
             mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            doc = docx.Document(io.BytesIO(content_bytes))
+            doc = docx.Document(spooled)
             extracted_text = "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
         elif ext == ".xlsx":
             mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            wb = openpyxl.load_workbook(io.BytesIO(content_bytes), data_only=True)
+            wb = openpyxl.load_workbook(spooled, data_only=True)
             lines = []
             for sheet in wb.sheetnames:
                 ws = wb[sheet]
@@ -66,14 +81,14 @@ async def extract(file: UploadFile = File(...), output_format: Optional[str] = F
             extracted_text = "\n".join(lines)
         elif ext == ".pdf":
             mime_type = "application/pdf"
-            reader = pypdf.PdfReader(io.BytesIO(content_bytes))
+            reader = pypdf.PdfReader(spooled)
             extracted_text = "\n\n".join([p.extract_text() for p in reader.pages if p.extract_text()])
         elif ext in [".html", ".htm"]:
             mime_type = "text/html"
-            soup = BeautifulSoup(content_bytes, "html.parser")
+            soup = BeautifulSoup(spooled, "html.parser")
             extracted_text = soup.get_text(separator="\n\n")
         else:
-            extracted_text = content_bytes.decode("utf-8", errors="replace")
+            extracted_text = spooled.read().decode("utf-8", errors="replace")
             mime_type = "text/plain"
 
         if not extracted_text.strip():
@@ -108,6 +123,8 @@ async def extract(file: UploadFile = File(...), output_format: Optional[str] = F
                 "errors": 1
             }
         }
+    finally:
+        spooled.close()
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8001)

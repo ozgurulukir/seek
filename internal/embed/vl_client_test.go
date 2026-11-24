@@ -2,9 +2,11 @@ package embed
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -209,4 +211,53 @@ func TestEmbedImagesInBatchesReportsReadFailures(t *testing.T) {
 	if updated != 0 {
 		t.Fatalf("expected 0 updated, got %d", updated)
 	}
+}
+
+// TestImageToDataURI pins the per-image byte cap: a normal image still
+// encodes to a data URI, while an oversized one is rejected before its bytes
+// are read (the file is sparse, so the test uses no real disk space).
+func TestImageToDataURI(t *testing.T) {
+	t.Run("normal", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "pic.png")
+		want := []byte("fake-png-bytes")
+		if err := os.WriteFile(path, want, 0o600); err != nil {
+			t.Fatalf("write image: %v", err)
+		}
+		got, err := ImageToDataURI(path, "image/png")
+		if err != nil {
+			t.Fatalf("ImageToDataURI: %v", err)
+		}
+		prefix := "data:image/png;base64,"
+		if !strings.HasPrefix(got, prefix) {
+			t.Fatalf("data URI = %q, want prefix %q", got, prefix)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(got, prefix))
+		if err != nil {
+			t.Fatalf("decode data URI: %v", err)
+		}
+		if string(decoded) != string(want) {
+			t.Errorf("decoded = %q, want %q", decoded, want)
+		}
+	})
+
+	t.Run("oversized", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "huge.png")
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatalf("create image: %v", err)
+		}
+		defer f.Close()
+		// Sparse truncation: stat reports > maxImageBytes without allocating
+		// 100 MiB of disk, so rejection must happen before any read.
+		if err := f.Truncate(maxImageBytes + 1); err != nil {
+			t.Fatalf("truncate image: %v", err)
+		}
+		_, err = ImageToDataURI(path, "image/png")
+		if err == nil {
+			t.Fatal("expected oversized image to be rejected")
+		}
+		if !strings.Contains(err.Error(), "exceeds") {
+			t.Errorf("error = %q, want cap mention", err.Error())
+		}
+	})
 }

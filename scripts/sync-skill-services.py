@@ -20,6 +20,8 @@ FILES = (
     ("tools/semantic/requirements.txt", "skills/seek/scripts/services/semantic/requirements.txt"),
     ("tools/semantic/vendor-LICENSES.md", "skills/seek/scripts/services/semantic/vendor-LICENSES.md"),
     ("tools/xberg_server/server.py", "skills/seek/scripts/services/xberg_server/server.py"),
+    ("tools/xberg_server/upload_limit.py", "skills/seek/scripts/services/xberg_server/upload_limit.py"),
+    ("tools/xberg_server/test_server.py", "skills/seek/scripts/services/xberg_server/test_server.py"),
     ("tools/flashrank_server/server.py", "skills/seek/scripts/services/flashrank_server/server.py"),
     ("tools/embed_server/server.py", "skills/seek/scripts/services/embed_server/server.py"),
 )
