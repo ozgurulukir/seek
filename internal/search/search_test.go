@@ -1145,6 +1145,39 @@ func TestParsedModeMatchesShorterNonPrefixStems(t *testing.T) {
 	}
 }
 
+// TestTopLevelNegationSurfacesError pins issue #220 end-to-end for the bare
+// unary-NOT form: FTS5 has no positive set to match, so lex search must fail
+// with ErrPureNegation and hybrid search must not fall back to vector-only
+// results. Without this guard the empty MATCH string fails as an opaque FTS5
+// syntax error that hybrid mode silently masks.
+func TestTopLevelNegationSurfacesError(t *testing.T) {
+	s := newTestStore(t)
+	insertDoc(t, s, "/docs/rust.md", "Rust", "rust programming")
+	engine := NewEngine(NewStoreRepository(s), nil)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		call func() error
+	}{
+		{"lex", func() error {
+			_, err := engine.SearchBM25(ctx, "NOT rust", 10, Options{})
+			return err
+		}},
+		{"hybrid", func() error {
+			_, err := engine.SearchHybrid(ctx, "NOT rust", 10, Options{})
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+			if !errors.Is(err, ErrPureNegation) {
+				t.Fatalf("err = %v, want errors.Is(err, ErrPureNegation)", err)
+			}
+		})
+	}
+}
+
 // TestUnaryNotUnderOrSurfacesError pins issue #220 end-to-end: an OR query with
 // a pure NOT operand must produce a user-facing error instead of silently
 // degrading to the positive branch. A plain OR still renders valid FTS5.

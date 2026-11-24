@@ -96,6 +96,13 @@ func renderFTS5(q Query, a *Analyzer) (string, error) {
 		return "", nil
 	}
 	fts, _, err := ToFTS5WithError(q, a)
+	if err == nil && fts == "" {
+		// Any non-nil query that renders to no MATCH expression cannot be
+		// answered by FTS5; surface it instead of letting the store return
+		// an opaque syntax error (or, in hybrid mode, masking it with vector
+		// results).
+		return "", ErrPureNegation
+	}
 	return fts, err
 }
 
@@ -234,6 +241,12 @@ func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts
 	}
 
 	bm25Results, bm25Err := e.searchBM25Raw(ctx, query, candidateLimit, opts)
+	// Query validation failures are user-facing: never mask them with the
+	// vector leg's results, and never pay for an embedding request for a
+	// query that FTS5 cannot answer in the first place (issue #220).
+	if errors.Is(bm25Err, ErrPureNegation) || errors.Is(bm25Err, ErrUnknownField) {
+		return nil, bm25Err
+	}
 	vecResults, vecErr := e.searchVectorRaw(ctx, query, candidateLimit, opts)
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -243,11 +256,6 @@ func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts
 	}
 	if errors.Is(vecErr, context.Canceled) || errors.Is(vecErr, context.DeadlineExceeded) {
 		return nil, vecErr
-	}
-	// Query validation failures are user-facing: never mask them with the
-	// vector leg's results (issue #220).
-	if errors.Is(bm25Err, ErrPureNegation) || errors.Is(bm25Err, ErrUnknownField) {
-		return nil, bm25Err
 	}
 
 	if bm25Err != nil && vecErr != nil {

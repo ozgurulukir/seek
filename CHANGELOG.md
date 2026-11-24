@@ -44,7 +44,9 @@ All notable changes to `seek` are documented here. This follows
   like `kitaplar`→`kitap*` still expand). Separately, `go OR NOT rust` used to
   silently drop the NOT branch; FTS5 cannot express a negative-only OR branch,
   so translation now fails with `ErrPureNegation`, surfaced in lex and hybrid
-  search instead of quietly returning just `go`.
+  search instead of quietly returning just `go`. The same guard now covers a
+  bare `NOT rust` (and `NOT a AND NOT b`), which previously produced an opaque
+  FTS5 syntax error that hybrid search masked with vector-only results.
 - **fix(search): reject unknown `--chunk-type` values**: values other than
   `text`/`image` (case-insensitive) silently became the text filter, hiding
   typos like `--chunk-type video`. Unknown values now error with the supported

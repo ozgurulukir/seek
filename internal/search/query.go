@@ -521,8 +521,8 @@ func ToFTS5WithAnalyzer(q Query, a *Analyzer) (string, bool) {
 }
 
 // ToFTS5WithError converts a Query AST to an FTS5 MATCH string and reports
-// queries FTS5 cannot answer (currently any OR branch with no positive term).
-// The bool reports whether fuzzy fallback was used.
+// queries FTS5 cannot answer (any branch with no positive term, including a
+// top-level NOT). The bool reports whether fuzzy fallback was used.
 func ToFTS5WithError(q Query, a *Analyzer) (string, bool, error) {
 	if q == nil {
 		return "", false, nil
@@ -579,7 +579,7 @@ func toFTS5(q Query, a *Analyzer) (string, bool, error) {
 			if lnegOK && rnegOK {
 				// Pure negation on both sides: FTS5 cannot answer without a
 				// positive set.
-				return "", false, nil
+				return "", false, fmt.Errorf("%w: an AND of two NOT terms has no positive set; add a positive term", ErrPureNegation)
 			}
 			if lnegOK || rnegOK {
 				posQ, negQ := v.Left, rneg
@@ -595,7 +595,7 @@ func toFTS5(q Query, a *Analyzer) (string, bool, error) {
 					return "", false, err
 				}
 				if pos == "" || pos == "()" || pos == `""` || neg == "" {
-					return "", false, nil
+					return "", false, fmt.Errorf("%w: an AND branch has no positive term", ErrPureNegation)
 				}
 				return fmt.Sprintf("(%s NOT %s)", pos, neg), false, nil
 			}
@@ -610,8 +610,10 @@ func toFTS5(q Query, a *Analyzer) (string, bool, error) {
 		}
 		if op == "NOT" {
 			if ls == "" || ls == "()" || ls == `""` {
-				// Pure negation queries (unary NOT) cannot be answered by FTS5 alone without a positive set.
-				return "", false, nil
+				// A top-level unary NOT has no positive set for FTS5 to
+				// match; report it instead of rendering an empty MATCH string
+				// that fails as an opaque FTS5 syntax error (issue #220).
+				return "", false, fmt.Errorf("%w: a NOT query has no positive term; add a positive term or use AND", ErrPureNegation)
 			}
 			return fmt.Sprintf("(%s NOT %s)", ls, rs), false, nil
 		}

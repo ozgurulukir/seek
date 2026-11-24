@@ -313,6 +313,28 @@ func TestToFTS5_UnaryNotUnderOr(t *testing.T) {
 	}
 }
 
+// TestToFTS5WithErrorTopLevelNegation pins the top-level form of issue #220:
+// a bare unary NOT has no positive set, so it must surface ErrPureNegation
+// instead of rendering an empty MATCH string that fails as an opaque FTS5
+// syntax error (and, in hybrid mode, gets masked by vector results).
+func TestToFTS5WithErrorTopLevelNegation(t *testing.T) {
+	for _, input := range []string{"NOT rust", "NOT go AND NOT rust"} {
+		t.Run(input, func(t *testing.T) {
+			q, err := ParseQuery(input)
+			if err != nil {
+				t.Fatalf("ParseQuery(%q): %v", input, err)
+			}
+			got, _, err := ToFTS5WithError(q, nil)
+			if !errors.Is(err, ErrPureNegation) {
+				t.Fatalf("ToFTS5WithError(%q) err = %v, want ErrPureNegation (got %q)", input, err, got)
+			}
+			if got != "" {
+				t.Errorf("ToFTS5WithError(%q) = %q, want empty string alongside the error", input, got)
+			}
+		})
+	}
+}
+
 // TestToFTS5WithErrorValidOR pins the positive side of issue #220: ordinary
 // OR queries still render to valid FTS5 and carry no error.
 func TestToFTS5WithErrorValidOR(t *testing.T) {
