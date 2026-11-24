@@ -228,3 +228,31 @@ func TestSyncCmd_MissingOptionalSourceDoesNotHideCodeSuccess(t *testing.T) {
 		}
 	}
 }
+
+// TestSyncCmd_JSONMissingCollectionEmitsNoStdout pins the failure ordering:
+// a not-found collection must error without first writing a success-shaped
+// "[]" to stdout in JSON mode.
+func TestSyncCmd_JSONMissingCollectionEmitsNoStdout(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db := openTestStore(t, dbPath)
+	db.Close()
+
+	cfg := &config.AppConfig{
+		DBPath:   dbPath,
+		CacheDir: filepath.Join(tmpDir, "cache"),
+	}
+	var syncErr error
+	output := captureStdout(t, func() {
+		syncErr = (&cmd.SyncCmd{Collection: "does-not-exist", JSON: true}).Run(cfg)
+	})
+	if syncErr == nil {
+		t.Fatal("expected an error for a missing collection")
+	}
+	if !strings.Contains(syncErr.Error(), "does-not-exist") {
+		t.Errorf("error %q does not name the missing collection", syncErr)
+	}
+	if output != "" {
+		t.Errorf("expected empty stdout on not-found, got %q", output)
+	}
+}

@@ -132,11 +132,13 @@ func (c *SyncCmd) Run(cfg *config.AppConfig) (err error) {
 			fmt.Fprintf(os.Stderr, "  %s [%s]: %s\n", outcome.Status, col.Name, outcome.Reason)
 		}
 	}
-	if emitErr := c.emitSyncOutcomes(outcomes); emitErr != nil {
-		return emitErr
-	}
+	// Fail before emitting anything: in JSON mode a not-found collection would
+	// otherwise write a success-shaped "[]" to stdout ahead of the error.
 	if c.Collection != "" && len(outcomes) == 0 {
 		return fmt.Errorf("collection %q not found or excluded by --type", c.Collection)
+	}
+	if emitErr := c.emitSyncOutcomes(outcomes); emitErr != nil {
+		return emitErr
 	}
 	if len(failedNames) > 0 {
 		return fmt.Errorf("%d collection(s) failed to sync: %v", len(failedNames), strings.Join(failedNames, ", "))

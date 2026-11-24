@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -371,5 +372,81 @@ func TestMCPCapabilitiesHonorOfflineOnlyPolicy(t *testing.T) {
 	}
 	if reason, _ := caps["vector_reason"].(string); !strings.Contains(reason, "offline_only") {
 		t.Fatalf("vector_reason=%v", caps["vector_reason"])
+	}
+}
+
+func TestMCPAutocompleteMax(t *testing.T) {
+	cases := []struct {
+		in, want int
+	}{
+		{0, 10},
+		{-5, 10},
+		{1, 1},
+		{10, 10},
+		{99, 99},
+		{maxMCPResults, maxMCPResults},
+		{maxMCPResults + 1, maxMCPResults},
+		{100000, maxMCPResults},
+	}
+	for _, tc := range cases {
+		if got := clampAutocompleteMax(tc.in); got != tc.want {
+			t.Errorf("clampAutocompleteMax(%d) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestMCPAutocomplete_ClampsMaxThroughHandler proves the handler uses the
+// cap, not just that the helper computes it: a client asking for 10000
+// suggestions must receive at most maxMCPResults.
+func TestMCPAutocomplete_ClampsMaxThroughHandler(t *testing.T) {
+	db := newMCPTestStore(t)
+	col, err := db.CreateCollection("notes", "markdown", "/tmp", "**/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := db.UpsertDocument(col.ID, "/tmp/vocab.md", "Vocab", "h1", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for i := 0; i < maxMCPResults+50; i++ {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "term%03d", i)
+	}
+	if err := db.UpsertFTSContext(context.Background(), docID, "Vocab", b.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.AppConfig{}
+	server, err := buildMCPServer(db, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+	ctx := context.Background()
+	st, ct := mcp.NewInMemoryTransports()
+	go server.Run(ctx, st)
+	session, err := client.Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "seek_autocomplete",
+		Arguments: map[string]any{"prefix": "term", "max": 10000},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := res.Content[0].(*mcp.TextContent)
+	var out search.AutocompleteOutput
+	if err := json.Unmarshal([]byte(tc.Text), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Suggestions) != maxMCPResults {
+		t.Fatalf("suggestions=%d, want %d", len(out.Suggestions), maxMCPResults)
 	}
 }
