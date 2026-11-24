@@ -80,9 +80,26 @@ func syncJSONLSessionsContext(ctx context.Context, src *SourceSpec, ver *Version
 			continue
 		}
 
-		// Determine cursor.
+		// A drifted window left turns unparsed. Surface it through the
+		// structured error channel so the sync report records a failure, and
+		// withhold the cursor so the session is re-scanned after the format is
+		// fixed (a producer-side schema fix need not advance the file mtime).
+		drifted := row.windowDriftLine > 0
+		if drifted {
+			errs = append(errs, SessionError{
+				SessionID: row.id,
+				Err: fmt.Errorf("window line %d missing %q or %q is not an array (format drift)",
+					row.windowDriftLine, ver.Messages.OffsetField, ver.Messages.MessagesPath),
+			})
+		}
+
+		// Determine cursor. A drifted file gets a zero cursor: the incremental
+		// filter below can never classify it as "unchanged", so its messages
+		// are always re-read until the drift is gone.
 		var cursor time.Time
-		if ver.Sessions.CursorFromMtime {
+		if drifted {
+			// cursor stays zero (withheld)
+		} else if ver.Sessions.CursorFromMtime {
 			cursor = row.mtime
 		} else if ver.Sessions.Cursor != "" {
 			ct, cerr := normalizeCursor(row.cursor, ver.Sessions.CursorFormat)

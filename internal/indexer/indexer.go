@@ -324,13 +324,17 @@ type ConversationBatch struct {
 // syncConversation abstracts the heavily duplicated logic between Claude and Codex
 func (idx *Indexer) syncConversation(
 	col *store.Collection,
-	scanFiles func() ([]source.ConversationFile, error),
+	scanFiles func() ([]source.ConversationFile, []source.ScanIssue, error),
 	parseFile func(path string, fromLine int) (ConversationBatch, error),
 	getTitle func(sessionID, defaultTitle string) string,
 ) error {
-	files, err := scanFiles()
+	files, scanIssues, err := scanFiles()
 	if err != nil {
 		return err
+	}
+	for _, issue := range scanIssues {
+		idx.warnf("  WARN: scan %s: %v\n", issue.Path, issue.Err)
+		idx.recordFailure(issue.Path, "scan", issue.Err)
 	}
 
 	diskPaths := make(map[string]bool, len(files))
@@ -342,11 +346,27 @@ func (idx *Indexer) syncConversation(
 	}
 
 	var indexed, skipped, totalImages, failed int
+	failed += len(scanIssues)
 
 	for _, f := range files {
 		if err := idx.ctx().Err(); err != nil {
 			return err
 		}
+		// Skip on content hash, not mtime alone: an in-place edit that keeps
+		// the timestamp must still re-index. skipUnchanged also refreshes the
+		// stored mtime for genuinely unchanged files so cursors stay fresh.
+		unchanged, err := idx.skipUnchanged(col, f.Path, f.ContentHash, f.Mtime)
+		if err != nil {
+			idx.warnf("  WARN: skip check %s: %v\n", f.Path, err)
+			idx.recordFailure(f.Path, "persistence", err)
+			failed++
+			continue
+		}
+		if unchanged {
+			skipped++
+			continue
+		}
+
 		existing, err := idx.db.GetDocumentContext(idx.ctx(), col.ID, f.Path)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			// A store failure is not "document absent": falling through would
@@ -355,10 +375,6 @@ func (idx *Indexer) syncConversation(
 			idx.warnf("  WARN: look up document %s: %v\n", f.Path, err)
 			idx.recordFailure(f.Path, "persistence", err)
 			failed++
-			continue
-		}
-		if err == nil && existing.Mtime >= f.Mtime {
-			skipped++
 			continue
 		}
 
@@ -392,6 +408,17 @@ func (idx *Indexer) syncConversation(
 			if err := idx.pruneEmptyConversationBatch(existing, fromLine, f.Path, f.Mtime); err != nil {
 				return err
 			}
+			// An append that carried no parseable content still changed the
+			// file's bytes. Record the new hash too, or the hash-based skip
+			// would re-parse this file on every subsequent sync.
+			if existing != nil && fromLine > 0 {
+				if err := idx.db.UpdateDocumentContentHashAndLineCountContext(idx.ctx(), existing.ID, f.ContentHash, lineCount); err != nil {
+					idx.warnf("  WARN: update content hash %s: %v\n", f.Path, err)
+					idx.recordFailure(f.Path, "persistence", err)
+					failed++
+					continue
+				}
+			}
 			skipped++
 			continue
 		}
@@ -418,18 +445,29 @@ func (idx *Indexer) syncConversation(
 			CollectionID: col.ID,
 			Path:         f.Path,
 			Title:        title,
+			ContentHash:  f.ContentHash,
 			Mtime:        f.Mtime,
 			LineCount:    lineCount,
 			FTSContent:   text,
 			Chunks:       indexChunks,
 		}
-		// Tag only on the initial (replace) write: append passes must not
-		// recompute tags for the whole session on every delta. The append
-		// path in the store upserts fast fields without deleting them, so
-		// the initial tags survive; they are refreshed on the next full
-		// sync of the session.
-		if fromLine == 0 && text != "" {
-			request.FastFields = idx.enricher.Enrich(idx.ctx(), col.Type, f.Path, nil, indexChunks)
+		// Enrich on both the initial and the append write. On an append the
+		// enricher must see the already-indexed chunks too, so the semantic
+		// fields describe the whole conversation rather than just the delta
+		// and the fingerprint below tracks the full content.
+		enrichChunks := indexChunks
+		if fromLine > 0 && text != "" {
+			prior, loadErr := idx.db.ListChunksForDocumentContext(idx.ctx(), existing.ID)
+			if loadErr != nil {
+				idx.warnf("  WARN: load chunks %s: %v\n", f.Path, loadErr)
+				idx.recordFailure(f.Path, "persistence", loadErr)
+				failed++
+				continue
+			}
+			enrichChunks = append(prior, indexChunks...)
+		}
+		if text != "" {
+			request.FastFields = idx.enricher.Enrich(idx.ctx(), col.Type, f.Path, nil, enrichChunks)
 		}
 		docID, err := idx.writeConversationDocument(request, fromLine)
 		if err != nil {
@@ -438,12 +476,8 @@ func (idx *Indexer) syncConversation(
 			failed++
 			continue
 		}
-		// Record the fingerprint only on the initial write that actually
-		// enriched the session. Append passes do not recompute semantic
-		// fields (their content hash would claim a "current" state the tags
-		// do not match), so their fingerprint stays untouched.
-		if fromLine == 0 && text != "" {
-			if err := idx.recordSemanticSyncState(idx.ctx(), col.Type, docID, request.FastFields, indexChunks); err != nil {
+		if text != "" {
+			if err := idx.recordSemanticSyncState(idx.ctx(), col.Type, docID, request.FastFields, enrichChunks); err != nil {
 				idx.warnf("  WARN: record semantic state %s: %v\n", f.Path, err)
 			}
 		}

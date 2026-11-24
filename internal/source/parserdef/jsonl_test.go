@@ -725,7 +725,7 @@ func TestSchema_MessagesPathRequiresItemFields(t *testing.T) {
 	}
 }
 
-func TestJSONL_SlidingWindow_WarnsOncePerFile(t *testing.T) {
+func TestJSONL_SlidingWindow_DriftSurfacesErrorAndWithholdsCursor(t *testing.T) {
 	dir := t.TempDir()
 	// First line lacks the offset field (format drift); the rest are healthy.
 	lines := []string{
@@ -771,7 +771,7 @@ func TestJSONL_SlidingWindow_WarnsOncePerFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}
-	sessions, _, err := syncJSONLSessions(src, ver, files, time.Time{})
+	sessions, sErrs, err := syncJSONLSessions(src, ver, files, time.Time{})
 	w.Close()
 	out, _ := io.ReadAll(r)
 	r.Close()
@@ -786,5 +786,30 @@ func TestJSONL_SlidingWindow_WarnsOncePerFile(t *testing.T) {
 	}
 	if n := strings.Count(string(out), "WARN:"); n != 1 {
 		t.Errorf("drift warnings = %d, want exactly 1 (warn-once per file); stderr: %q", n, string(out))
+	}
+
+	// Drift must reach the structured error channel so the sync report records
+	// a failure instead of silently committing a "done" file.
+	if len(sErrs) != 1 {
+		t.Fatalf("session errors = %d, want 1: %+v", len(sErrs), sErrs)
+	}
+	if !strings.Contains(sErrs[0].Err.Error(), "window line 1") ||
+		!strings.Contains(sErrs[0].Err.Error(), "format drift") {
+		t.Errorf("session error = %q, want drift message with line number", sErrs[0].Err)
+	}
+
+	// The cursor is withheld (zero): even a `since` far past the file's mtime
+	// cannot mark this session unchanged, so the drifted turns are re-scanned
+	// once the producer's format is fixed.
+	if !sessions[0].Cursor.IsZero() {
+		t.Errorf("cursor = %v, want zero (withheld on drift)", sessions[0].Cursor)
+	}
+	since := time.Now().Add(time.Hour)
+	retried, retryErrs, err := syncJSONLSessions(src, ver, files, since)
+	if err != nil {
+		t.Fatalf("retry sync: %v", err)
+	}
+	if len(retryErrs) != 1 || len(retried) != 1 || len(retried[0].Messages) != 1 {
+		t.Fatalf("drifted session must be re-scanned after `since`: sessions=%+v errs=%+v", retried, retryErrs)
 	}
 }

@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -231,4 +232,202 @@ func TestPruneEmptyConversationBatch(t *testing.T) {
 			t.Errorf("nil existing must be a no-op, got %v", err)
 		}
 	})
+}
+
+// syncConversationFixture drives syncConversation with a fixed mtime and a
+// caller-controlled content hash, so a test can change content while keeping
+// the timestamp identical. The returned closures read the live file.
+func syncConversationFixture(t *testing.T, idx *Indexer, col *store.Collection, path string) (func() ([]source.ConversationFile, []source.ScanIssue, error), func(string, int) (ConversationBatch, error), *string) {
+	t.Helper()
+	hash := "hash-v1"
+	const mtime = 100.0
+	scanFiles := func() ([]source.ConversationFile, []source.ScanIssue, error) {
+		return []source.ConversationFile{{Path: path, Mtime: mtime, ContentHash: hash}}, nil, nil
+	}
+	parseFile := func(p string, fromLine int) (ConversationBatch, error) {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return ConversationBatch{}, err
+		}
+		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		if fromLine > 0 {
+			if fromLine >= len(lines) {
+				return ConversationBatch{}, nil
+			}
+			lines = lines[fromLine:]
+		}
+		return ConversationBatch{SessionID: "s1", Text: strings.Join(lines, "\n")}, nil
+	}
+	return scanFiles, parseFile, &hash
+}
+
+// TestSyncConversationContentChangeWithUnchangedMtimeReindexes pins the fix for
+// mtime-only skip gates: an in-place edit that preserves the timestamp must
+// still be re-indexed because the content hash changed.
+func TestSyncConversationContentChangeWithUnchangedMtimeReindexes(t *testing.T) {
+	idx, db, col := cleanupTestIndexer(t)
+	col.Type = store.CollectionTypeClaude
+
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(path, []byte("alpha question\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scanFiles, parseFile, hash := syncConversationFixture(t, idx, col, path)
+
+	if err := idx.syncConversation(col, scanFiles, parseFile, nil); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := db.SearchFTSContext(context.Background(), `"alpha question"`, 5, nil); err != nil || len(res) != 1 {
+		t.Fatalf("first sync FTS alpha = %+v (%v), want 1", res, err)
+	}
+
+	// Change the content but keep the hash pointer's mtime identical (100.0).
+	if err := os.WriteFile(path, []byte("beta question\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	*hash = "hash-v2"
+	if err := idx.syncConversation(col, scanFiles, parseFile, nil); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := db.SearchFTSContext(context.Background(), `"beta question"`, 5, nil); err != nil || len(res) != 1 {
+		t.Fatalf("FTS beta after unchanged-mtime edit = %+v (%v), want 1", res, err)
+	}
+	if res, err := db.SearchFTSContext(context.Background(), `"alpha question"`, 5, nil); err != nil || len(res) != 0 {
+		t.Fatalf("stale alpha still indexed = %+v (%v), want 0", res, err)
+	}
+	doc, err := db.GetDocumentContext(context.Background(), col.ID, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.ContentHash != "hash-v2" {
+		t.Errorf("ContentHash = %q, want hash-v2", doc.ContentHash)
+	}
+}
+
+// TestSyncConversationAppendCarriesSemanticFields pins the append-enrichment
+// fix: appended chunks must be re-enriched over the whole conversation. The
+// provider's response is swapped between passes so a stale "preserve prior
+// fields" path would be observable (it would keep the old tags).
+func TestSyncConversationAppendCarriesSemanticFields(t *testing.T) {
+	idx, db, col := cleanupTestIndexer(t)
+	col.Type = store.CollectionTypeClaude
+
+	fake := &fakeSemanticProvider{
+		healthOk: true,
+		health:   semanticHealthAll(),
+		response: fakeTagResult("golang", "concurrency"),
+	}
+	idx.WithSemanticProvider(fake)
+
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(path, []byte("alpha question\nalpha answer\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scanFiles, parseFile, hash := syncConversationFixture(t, idx, col, path)
+
+	if err := idx.syncConversation(col, scanFiles, parseFile, nil); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := db.GetDocumentContext(context.Background(), col.ID, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := db.FastFields().Get(doc.ID, "tags"); err != nil || v != "golang,concurrency" {
+		t.Fatalf("tags after initial sync = %v (%v), want golang,concurrency", v, err)
+	}
+
+	// Append two lines; hash changes, mtime does not. Swap the provider result
+	// so a recompute on append is observable.
+	if err := os.WriteFile(path, []byte("alpha question\nalpha answer\nbeta question\nbeta answer\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	*hash = "hash-v2"
+	fake.response = fakeTagResult("rust", "ownership")
+
+	if err := idx.syncConversation(col, scanFiles, parseFile, nil); err != nil {
+		t.Fatal(err)
+	}
+	doc, err = db.GetDocumentContext(context.Background(), col.ID, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := db.FastFields().Get(doc.ID, "tags"); err != nil || v != "rust,ownership" {
+		t.Fatalf("tags after append = %v (%v), want rust,ownership (append must re-enrich)", v, err)
+	}
+	if doc.ContentHash != "hash-v2" {
+		t.Errorf("ContentHash = %q, want hash-v2", doc.ContentHash)
+	}
+	if res, err := db.SearchFTSContext(context.Background(), `"beta question"`, 5, nil); err != nil || len(res) != 1 {
+		t.Fatalf("appended text FTS = %+v (%v), want 1", res, err)
+	}
+	states, err := db.GetSemanticStates(context.Background(), []int64{doc.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := states[doc.ID]; st.Status != store.SemanticStatusCurrent || st.Fingerprint == "" {
+		t.Fatalf("semantic state after append = %+v, want current with a fingerprint", st)
+	}
+}
+
+// TestSyncConversationEmptyAppendRecordsHash pins the hash-skip invariant on
+// the empty-delta path: an append of a line the parser ignores still changes
+// the file's bytes, so its content hash must advance or every later sync
+// re-parses the file for no reason.
+func TestSyncConversationEmptyAppendRecordsHash(t *testing.T) {
+	idx, db, col := cleanupTestIndexer(t)
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(path, []byte("alpha question\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hash := "hash-v1"
+	const mtime = 100.0
+	scanFiles := func() ([]source.ConversationFile, []source.ScanIssue, error) {
+		return []source.ConversationFile{{Path: path, Mtime: mtime, ContentHash: hash}}, nil, nil
+	}
+	parseFile := func(p string, fromLine int) (ConversationBatch, error) {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return ConversationBatch{}, err
+		}
+		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		var kept []string
+		for i, line := range lines {
+			if i < fromLine || strings.HasPrefix(line, "SUMMARY") {
+				continue
+			}
+			kept = append(kept, line)
+		}
+		return ConversationBatch{SessionID: "s1", Text: strings.Join(kept, "\n")}, nil
+	}
+
+	if err := idx.syncConversation(col, scanFiles, parseFile, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Append a line the parser ignores; the delta is empty but the hash moves.
+	if err := os.WriteFile(path, []byte("alpha question\nSUMMARY ignored\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hash = "hash-v2"
+	if err := idx.syncConversation(col, scanFiles, parseFile, nil); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := db.GetDocumentContext(context.Background(), col.ID, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.ContentHash != "hash-v2" {
+		t.Fatalf("ContentHash = %q, want hash-v2 after empty append", doc.ContentHash)
+	}
+	chunks, err := db.GetChunksWithoutEmbeddingContext(context.Background(), true)
+	if err != nil || len(chunks) != 1 {
+		t.Fatalf("chunks = %+v (%v), want 1", chunks, err)
+	}
+	before := chunks[0].ID
+	if err := idx.syncConversation(col, scanFiles, parseFile, nil); err != nil {
+		t.Fatal(err)
+	}
+	chunks, err = db.GetChunksWithoutEmbeddingContext(context.Background(), true)
+	if err != nil || len(chunks) != 1 || chunks[0].ID != before {
+		t.Fatalf("unchanged sync re-parsed the file: chunks = %+v (%v), want 1 with id %d", chunks, err, before)
+	}
 }

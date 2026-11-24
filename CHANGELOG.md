@@ -16,6 +16,21 @@ All notable changes to `seek` are documented here. This follows
   while leaving the FTS title intact, keeping both tables in sync. Embedding
   rollback now attempts every restore and joins all failures instead of
   reporting only the first one.
+- **fix(parserdef): surface window-format drift instead of silently skipping turns**:
+  a JSONL sliding-window line missing its offset (or whose messages path is not an
+  array) now records a session error in the sync report and withholds the mtime
+  cursor, so the file is re-scanned once the producer's format is fixed instead of
+  being checkpointed as complete with its drifted turns permanently unindexed.
+- **fix(indexer): skip conversations by content hash, not mtime alone**: Claude and
+  Codex scan entries now carry a content hash; an in-place edit that preserves the
+  timestamp is re-indexed, unchanged files are still skipped, and appended chunks
+  are re-enriched over the whole conversation so their semantic fast fields and
+  fingerprint stay current.
+- **fix(indexer): distinguish a failed semantic-backfill health check from an empty backlog**:
+  `BackfillReport` now flags the degraded no-op, and `seek collection reindex
+  --semantic-only` prints an explicit "health check failed" line so scripts and
+  users can tell it apart from a successful 0/0/0 pass. No documents are written
+  on either no-op path.
 
 ## [0.6.11] - 2026-11-23
 

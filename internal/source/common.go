@@ -1,6 +1,9 @@
 package source
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -60,6 +63,22 @@ func ExtractExtension(mediaType string) string {
 	default:
 		return "bin"
 	}
+}
+
+// hashFileContext returns the SHA-256 hex digest of a file's bytes. The
+// Claude and Codex scanners use it so the incremental skip compares content,
+// not just mtime — an in-place edit that preserves the timestamp must still
+// trigger a re-index.
+func hashFileContext(ctx context.Context, path string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:]), nil
 }
 
 // ImageCacheDir returns the path to the image cache directory.
