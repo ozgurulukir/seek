@@ -2,6 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -897,5 +900,355 @@ func TestSyncVectorIndexIncremental_BatchBoundaries(t *testing.T) {
 				t.Fatalf("vector index len = %d, want %d", vIndex.Len(), tc.n+1)
 			}
 		})
+	}
+}
+
+// The HNSW result fetch must batch its IN (...) so a large -l combined with
+// filters (searchLimit = limit*10) cannot exceed SQLite's parameter limit.
+func TestFetchSearchResultsBatchesLargeIDSet(t *testing.T) {
+	s := newTestStore(t)
+	col, err := s.CreateCollection("big-fetch", CollectionTypeMarkdown, t.TempDir(), "*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "note.md", "Note", "hash", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 600 // crosses the 500-ID batch boundary
+	for i := 0; i < n; i++ {
+		if err := s.InsertChunk(docID, i, fmt.Sprintf("chunk %d", i), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.db.Query(`SELECT id FROM chunks WHERE document_id = ? ORDER BY seq`, docID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if len(ids) != n {
+		t.Fatalf("chunk ids = %d, want %d", len(ids), n)
+	}
+
+	// Reverse the IDs and attach distinct scores: the output must follow this
+	// HNSW order, not rowid order, across both batches.
+	results := make([]VectorResult, 0, n)
+	for i := n - 1; i >= 0; i-- {
+		results = append(results, VectorResult{ChunkID: ids[i], Score: float64(i)})
+	}
+
+	got, err := s.fetchSearchResultsContext(context.Background(), results, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != n {
+		t.Fatalf("fetch len = %d, want %d", len(got), n)
+	}
+	for i, r := range got {
+		if r.ChunkID != results[i].ChunkID || r.Score != results[i].Score {
+			t.Fatalf("result %d = (chunk %d, score %v), want (chunk %d, score %v)",
+				i, r.ChunkID, r.Score, results[i].ChunkID, results[i].Score)
+		}
+	}
+
+	// A filter that matches nothing must be applied to every batch, not just
+	// the first one; otherwise the second batch would leak 100 results.
+	fs := NewFilterSet()
+	fs.Add(&CollectionFilter{Name: "no-such-collection"})
+	got, err = s.fetchSearchResultsContext(context.Background(), results, fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("filtered fetch len = %d, want 0", len(got))
+	}
+}
+
+// The linear backend keeps only the top K candidates in a bounded min-heap.
+func TestLinearVectorSearchTopKBounded(t *testing.T) {
+	s := newTestStore(t)
+	embs := [][]float32{
+		{1, 0},         // 1.0
+		{0.9, 0.43589}, // 0.9
+		{0.8, 0.6},     // 0.8
+		{0.7, 0.71414}, // 0.7
+		{0.6, 0.8},     // 0.6
+		{0.5, 0.86603}, // 0.5
+		{0.3, 0.95394}, // 0.3
+		{0.1, 0.99499}, // 0.1
+	}
+	for i, e := range embs {
+		insertVecDoc(t, s, fmt.Sprintf("v%d", i), [][]float32{e})
+	}
+
+	res, err := s.linearSearchVectorContext(context.Background(), []float32{1, 0}, 3, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 3 {
+		t.Fatalf("top-3 len = %d, want 3", len(res))
+	}
+	for i, want := range []string{"v0", "v1", "v2"} {
+		if res[i].Title != want {
+			t.Errorf("top-3[%d] = %s, want %s", i, res[i].Title, want)
+		}
+	}
+	for i := 1; i < len(res); i++ {
+		if res[i-1].Score < res[i].Score {
+			t.Fatalf("scores not descending: %v then %v", res[i-1].Score, res[i].Score)
+		}
+	}
+
+	// limit above the corpus size returns everything; limit <= 0 returns none.
+	all, err := s.linearSearchVectorContext(context.Background(), []float32{1, 0}, 20, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != len(embs) {
+		t.Errorf("limit 20 len = %d, want %d", len(all), len(embs))
+	}
+	none, err := s.linearSearchVectorContext(context.Background(), []float32{1, 0}, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(none) != 0 {
+		t.Errorf("limit 0 len = %d, want 0", len(none))
+	}
+}
+
+// closeDBOnFirstAdd forces the vector rebuild to fail while also closing the
+// DB, so every restore UPDATE in the rollback loop fails and can be observed.
+type closeDBOnFirstAdd struct {
+	*linearIndex
+	db     *sql.DB
+	closed bool
+}
+
+func (i *closeDBOnFirstAdd) Add(id int64, v []float32) error {
+	if !i.closed {
+		i.closed = true
+		_ = i.db.Close()
+		return errors.New("forced rebuild failure")
+	}
+	return i.linearIndex.Add(id, v)
+}
+
+func TestUpdateChunkEmbeddingsBatchReportsAllRestoreFailures(t *testing.T) {
+	s := newTestStore(t)
+	base := newLinearIndex(2)
+	s.SetVectorIndex(&closeDBOnFirstAdd{linearIndex: base, db: s.db})
+
+	col, err := s.CreateCollection("restore-errors", CollectionTypeMarkdown, t.TempDir(), "*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, err := s.UpsertDocument(col.ID, "note.md", "Note", "hash", 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for seq, v := range [][]float32{{1, 0}, {0, 1}} {
+		if err := s.InsertChunk(docID, seq, "content", v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.db.Query(`SELECT id FROM chunks WHERE document_id = ? ORDER BY seq`, docID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if len(ids) != 2 {
+		t.Fatalf("chunk ids = %v, want 2", ids)
+	}
+	for _, id := range ids {
+		if err := base.Add(id, []float32{1, 0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	updates := []ChunkEmbeddingUpdate{
+		{ChunkID: ids[0], Embedding: []float32{0, 1}},
+		{ChunkID: ids[1], Embedding: []float32{0, 1}},
+	}
+	err = s.UpdateChunkEmbeddingsBatchContext(context.Background(), updates, false)
+	if err == nil {
+		t.Fatal("expected a restore failure error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "restore previous embeddings") {
+		t.Fatalf("error %q does not report restore failures", msg)
+	}
+	for _, id := range ids {
+		if !strings.Contains(msg, fmt.Sprintf("chunk %d", id)) {
+			t.Fatalf("error %q does not report restore failure for chunk %d", msg, id)
+		}
+	}
+}
+
+func assertDocAndFTSTitle(t *testing.T, s *Store, docID int64, want string) {
+	t.Helper()
+	var docTitle, ftsTitle string
+	if err := s.db.QueryRow(`SELECT title FROM documents WHERE id = ?`, docID).Scan(&docTitle); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow(`SELECT title FROM documents_fts WHERE rowid = ?`, docID).Scan(&ftsTitle); err != nil {
+		t.Fatal(err)
+	}
+	if docTitle != want || ftsTitle != want {
+		t.Fatalf("documents.title=%q documents_fts.title=%q, want both %q", docTitle, ftsTitle, want)
+	}
+}
+
+func TestAppendEmptyTitlePreservesDocumentAndFTSTitle(t *testing.T) {
+	s := newTestStore(t)
+	col, err := s.CreateCollection("titles", CollectionTypeMarkdown, t.TempDir(), "*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	req := DocumentIndex{
+		CollectionID: col.ID,
+		Path:         "note.md",
+		Title:        "Original Title",
+		ContentHash:  "hash",
+		Mtime:        1,
+		LineCount:    1,
+		FTSContent:   "first",
+		Chunks:       []IndexChunk{{Seq: 0, Content: "first", ChunkType: ChunkTypeText}},
+	}
+	docID, err := s.UpsertAndReplaceIndex(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDocAndFTSTitle(t, s, docID, "Original Title")
+
+	// An append with an empty title must preserve both titles.
+	appendReq := req
+	appendReq.Title = ""
+	appendReq.FTSContent = "second"
+	appendReq.Chunks = []IndexChunk{{Seq: 1, Content: "second", ChunkType: ChunkTypeText}}
+	if _, err := s.UpsertAndAppendIndex(ctx, appendReq); err != nil {
+		t.Fatal(err)
+	}
+	assertDocAndFTSTitle(t, s, docID, "Original Title")
+
+	// A non-empty title on an append still updates both titles.
+	appendReq.Title = "Renamed"
+	if _, err := s.UpsertAndAppendIndex(ctx, appendReq); err != nil {
+		t.Fatal(err)
+	}
+	assertDocAndFTSTitle(t, s, docID, "Renamed")
+
+	// A genuinely empty title on a NEW document stays empty in both tables.
+	newReq := req
+	newReq.Path = "untitled.md"
+	newReq.Title = ""
+	newID, err := s.UpsertAndReplaceIndex(ctx, newReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDocAndFTSTitle(t, s, newID, "")
+}
+
+// TestReplaceEmptyTitleClearsDocumentAndFTSTitle pins the replace path: an
+// empty title must clear both tables. Title preservation is append-only.
+func TestReplaceEmptyTitleClearsDocumentAndFTSTitle(t *testing.T) {
+	s := newTestStore(t)
+	col, err := s.CreateCollection("titles-replace", CollectionTypeMarkdown, t.TempDir(), "*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	req := DocumentIndex{
+		CollectionID: col.ID,
+		Path:         "note.md",
+		Title:        "Original Title",
+		ContentHash:  "hash",
+		Mtime:        1,
+		LineCount:    1,
+		FTSContent:   "first",
+		Chunks:       []IndexChunk{{Seq: 0, Content: "first", ChunkType: ChunkTypeText}},
+	}
+	docID, err := s.UpsertAndReplaceIndex(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDocAndFTSTitle(t, s, docID, "Original Title")
+
+	req.Title = ""
+	req.FTSContent = "replaced"
+	req.Chunks = []IndexChunk{{Seq: 0, Content: "replaced", ChunkType: ChunkTypeText}}
+	if _, err := s.UpsertAndReplaceIndex(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	assertDocAndFTSTitle(t, s, docID, "")
+}
+
+// TestAppendFastFieldsReplacesStoredFieldSet pins that a caller-supplied
+// computed field set on an append replaces the stored set, so fields the new
+// pass no longer produces do not linger as stale metadata.
+func TestAppendFastFieldsReplacesStoredFieldSet(t *testing.T) {
+	s := newTestStore(t)
+	col, err := s.CreateCollection("append-fields", CollectionTypeMarkdown, t.TempDir(), "*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	req := DocumentIndex{
+		CollectionID: col.ID,
+		Path:         "note.md",
+		Title:        "Note",
+		ContentHash:  "hash",
+		Mtime:        1,
+		LineCount:    1,
+		FTSContent:   "first",
+		Chunks:       []IndexChunk{{Seq: 0, Content: "first", ChunkType: ChunkTypeText}},
+		FastFields:   map[string]string{"tags": "old", "entities": "stale"},
+	}
+	docID, err := s.UpsertAndReplaceIndex(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	appendReq := req
+	appendReq.FTSContent = "second"
+	appendReq.Chunks = []IndexChunk{{Seq: 1, Content: "second", ChunkType: ChunkTypeText}}
+	appendReq.FastFields = map[string]string{"tags": "new"}
+	if _, err := s.UpsertAndAppendIndex(ctx, appendReq); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := s.FastFields().Get(docID, "tags"); err != nil || v != "new" {
+		t.Fatalf("tags = %v (%v), want new", v, err)
+	}
+	if v, err := s.FastFields().Get(docID, "entities"); err != nil || v != nil {
+		t.Fatalf("entities = %v (%v), want cleared", v, err)
+	}
+
+	// A nil field set on an append keeps what is stored (transient outage).
+	appendReq.FastFields = nil
+	appendReq.FTSContent = "third"
+	appendReq.Chunks = []IndexChunk{{Seq: 2, Content: "third", ChunkType: ChunkTypeText}}
+	if _, err := s.UpsertAndAppendIndex(ctx, appendReq); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := s.FastFields().Get(docID, "tags"); err != nil || v != "new" {
+		t.Fatalf("tags = %v (%v), want new after nil append", v, err)
 	}
 }

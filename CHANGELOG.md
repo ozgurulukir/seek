@@ -5,6 +5,18 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+- **fix(store): batch HNSW result fetches and bound linear-scan memory**:
+  vector search with a large `-l` plus filters could build one `IN (...)`
+  holding more IDs than SQLite's parameter limit; the fetch now batches IDs
+  in groups of 500 while preserving HNSW result order. The linear backend now
+  keeps only the top-K candidates in a bounded min-heap instead of
+  materializing and sorting every embedding row.
+- **fix(store): preserve document titles on empty-title appends and report all restore errors**:
+  appending chunks with an empty title no longer clears `documents.title`
+  while leaving the FTS title intact, keeping both tables in sync. Embedding
+  rollback now attempts every restore and joins all failures instead of
+  reporting only the first one.
+
 ## [0.6.11] - 2026-11-23
 
 - **fix(release): pin linux-amd64 release build to ubuntu-24.04 runner**:

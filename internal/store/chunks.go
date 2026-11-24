@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -321,13 +322,15 @@ func (s *Store) UpdateChunkEmbeddingsBatchContext(ctx context.Context, updates [
 
 	if len(replacedIDs) > 0 {
 		if err := s.SyncVectorIndexContext(ctx); err != nil {
-			var restoreErr error
+			// Attempt every restore even when some fail, and report all of them
+			// so no failed rollback is hidden behind the first one.
+			var restoreErrs []error
 			for i, id := range replacedIDs {
-				if _, e := s.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`, previousEmbeddings[i], id); e != nil && restoreErr == nil {
-					restoreErr = e
+				if _, e := s.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?`, previousEmbeddings[i], id); e != nil {
+					restoreErrs = append(restoreErrs, fmt.Errorf("restore embedding for chunk %d: %w", id, e))
 				}
 			}
-			if restoreErr != nil {
+			if restoreErr := errors.Join(restoreErrs...); restoreErr != nil {
 				return fmt.Errorf("rebuild vector index after embedding update: %w (restore previous embeddings: %v)", err, restoreErr)
 			}
 			return fmt.Errorf("rebuild vector index after embedding update: %w", err)
