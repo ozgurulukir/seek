@@ -200,6 +200,39 @@ func TestAnalyzerEnglishNonPrefixStemFallsBackToSurface(t *testing.T) {
 	}
 }
 
+// TestAnalyzerShorterNonPrefixStemFallsBackToSurface pins issue #220: English
+// Snowball maps dying/lying/tying to die/lie/tie — shorter, but not prefixes of
+// the surface token. The unstemmed unicode61 index stores the surface form, so
+// `die*` can never match `dying`; the query must fall back to the surface token
+// so the word still matches itself. Turkish b->p voicing (kitabı->kitap) is the
+// same shape and now self-matches too, while genuine prefix stems still expand.
+func TestAnalyzerShorterNonPrefixStemFallsBackToSurface(t *testing.T) {
+	en := NewAnalyzer("en", true, true)
+	for _, tt := range []struct{ input, want string }{
+		{"dying", "dying"},
+		{"lying", "lying"},
+		{"tying", "tying"},
+	} {
+		got := en.AnalyzeForQuery(tt.input)
+		if len(got) != 1 || got[0] != tt.want {
+			t.Errorf("AnalyzeForQuery(%q) = %v, want [%q]", tt.input, got, tt.want)
+		}
+	}
+
+	tr := NewAnalyzer("tr", true, true)
+	for _, tt := range []struct{ input, want string }{
+		{"kitabı", "kitabı"},    // shorter non-prefix stem: self-match
+		{"kitaplar", "kitap*"},  // genuine prefix stem: root expansion
+		{"kitapta", "kitap*"},   // genuine prefix stem: root expansion
+		{"faturayı", "fatura*"}, // genuine prefix stem: root expansion
+	} {
+		got := tr.AnalyzeForQuery(tt.input)
+		if len(got) != 1 || got[0] != tt.want {
+			t.Errorf("AnalyzeForQuery(tr, %q) = %v, want [%q]", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestAnalyzerIsStopWord(t *testing.T) {
 	tests := []struct {
 		name     string

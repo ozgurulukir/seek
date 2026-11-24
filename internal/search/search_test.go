@@ -1122,3 +1122,65 @@ func TestSearchBM25_SortByDocumentColumn(t *testing.T) {
 		}
 	})
 }
+
+// TestParsedModeMatchesShorterNonPrefixStems pins issue #220 end-to-end: the
+// unstemmed FTS5 index stores "dying", so an AnalyzeForQuery fallback to the
+// surface token must actually find it in the default (parsed) query mode.
+func TestParsedModeMatchesShorterNonPrefixStems(t *testing.T) {
+	s := newTestStore(t)
+	insertDoc(t, s, "/docs/dying.md", "Dying", "a story about dying and lying and tying")
+	engine := NewEngine(NewStoreRepository(s), nil)
+	ctx := context.Background()
+
+	for _, q := range []string{"dying", "lying", "tying"} {
+		// An analyzer is required: without one AnalyzeForQuery is never called
+		// and the test would pass even if the tokenizer bug were reintroduced.
+		res, err := engine.SearchBM25(ctx, q, 10, Options{Analyzer: NewAnalyzer("en", true, true)})
+		if err != nil {
+			t.Fatalf("SearchBM25(%q): %v", q, err)
+		}
+		if len(res) == 0 {
+			t.Errorf("SearchBM25(%q) in parsed mode returned no results, want the document", q)
+		}
+	}
+}
+
+// TestUnaryNotUnderOrSurfacesError pins issue #220 end-to-end: an OR query with
+// a pure NOT operand must produce a user-facing error instead of silently
+// degrading to the positive branch. A plain OR still renders valid FTS5.
+func TestUnaryNotUnderOrSurfacesError(t *testing.T) {
+	s := newTestStore(t)
+	insertDoc(t, s, "/docs/go.md", "Go", "go programming")
+	insertDoc(t, s, "/docs/rust.md", "Rust", "rust programming")
+	engine := NewEngine(NewStoreRepository(s), nil)
+	ctx := context.Background()
+
+	res, err := engine.SearchBM25(ctx, "go OR rust", 10, Options{})
+	if err != nil {
+		t.Fatalf("SearchBM25(go OR rust): %v", err)
+	}
+	if len(res) != 2 {
+		t.Errorf("SearchBM25(go OR rust) returned %d results, want 2", len(res))
+	}
+
+	for _, tc := range []struct {
+		name string
+		call func() error
+	}{
+		{"lex", func() error {
+			_, err := engine.SearchBM25(ctx, "go OR NOT rust", 10, Options{})
+			return err
+		}},
+		{"hybrid", func() error {
+			_, err := engine.SearchHybrid(ctx, "go OR NOT rust", 10, Options{})
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+			if !errors.Is(err, ErrPureNegation) {
+				t.Fatalf("err = %v, want errors.Is(err, ErrPureNegation)", err)
+			}
+		})
+	}
+}

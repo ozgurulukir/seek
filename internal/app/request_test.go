@@ -373,6 +373,46 @@ func TestRunSearchParsedModeMatchesNonPrefixStems(t *testing.T) {
 	}
 }
 
+// TestPlanSearchChunkTypeValidation pins issue #221: only text/image are
+// accepted (case-insensitively); an empty value means no filter, and an
+// unknown value errors instead of silently degrading to the text filter.
+func TestPlanSearchChunkTypeValidation(t *testing.T) {
+	runtime := newRequestTestRuntime(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		name    string
+		value   string
+		wantErr string
+		wantN   int
+	}{
+		{"text", "text", "", 1},
+		{"text uppercase", "TEXT", "", 1},
+		{"image", "image", "", 1},
+		{"image mixed case", "Image", "", 1},
+		{"empty means no filter", "", "", 0},
+		{"invalid video", "video", "--chunk-type", 0},
+		{"invalid typo", "imgae", "--chunk-type", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts, err := runtime.planSearch(ctx, SearchRequest{ChunkType: tc.value})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("planSearch(chunk-type %q) err = %v, want containing %q", tc.value, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("planSearch(chunk-type %q) unexpected error: %v", tc.value, err)
+			}
+			if got := len(opts.Filters.Items()); got != tc.wantN {
+				t.Fatalf("planSearch(chunk-type %q) filters = %d, want %d", tc.value, got, tc.wantN)
+			}
+		})
+	}
+}
+
 func TestPlanSearchSortByValidation(t *testing.T) {
 	runtime := newRequestTestRuntime(t)
 	ctx := context.Background()

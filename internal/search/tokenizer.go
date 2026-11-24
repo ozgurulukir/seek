@@ -117,12 +117,13 @@ func NewAnalyzer(lang string, enableStopWords, enableStemmer bool) *Analyzer {
 // prefix query on them therefore never matches the original word — silently
 // zeroing search results (FTS5 queries are implicit AND).
 //
-// A stem is accepted only when it is still usable as a search prefix of the
-// token (the normal suffix-stripping case) or when it is strictly shorter
-// (genuine Turkish root reconstruction, e.g. "kitabı" -> "kitap"). Anything
-// else — same length but rewritten, or longer than the input — is discarded in
-// favour of the original token, mirroring how the English stemmer never grows
-// words. Returns the original token when the stem is unusable.
+// A stem is accepted only when it strips a suffix (the stem is a prefix of
+// the token) or when it is strictly shorter (genuine Turkish root
+// reconstruction, e.g. "kitabı" -> "kitap"). Anything else — same length but
+// rewritten, or longer than the input — is discarded in favour of the original
+// token, mirroring how the English stemmer never grows words. Returns the
+// original token when the stem is unusable. AnalyzeForQuery applies a stricter
+// rule: only genuine prefixes become wildcard expansions.
 func guardedTurkishStem(token, stem string) string {
 	if stem == "" {
 		return token
@@ -175,13 +176,16 @@ const minFTS5PrefixLen = 3
 // This allows FTS5 to match both the stemmed form and its suffixes (e.g., "kitap*" matches "kitap" and "kitaplar").
 // Terms shorter than minFTS5PrefixLen skip the wildcard to avoid expensive FTS5 suffix scans.
 //
-// The FTS5 index is unstemmed (unicode61), so it stores the surface token. A
-// `stem*` query can only match when the stem is genuinely a prefix of that
-// surface form. Porter rewrites the endings of words like "body"->"bodi" and
-// "city"->"citi", producing a same-length stem that is not a prefix; `bodi*`
-// then matches nothing and silently drops the term. Such unusable stems fall
-// back to the surface token. Stems that are shorter than the token are still
-// honored for root reconstruction (the Turkish "kitabı"->"kitap" case).
+// The FTS5 index is unstemmed (unicode61), so a `stem*` query can only match
+// when the stem is genuinely a prefix of the stored surface token. Stems that
+// rewrite the ending are not prefixes: English "body"->"bodi" (same length)
+// and "dying"->"die" (shorter), or Turkish "kitabı"->"kitap" (shorter b->p
+// voicing). Expanding any of them would match nothing and silently drop the
+// term, so they fall back to the surface token and still match themselves.
+// Turkish root reconstruction is preserved for the common suffix-stripping
+// cases ("kitaplar"/"kitapta"->"kitap*") and remains available through
+// Analyze; only the irregular voicing case loses its expanded root match in
+// query mode.
 // PERF: uses AnalyzeTokenFunc to stream tokens directly into the pipeline without allocating an intermediate token slice.
 func (a *Analyzer) AnalyzeForQuery(text string) []string {
 	capEst := len(text)/5 + 1
@@ -199,7 +203,7 @@ func (a *Analyzer) AnalyzeForQuery(text string) []string {
 		}
 		if a.enableStemmer && a.stemmer != nil {
 			stemmed := a.stemmer(token)
-			usable := stemmed != token && (strings.HasPrefix(token, stemmed) || len(stemmed) < len(token))
+			usable := stemmed != token && strings.HasPrefix(token, stemmed)
 			switch {
 			case !usable:
 				result = append(result, token)

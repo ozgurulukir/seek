@@ -91,16 +91,12 @@ func (e *Engine) WithLogger(l Logger) *Engine {
 }
 
 // renderFTS5 converts an AST Query to an FTS5 query string using the optional analyzer.
-func renderFTS5(q Query, a *Analyzer) string {
+func renderFTS5(q Query, a *Analyzer) (string, error) {
 	if q == nil {
-		return ""
+		return "", nil
 	}
-	if a != nil {
-		fts, _ := ToFTS5WithAnalyzer(q, a)
-		return fts
-	}
-	fts, _ := ToFTS5(q)
-	return fts
+	fts, _, err := ToFTS5WithError(q, a)
+	return fts, err
 }
 
 // searchBM25Raw executes the BM25 full-text query against FTS5 and returns raw candidate hits.
@@ -109,20 +105,27 @@ func (e *Engine) searchBM25Raw(ctx context.Context, query string, limit int, opt
 		limit = DefaultLimit
 	}
 
+	var err error
 	ftsQuery := query
 	if opts.Query != nil {
-		ftsQuery = renderFTS5(opts.Query, opts.Analyzer)
+		ftsQuery, err = renderFTS5(opts.Query, opts.Analyzer)
+		if err != nil {
+			return nil, err
+		}
 	} else if opts.QueryMode != "raw" {
-		parsed, err := ParseQuery(query)
+		parsed, parseErr := ParseQuery(query)
 		switch {
-		case err == nil && parsed != nil:
-			ftsQuery = renderFTS5(parsed, opts.Analyzer)
-		case errors.Is(err, ErrUnknownField):
+		case parseErr == nil && parsed != nil:
+			ftsQuery, err = renderFTS5(parsed, opts.Analyzer)
+			if err != nil {
+				return nil, err
+			}
+		case errors.Is(parseErr, ErrUnknownField):
 			// Actionable validation error: surface it instead of
 			// resubmitting the rejected string to FTS5, where it would die
 			// as an opaque "no such column" — or, in hybrid mode, silently
 			// kill the BM25 leg while vector results keep flowing.
-			return nil, err
+			return nil, parseErr
 		default:
 			// On other parse errors, fall back to raw query
 		}
@@ -240,6 +243,11 @@ func (e *Engine) SearchHybrid(ctx context.Context, query string, limit int, opts
 	}
 	if errors.Is(vecErr, context.Canceled) || errors.Is(vecErr, context.DeadlineExceeded) {
 		return nil, vecErr
+	}
+	// Query validation failures are user-facing: never mask them with the
+	// vector leg's results (issue #220).
+	if errors.Is(bm25Err, ErrPureNegation) || errors.Is(bm25Err, ErrUnknownField) {
+		return nil, bm25Err
 	}
 
 	if bm25Err != nil && vecErr != nil {
