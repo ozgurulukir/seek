@@ -216,7 +216,7 @@ func (c *CollectionReindexCmd) Run(cfg *config.AppConfig) (err error) {
 			// Distinct from a genuinely empty backlog (0/0/0, no flag): the
 			// pass was skipped because the semantic service is unhealthy, so
 			// scripts and users can tell a degraded no-op from a clean one.
-			fmt.Fprintf(os.Stderr, "Semantic backfill for %q skipped: semantic service health check failed; no documents were changed\n", c.Name)
+			fmt.Fprintf(os.Stderr, "Semantic backfill for %q skipped: semantic service unavailable; no documents were changed\n", c.Name)
 		}
 		return nil
 	}

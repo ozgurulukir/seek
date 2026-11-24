@@ -21,6 +21,8 @@ All notable changes to `seek` are documented here. This follows
   array) now records a session error in the sync report and withholds the mtime
   cursor, so the file is re-scanned once the producer's format is fixed instead of
   being checkpointed as complete with its drifted turns permanently unindexed.
+  Drift is a per-session error, so it no longer suppresses orphan cleanup for the
+  collection — only a scan that failed to enumerate a whole file or database does.
 - **fix(indexer): skip conversations by content hash, not mtime alone**: Claude and
   Codex scan entries now carry a content hash; an in-place edit that preserves the
   timestamp is re-indexed, unchanged files are still skipped, and appended chunks
@@ -28,9 +30,11 @@ All notable changes to `seek` are documented here. This follows
   fingerprint stay current.
 - **fix(indexer): distinguish a failed semantic-backfill health check from an empty backlog**:
   `BackfillReport` now flags the degraded no-op, and `seek collection reindex
-  --semantic-only` prints an explicit "health check failed" line so scripts and
-  users can tell it apart from a successful 0/0/0 pass. No documents are written
-  on either no-op path.
+  --semantic-only` prints an explicit "service unavailable" line so scripts and
+  users can tell it apart from a successful 0/0/0 pass. The flag is now also set
+  when no provider resolves because the service was down, not just when a
+  resolved provider's health check fails. No documents are written on either
+  no-op path.
 
 ## [0.6.11] - 2026-11-23
 

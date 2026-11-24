@@ -85,7 +85,13 @@ func (idx *Indexer) BackfillSemantic(ctx context.Context, col *store.Collection,
 		// Nothing to enrich with: the capability is disabled or the service
 		// is unreachable. Warn once and leave every document untouched — the
 		// plan keeps existing fields and the stale state instead of mass-
-		// failing the collection.
+		// failing the collection. When enrichment is enabled but no provider
+		// resolves (most commonly the service was down at resolution), flag
+		// the pass as degraded so a 0/0/0 no-op is not mistaken for a healthy
+		// empty backlog.
+		if idx.cfg != nil && idx.cfg.Config.Semantic.Enabled {
+			report.HealthFailed = true
+		}
 		log.Printf("  WARN: semantic backfill %s: semantic enrichment unavailable (disabled or service down) — nothing to backfill\n", col.Name)
 		return report, nil
 	}

@@ -52,9 +52,13 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 	if err != nil {
 		return fmt.Errorf("sync sessions: %w", err)
 	}
+	incompleteScans := 0
 	for _, sessionError := range sessionErrors {
 		idx.warnf("  WARN: session %s: %v\n", sessionError.SessionID, sessionError.Err)
 		idx.recordFailure(sessionError.SessionID, "scan", sessionError.Err)
+		if sessionError.ScanIncomplete {
+			incompleteScans++
+		}
 	}
 
 	var indexed, skipped, failed int
@@ -108,12 +112,16 @@ func (idx *Indexer) syncParserDef(col *store.Collection) error {
 		indexed++
 	}
 
-	if len(sessionErrors) == 0 {
+	// Only a scan that failed to enumerate a whole file/DB makes the seen-path
+	// set unreliable. Per-session errors (e.g. JSONL window drift) still leave
+	// every session visible, so cleanup must proceed or deleted sessions would
+	// linger forever while any file is drifted.
+	if incompleteScans == 0 {
 		if _, err := idx.safeCleanupOrphans(col, seenPaths, "sessions"); err != nil {
 			return fmt.Errorf("cleanup sessions: %w", err)
 		}
 	} else {
-		idx.warnf("  WARN: skipping orphan cleanup due to %d scan error(s)\n", len(sessionErrors))
+		idx.warnf("  WARN: skipping orphan cleanup due to %d incomplete scan(s)\n", incompleteScans)
 	}
 	idx.addReport(SyncReport{Indexed: indexed, Skipped: skipped, Failed: failed + len(sessionErrors)})
 	idx.log.Printf("  Synced: %d indexed, %d unchanged", indexed, skipped)

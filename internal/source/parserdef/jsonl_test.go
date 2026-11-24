@@ -797,6 +797,12 @@ func TestJSONL_SlidingWindow_DriftSurfacesErrorAndWithholdsCursor(t *testing.T) 
 		!strings.Contains(sErrs[0].Err.Error(), "format drift") {
 		t.Errorf("session error = %q, want drift message with line number", sErrs[0].Err)
 	}
+	// Drift is a per-session error: the file was still fully enumerated, so
+	// orphan cleanup must proceed. Marking it incomplete would let deleted
+	// sessions linger forever while any file is drifted.
+	if sErrs[0].ScanIncomplete {
+		t.Error("drift error must not set ScanIncomplete; the scan is complete")
+	}
 
 	// The cursor is withheld (zero): even a `since` far past the file's mtime
 	// cannot mark this session unchanged, so the drifted turns are re-scanned

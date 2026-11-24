@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,15 +71,34 @@ func ExtractExtension(mediaType string) string {
 // not just mtime — an in-place edit that preserves the timestamp must still
 // trigger a re-index.
 func hashFileContext(ctx context.Context, path string) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	hash := sha256.Sum256(data)
-	return hex.EncodeToString(hash[:]), nil
+	defer f.Close()
+
+	// Stream instead of os.ReadFile: conversation histories can be large and
+	// this runs on every scan, so peak memory must not scale with file size.
+	hash := sha256.New()
+	buf := make([]byte, 64*1024)
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			if _, err := hash.Write(buf[:n]); err != nil {
+				return "", err
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return "", readErr
+		}
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // ImageCacheDir returns the path to the image cache directory.
