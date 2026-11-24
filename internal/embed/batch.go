@@ -304,9 +304,10 @@ func (c *Client) DownloadBatchResultsContext(ctx context.Context, fileID string,
 
 	results := make(map[string][]float32)
 	// Scan line-by-line over the bounded body instead of converting it to a
-	// string and splitting: that avoids a second full-size allocation and a
-	// slice of every line. The buffer is enlarged so a single long embedding
-	// line (up to the body cap) is accepted.
+	// string and splitting: for typical multi-line results this avoids a
+	// second full-size allocation and a slice of every line. A single line at
+	// the body cap can still grow the scanner buffer to that cap, so peak
+	// memory for that pathological case is roughly twice the body size.
 	scanner := bufio.NewScanner(bytes.NewReader(respBody))
 	scanner.Buffer(make([]byte, 64*1024), maxBatchResponseBytes)
 

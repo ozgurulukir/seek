@@ -56,7 +56,9 @@ All notable changes to `seek` are documented here. This follows
   256 MiB with an explicit error instead of buffering unbounded data, and the
   result download parses JSONL with a buffered scanner rather than splitting a
   full-body string. Image data URIs reject files over 100 MiB and in-flight
-  encoding is slot-bounded across workers (#223).
+  encoding is slot-bounded across workers (#223). The retained batch size is
+  capped at the four in-flight encoding slots (below the five-image default),
+  trading ~25% more embed calls for a fixed data-URI memory ceiling.
 - **fix(xberg): cap document upload size**: the optional xberg extract server
   rejects uploads over 100 MiB (configurable via `XBERG_MAX_UPLOAD_BYTES`) with
   HTTP 413, counting bytes as they are streamed into a spooled temp file rather

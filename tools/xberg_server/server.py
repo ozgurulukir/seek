@@ -1,6 +1,7 @@
 # /// script
 # dependencies = [
 #   "fastapi",
+#   "httpx",
 #   "uvicorn",
 #   "python-multipart",
 #   "pypdf",

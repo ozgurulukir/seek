@@ -97,7 +97,7 @@ try:
     import server as server_module
 
     client = TestClient(server_module.app)
-except Exception:  # optional dependencies absent — helper tests still run
+except ImportError:  # optional dependencies absent — helper tests still run
     client = None
     server_module = None
 
