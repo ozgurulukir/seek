@@ -282,6 +282,75 @@ func TestToFTS5_UnaryNotUnderAnd(t *testing.T) {
 	}
 }
 
+// TestToFTS5_UnaryNotUnderOr pins issue #220: a pure unary-NOT operand under
+// OR used to render as "" and be silently dropped (`go OR NOT rust` searched
+// for just `go`). FTS5 cannot express a negative-only OR branch, so the
+// translation must fail with a clear, testable error instead.
+func TestToFTS5_UnaryNotUnderOr(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"unary not on the right", "go OR NOT rust"},
+		{"unary not on the left", "NOT rust OR go"},
+		{"parenthesized negation", "go OR (NOT rust)"},
+		{"nested under and", "(go OR NOT rust) AND c"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q, err := ParseQuery(tt.input)
+			if err != nil {
+				t.Fatalf("ParseQuery(%q): %v", tt.input, err)
+			}
+			got, _, err := ToFTS5WithError(q, nil)
+			if !errors.Is(err, ErrPureNegation) {
+				t.Fatalf("ToFTS5WithError(%q) err = %v, want ErrPureNegation (got %q)", tt.input, err, got)
+			}
+			if got != "" {
+				t.Errorf("ToFTS5WithError(%q) = %q, want empty string alongside the error", tt.input, got)
+			}
+		})
+	}
+}
+
+// TestToFTS5WithErrorTopLevelNegation pins the top-level form of issue #220:
+// a bare unary NOT has no positive set, so it must surface ErrPureNegation
+// instead of rendering an empty MATCH string that fails as an opaque FTS5
+// syntax error (and, in hybrid mode, gets masked by vector results).
+func TestToFTS5WithErrorTopLevelNegation(t *testing.T) {
+	for _, input := range []string{"NOT rust", "NOT go AND NOT rust"} {
+		t.Run(input, func(t *testing.T) {
+			q, err := ParseQuery(input)
+			if err != nil {
+				t.Fatalf("ParseQuery(%q): %v", input, err)
+			}
+			got, _, err := ToFTS5WithError(q, nil)
+			if !errors.Is(err, ErrPureNegation) {
+				t.Fatalf("ToFTS5WithError(%q) err = %v, want ErrPureNegation (got %q)", input, err, got)
+			}
+			if got != "" {
+				t.Errorf("ToFTS5WithError(%q) = %q, want empty string alongside the error", input, got)
+			}
+		})
+	}
+}
+
+// TestToFTS5WithErrorValidOR pins the positive side of issue #220: ordinary
+// OR queries still render to valid FTS5 and carry no error.
+func TestToFTS5WithErrorValidOR(t *testing.T) {
+	q, err := ParseQuery("go OR rust")
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+	got, fuzzy, err := ToFTS5WithError(q, nil)
+	if err != nil {
+		t.Fatalf("ToFTS5WithError(go OR rust): %v", err)
+	}
+	if got != "(go OR rust)" || fuzzy {
+		t.Errorf("ToFTS5WithError(go OR rust) = %q, %v, want (go OR rust), false", got, fuzzy)
+	}
+}
+
 // TestParseQueryRejectsInvalidPunctuation pins the L22 contract: unrecognized
 // punctuation must fail the parse instead of being silently swallowed as
 // end-of-input — `a @` used to parse as just `a`, losing the trailing term
@@ -297,5 +366,19 @@ func TestParseQueryRejectsInvalidPunctuation(t *testing.T) {
 	// Legitimate queries still parse.
 	if q, err := ParseQuery("go AND NOT rust"); err != nil || q == nil {
 		t.Errorf("ParseQuery(\"go AND NOT rust\") = %v, %v", q, err)
+	}
+}
+
+// TestToFTS5_EmptyAndBranchSurfacesError pins the same no-silent-drop rule for
+// AND as issue #220 establishes for OR: a nested pure-negation branch must not
+// collapse the query to its positive side.
+func TestToFTS5_EmptyAndBranchSurfacesError(t *testing.T) {
+	q, err := ParseQuery("go AND (NOT rust AND NOT python)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = ToFTS5WithError(q, nil)
+	if !errors.Is(err, ErrPureNegation) {
+		t.Fatalf("ToFTS5WithError error = %v, want ErrPureNegation", err)
 	}
 }

@@ -345,6 +345,12 @@ func (p *parser) parseUnary() (Query, error) {
 // leg via the raw-query fallback).
 var ErrUnknownField = errors.New("unknown field")
 
+// ErrPureNegation marks a query branch FTS5 cannot express because it has no
+// positive term — e.g. `go OR NOT rust`. The unary-NOT lowering used to render
+// as "" and be silently dropped, changing the query's meaning. Callers can
+// errors.Is this to surface an actionable validation error.
+var ErrPureNegation = errors.New("pure negation cannot be expressed in FTS5")
+
 // fts5FieldNames are the documents_fts columns a field-scoped term may
 // target (the FTS DDL declares exactly title, content — see internal/store).
 // Field-scoped terms render verbatim into the MATCH string, so any other
@@ -498,19 +504,28 @@ func ParseQuery(input string) (Query, error) {
 // ToFTS5 converts a Query AST to an FTS5 MATCH string.
 // Fuzzy queries are mapped to prefix expansion (stem*).
 // Returns the FTS5 query string and a flag indicating if fuzzy fallback was used.
+// Queries FTS5 cannot express render to ""; use ToFTS5WithError to surface why.
+// Deprecated: prefer ToFTS5WithError so validation failures are not discarded.
 func ToFTS5(q Query) (string, bool) {
-	if q == nil {
-		return "", false
-	}
-	return toFTS5(q, nil)
+	fts, fuzzy, _ := ToFTS5WithError(q, nil)
+	return fts, fuzzy
 }
 
 // ToFTS5WithAnalyzer converts a Query AST to an FTS5 MATCH string using the given analyzer.
 // The analyzer is applied to term values before generating the FTS5 query.
 // Stemmed terms are expanded with a `*` prefix for FTS5 matching.
+// Deprecated: prefer ToFTS5WithError so validation failures are not discarded.
 func ToFTS5WithAnalyzer(q Query, a *Analyzer) (string, bool) {
+	fts, fuzzy, _ := ToFTS5WithError(q, a)
+	return fts, fuzzy
+}
+
+// ToFTS5WithError converts a Query AST to an FTS5 MATCH string and reports
+// queries FTS5 cannot answer (any branch with no positive term, including a
+// top-level NOT). The bool reports whether fuzzy fallback was used.
+func ToFTS5WithError(q Query, a *Analyzer) (string, bool, error) {
 	if q == nil {
-		return "", false
+		return "", false, nil
 	}
 	return toFTS5(q, a)
 }
@@ -541,88 +556,119 @@ func unaryNotOperand(q Query) (Query, bool) {
 	return b.Right, true
 }
 
-func toFTS5(q Query, a *Analyzer) (string, bool) {
+func toFTS5(q Query, a *Analyzer) (string, bool, error) {
 	switch v := q.(type) {
 	case *BooleanQuery:
 		op := strings.ToUpper(v.Op)
+		lneg, lnegOK := unaryNotOperand(v.Left)
+		rneg, rnegOK := unaryNotOperand(v.Right)
+		if op == "OR" {
+			// FTS5 has no negative-only OR branch: `go OR NOT rust` used to
+			// render as just `go`. Reject it instead of silently dropping the
+			// operand (issue #220).
+			if lnegOK || rnegOK {
+				return "", false, fmt.Errorf("%w: an OR branch containing only a NOT term (e.g. `go OR NOT rust`) has no positive set; add a positive term or use AND", ErrPureNegation)
+			}
+		}
 		if op == "AND" {
 			// Unary NOT operands (the parser lowers `NOT b` to a NOT node
 			// with an empty dummy positive side) render to "", which made
 			// AND silently swallow the negation — `go AND NOT rust` searched
 			// for just `go`. FTS5 supports binary NOT, so fold the negation
 			// into the positive operand instead (review 2026-09-17 M9).
-			lneg, lnegOK := unaryNotOperand(v.Left)
-			rneg, rnegOK := unaryNotOperand(v.Right)
 			if lnegOK && rnegOK {
 				// Pure negation on both sides: FTS5 cannot answer without a
 				// positive set.
-				return "", false
+				return "", false, fmt.Errorf("%w: an AND of two NOT terms has no positive set; add a positive term", ErrPureNegation)
 			}
 			if lnegOK || rnegOK {
 				posQ, negQ := v.Left, rneg
 				if lnegOK {
 					posQ, negQ = v.Right, lneg
 				}
-				pos, _ := toFTS5(posQ, a)
-				neg, _ := toFTS5(negQ, a)
-				if pos == "" || pos == "()" || pos == `""` || neg == "" {
-					return "", false
+				pos, _, err := toFTS5(posQ, a)
+				if err != nil {
+					return "", false, err
 				}
-				return fmt.Sprintf("(%s NOT %s)", pos, neg), false
+				neg, _, err := toFTS5(negQ, a)
+				if err != nil {
+					return "", false, err
+				}
+				if pos == "" || pos == "()" || pos == `""` || neg == "" {
+					return "", false, fmt.Errorf("%w: an AND branch has no positive term", ErrPureNegation)
+				}
+				return fmt.Sprintf("(%s NOT %s)", pos, neg), false, nil
 			}
 		}
-		ls, _ := toFTS5(v.Left, a)
-		rs, _ := toFTS5(v.Right, a)
+		ls, _, err := toFTS5(v.Left, a)
+		if err != nil {
+			return "", false, err
+		}
+		rs, _, err := toFTS5(v.Right, a)
+		if err != nil {
+			return "", false, err
+		}
 		if op == "NOT" {
 			if ls == "" || ls == "()" || ls == `""` {
-				// Pure negation queries (unary NOT) cannot be answered by FTS5 alone without a positive set.
-				return "", false
+				// A top-level unary NOT has no positive set for FTS5 to
+				// match; report it instead of rendering an empty MATCH string
+				// that fails as an opaque FTS5 syntax error (issue #220).
+				return "", false, fmt.Errorf("%w: a NOT query has no positive term; add a positive term or use AND", ErrPureNegation)
 			}
-			return fmt.Sprintf("(%s NOT %s)", ls, rs), false
+			return fmt.Sprintf("(%s NOT %s)", ls, rs), false, nil
+		}
+		if (op == "OR" || op == "AND") && (ls == "" || rs == "") {
+			// An empty Boolean branch is unanswerable; the generic
+			// fall-through below would silently drop it and change the
+			// query's meaning (issue #220).
+			return "", false, fmt.Errorf("%w: a %s branch rendered to an empty term; add a positive term to each branch", ErrPureNegation, op)
 		}
 		if ls == "" {
-			return rs, false
+			return rs, false, nil
 		}
 		if rs == "" {
-			return ls, false
+			return ls, false, nil
 		}
-		return fmt.Sprintf("(%s %s %s)", ls, op, rs), false
+		return fmt.Sprintf("(%s %s %s)", ls, op, rs), false, nil
 	case *PhraseQuery:
 		var phraseTerms []string
 		for _, t := range v.Terms {
 			phraseTerms = append(phraseTerms, firstAnalyzed(a, t))
 		}
-		return fmt.Sprintf(`"%s"`, strings.Join(phraseTerms, " ")), false
+		return fmt.Sprintf(`"%s"`, strings.Join(phraseTerms, " ")), false, nil
 	case *PrefixQuery:
 		if a != nil {
 			analyzed := a.AnalyzeForQuery(v.Prefix)
 			if len(analyzed) > 0 {
-				return analyzed[0], false
+				return analyzed[0], false, nil
 			}
 		}
-		return v.Prefix + "*", false
+		return v.Prefix + "*", false, nil
 	case *FuzzyQuery:
 		// FTS5 doesn't support fuzzy; map to prefix expansion
 		if a != nil {
 			analyzed := a.AnalyzeForQuery(v.Term)
 			if len(analyzed) > 0 {
-				return analyzed[0], true
+				return analyzed[0], true, nil
 			}
 		}
-		return v.Term + "*", true
+		return v.Term + "*", true, nil
 	case *FieldQuery:
-		fs, _ := toFTS5(v.Query, a)
-		return fmt.Sprintf("%s:%s", v.Field, fs), false
+		fs, _, err := toFTS5(v.Query, a)
+		if err != nil {
+			return "", false, err
+		}
+		return fmt.Sprintf("%s:%s", v.Field, fs), false, nil
 	case *NearQuery:
 		terms := make([]string, len(v.Terms))
 		for i, t := range v.Terms {
 			terms[i] = firstAnalyzed(a, t)
 		}
-		return fmt.Sprintf("NEAR(%s, %d)", strings.Join(terms, " "), v.N), false
+		return fmt.Sprintf("NEAR(%s, %d)", strings.Join(terms, " "), v.N), false, nil
 	case *TermQuery:
-		return firstAnalyzed(a, v.Value), false
+		return firstAnalyzed(a, v.Value), false, nil
 	default:
-		return "", false
+		return "", false, nil
 	}
 }
 

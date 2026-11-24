@@ -35,6 +35,22 @@ All notable changes to `seek` are documented here. This follows
   when no provider resolves because the service was down, not just when a
   resolved provider's health check fails. No documents are written on either
   no-op path.
+- **fix(search): match shorter non-prefix stems and reject unanswerable OR queries**:
+  `AnalyzeForQuery` expanded any stem shorter than the token into a `stem*`
+  wildcard, but the unstemmed unicode61 index stores the surface form — so
+  English `dying`/`lying`/`tying` (stems `die`/`lie`/`tie`) matched nothing.
+  Wildcard expansion now requires a genuine prefix; irregular stems fall back
+  to the surface token (Turkish `kitabı` now self-matches, while prefix stems
+  like `kitaplar`→`kitap*` still expand). Separately, `go OR NOT rust` used to
+  silently drop the NOT branch; FTS5 cannot express a negative-only OR branch,
+  so translation now fails with `ErrPureNegation`, surfaced in lex and hybrid
+  search instead of quietly returning just `go`. The same guard now covers a
+  bare `NOT rust` (and `NOT a AND NOT b`), which previously produced an opaque
+  FTS5 syntax error that hybrid search masked with vector-only results.
+- **fix(search): reject unknown `--chunk-type` values**: values other than
+  `text`/`image` (case-insensitive) silently became the text filter, hiding
+  typos like `--chunk-type video`. Unknown values now error with the supported
+  list; an empty value still means no chunk-type filter.
 
 ## [0.6.11] - 2026-11-23
 

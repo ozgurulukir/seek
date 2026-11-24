@@ -201,11 +201,16 @@ func (r *Runtime) buildRequestFilters(known store.FieldKnownFunc, req SearchRequ
 		filters.Add(search.DateRangeFilter(req.After, req.Before))
 	}
 	if req.ChunkType != "" {
-		ct := 0
-		if strings.ToLower(req.ChunkType) == "image" {
-			ct = 1
+		var ct search.ChunkType
+		switch strings.ToLower(req.ChunkType) {
+		case "text":
+			ct = search.ChunkTypeText
+		case "image":
+			ct = search.ChunkTypeImage
+		default:
+			return nil, fmt.Errorf("--chunk-type: unknown value %q (supported: text, image)", req.ChunkType)
 		}
-		filters.Add(search.ChunkTypeFilter(search.ChunkType(ct)))
+		filters.Add(search.ChunkTypeFilter(ct))
 	}
 	if req.Path != "" {
 		filters.Add(search.PathFilter(req.Path))
