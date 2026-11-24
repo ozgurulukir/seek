@@ -13,7 +13,7 @@ clean:
 	rm -rf bin
 
 test:
-	go test -tags "fts5 sqlite_fts5" ./...
+	CGO_ENABLED=1 go test -tags "fts5 sqlite_fts5" ./...
 
 # Cut a release: bump plugin manifests, promote CHANGELOG [Unreleased], tag, push.
 # Usage: make release VERSION=X.Y.Z  (add RELEASE_ARGS=--dry-run to preview)

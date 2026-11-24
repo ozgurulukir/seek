@@ -29,7 +29,7 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
       - name: Gofmt
-        run: test -z "$(gofmt -l cmd internal main.go)"
+        run: test -z "$(gofmt -l cmd internal main.go third_party)"
       - name: Stale command check
         run: bash scripts/check-stale-commands.sh
 
