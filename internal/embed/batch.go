@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -124,9 +125,9 @@ func (c *Client) UploadBatchFileContext(ctx context.Context, jsonlData []byte) (
 		return "", fmt.Errorf("upload failed %d: %s", resp.StatusCode, string(snippet))
 	}
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readLimitedBody(resp.Body, maxBatchResponseBytes, "upload")
 	if err != nil {
-		return "", fmt.Errorf("read upload response: %w", err)
+		return "", err
 	}
 
 	var result struct {
@@ -168,9 +169,9 @@ func (c *Client) CreateBatchContext(ctx context.Context, fileID string) (*BatchJ
 		return nil, fmt.Errorf("create batch failed %d: %s", resp.StatusCode, string(snippet))
 	}
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readLimitedBody(resp.Body, maxBatchResponseBytes, "create batch")
 	if err != nil {
-		return nil, fmt.Errorf("read create batch response: %w", err)
+		return nil, err
 	}
 
 	var result struct {
@@ -215,10 +216,10 @@ func (c *Client) PollBatchContext(ctx context.Context, batchID string, onStatus 
 			return nil, fmt.Errorf("poll batch failed %d: %s", resp.StatusCode, string(snippet))
 		}
 
-		respBody, err := io.ReadAll(resp.Body)
+		respBody, err := readLimitedBody(resp.Body, maxBatchResponseBytes, "poll")
 		resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("read poll response: %w", err)
+			return nil, err
 		}
 
 		var result struct {
@@ -296,21 +297,29 @@ func (c *Client) DownloadBatchResultsContext(ctx context.Context, fileID string,
 		return nil, fmt.Errorf("download failed %d: %s", resp.StatusCode, string(snippet))
 	}
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readLimitedBody(resp.Body, maxBatchResponseBytes, "download")
 	if err != nil {
-		return nil, fmt.Errorf("read download response: %w", err)
+		return nil, err
 	}
 
 	results := make(map[string][]float32)
-	lines := strings.Split(strings.TrimSpace(string(respBody)), "\n")
+	// Scan line-by-line over the bounded body instead of converting it to a
+	// string and splitting: for typical multi-line results this avoids a
+	// second full-size allocation and a slice of every line. A single line at
+	// the body cap can still grow the scanner buffer to that cap, so peak
+	// memory for that pathological case is roughly twice the body size.
+	scanner := bufio.NewScanner(bytes.NewReader(respBody))
+	scanner.Buffer(make([]byte, 64*1024), maxBatchResponseBytes)
 
-	var parseErrors, apiErrors int
-	for _, line := range lines {
-		if line == "" {
+	var parseErrors, apiErrors, lines int
+	for scanner.Scan() {
+		lines++
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
 			continue
 		}
 		var resp batchResponseLine
-		if err := json.Unmarshal([]byte(line), &resp); err != nil {
+		if err := json.Unmarshal(line, &resp); err != nil {
 			parseErrors++
 			continue
 		}
@@ -332,6 +341,9 @@ func (c *Client) DownloadBatchResultsContext(ctx context.Context, fileID string,
 			results[resp.CustomID] = embResp.Data[0].Embedding
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan download response: %w", err)
+	}
 
 	// Return partial results even when some items failed. Batch APIs commonly
 	// have per-item failures; failing the entire download would discard valid
@@ -340,7 +352,7 @@ func (c *Client) DownloadBatchResultsContext(ctx context.Context, fileID string,
 	if parseErrors > 0 || apiErrors > 0 {
 		if warn != nil {
 			warn.Printf("WARN: batch download: %d parse errors, %d API errors out of %d lines",
-				parseErrors, apiErrors, len(lines))
+				parseErrors, apiErrors, lines)
 		}
 	}
 	return results, nil

@@ -23,8 +23,31 @@ const maxErrorBody = 2 << 10 // 2KiB
 // ~20 MB, so 64 MiB leaves >3x headroom while a misconfigured or hostile
 // endpoint can no longer exhaust memory on the success path. The async batch
 // result download does NOT go through postJSON because legitimate batch
-// results are unbounded.
+// results are larger; it uses its own maxBatchResponseBytes cap below.
 const maxResponseBody = 64 << 20 // 64 MiB
+
+// maxBatchResponseBytes bounds successful async batch HTTP response bodies
+// (upload, create, poll, and result download). Legitimate batch results are
+// larger than realtime responses, so this sits above maxResponseBody, but it
+// is still bounded so a misconfigured or hostile endpoint cannot exhaust
+// memory on the success path.
+const maxBatchResponseBytes = 256 << 20 // 256 MiB
+
+// readLimitedBody reads at most limit bytes from r, plus one extra byte to
+// detect overflow, and returns a clear error when the body exceeds limit. It
+// is the bounded-success-path read shared by the async batch HTTP calls;
+// opName names the operation in errors. limit is normally a named constant —
+// tests pass a small limit to exercise the overflow branch cheaply.
+func readLimitedBody(r io.Reader, limit int64, opName string) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s response: %w", opName, err)
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("%s response exceeds %d byte limit", opName, limit)
+	}
+	return body, nil
+}
 
 // boundedErrorSnippet returns at most the first maxErrorBody bytes of an
 // already-read response body, for safe inclusion in error messages.

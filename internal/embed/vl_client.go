@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -23,6 +24,16 @@ const (
 	vlMaxContents   = config.DefaultVLMaxContents // max content elements per request
 	vlMaxImages     = config.DefaultVLMaxImages   // max images per request
 	maxImageWorkers = 8                           // max concurrent image readers
+
+	// maxImageBytes caps a single image file before it is base64-encoded into
+	// a data URI (100 MiB, matching the upstream skip threshold). Without it an
+	// oversized file would be read whole and retained as an even larger string.
+	maxImageBytes = 100 << 20 // 100 MiB
+	// maxInFlightImageBytes bounds the bytes being encoded concurrently across
+	// workers. maxInFlightImages slots, each holding at most one image of at
+	// most maxImageBytes, keep that bound at ~4x the per-image cap.
+	maxInFlightImageBytes = 4 * maxImageBytes
+	maxInFlightImages     = maxInFlightImageBytes / maxImageBytes // 4
 )
 
 // EmbedItem represents a single item to embed — either text-only or image+context.
@@ -266,14 +277,47 @@ func (c *VLClient) doRequestContext(ctx context.Context, items []EmbedItem) ([][
 	return reorderEmbeddings("vl", vlResp.Output.Embeddings, len(items))
 }
 
-// ImageToDataURI reads an image file and returns a data URI string.
+// ImageToDataURI reads an image file and returns a data URI string. Files
+// larger than maxImageBytes are rejected before being read, and the read is
+// itself bounded so a file that grows between the stat and the open cannot
+// bypass the cap.
 func ImageToDataURI(imagePath string, mediaType string) (string, error) {
-	data, err := os.ReadFile(imagePath)
+	info, err := os.Stat(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("stat image %s: %w", imagePath, err)
+	}
+	if info.Size() > maxImageBytes {
+		return "", fmt.Errorf("image %s exceeds %d MiB limit (%d bytes)", imagePath, maxImageBytes>>20, info.Size())
+	}
+	f, err := os.Open(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("open image %s: %w", imagePath, err)
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxImageBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("read image %s: %w", imagePath, err)
 	}
+	if len(data) > maxImageBytes {
+		return "", fmt.Errorf("image %s exceeds %d MiB limit", imagePath, maxImageBytes>>20)
+	}
 	b64 := base64.StdEncoding.EncodeToString(data)
 	return fmt.Sprintf("data:%s;base64,%s", mediaType, b64), nil
+}
+
+// readImageWithBudget encodes one image while holding a slot from the
+// in-flight byte budget. At most maxInFlightImages images (each at most
+// maxImageBytes) are encoded at once, so in-flight encoded bytes stay bounded
+// to maxInFlightImageBytes. The slot is released as soon as the data URI is
+// built; a whole batch retains at most batchSize such URIs.
+func readImageWithBudget(ctx context.Context, imagePath, mediaType string, slots chan struct{}) (string, error) {
+	select {
+	case slots <- struct{}{}:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	defer func() { <-slots }()
+	return ImageToDataURI(imagePath, mediaType)
 }
 
 // ImagePathToMediaType infers media type from file extension.
@@ -359,10 +403,20 @@ func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []Imag
 	if batchSize <= 0 {
 		batchSize = vlMaxImages
 	}
+	// A batch retains one data URI per item until the embed call returns, so
+	// cap the batch size at the in-flight image budget as well: worst-case
+	// retained image bytes stay at maxInFlightImageBytes (4 x 100 MiB).
+	if batchSize > maxInFlightImages {
+		batchSize = maxInFlightImages
+	}
 	updated := 0
 	var firstErr error
 	var firstReadErr error
 	readFailures := 0
+	// Slots sized so that concurrent encoding never holds more than
+	// maxInFlightImageBytes of image data at once (see readImageWithBudget).
+	// The batch-size cap above bounds the bytes retained for the whole batch.
+	imageSlots := make(chan struct{}, maxInFlightImages)
 	for i := 0; i < len(items); i += batchSize {
 		if err := ctx.Err(); err != nil {
 			return updated, err
@@ -390,7 +444,7 @@ func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []Imag
 					break
 				}
 				mediaType := ImagePathToMediaType(items[j].ImagePath)
-				dataURI, err := ImageToDataURI(items[j].ImagePath, mediaType)
+				dataURI, err := readImageWithBudget(ctx, items[j].ImagePath, mediaType, imageSlots)
 				results[j-i] = readResult{dataURI, err}
 			}
 		} else {
@@ -410,7 +464,7 @@ func (c *VLClient) EmbedImagesInBatchesContext(ctx context.Context, items []Imag
 						}
 						item := items[j]
 						mediaType := ImagePathToMediaType(item.ImagePath)
-						dataURI, err := ImageToDataURI(item.ImagePath, mediaType)
+						dataURI, err := readImageWithBudget(ctx, item.ImagePath, mediaType, imageSlots)
 						results[j-i] = readResult{dataURI, err}
 					}
 				}()

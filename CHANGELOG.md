@@ -51,6 +51,19 @@ All notable changes to `seek` are documented here. This follows
   `text`/`image` (case-insensitive) silently became the text filter, hiding
   typos like `--chunk-type video`. Unknown values now error with the supported
   list; an empty value still means no chunk-type filter.
+- **fix(embed): bound batch HTTP responses and VL image payloads**: the async
+  batch upload/create/poll/download success paths now cap response bodies at
+  256 MiB with an explicit error instead of buffering unbounded data, and the
+  result download parses JSONL with a buffered scanner rather than splitting a
+  full-body string. Image data URIs reject files over 100 MiB and in-flight
+  encoding is slot-bounded across workers (#223). The retained batch size is
+  capped at the four in-flight encoding slots (below the five-image default),
+  trading ~25% more embed calls for a fixed data-URI memory ceiling.
+- **fix(xberg): cap document upload size**: the optional xberg extract server
+  rejects uploads over 100 MiB (configurable via `XBERG_MAX_UPLOAD_BYTES`) with
+  HTTP 413, counting bytes as they are streamed into a spooled temp file rather
+  than trusting `Content-Length`, and passes the file object directly to the
+  parsers (#224).
 
 ## [0.6.11] - 2026-11-23
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -56,4 +57,38 @@ func TestPostJSONNormalResponse(t *testing.T) {
 	if !resp.OK {
 		t.Fatal("response not parsed")
 	}
+}
+
+// TestReadLimitedBody exercises the bounded-read helper with a small limit so
+// the overflow branch is cheap to test (the production limit is 256 MiB).
+func TestReadLimitedBody(t *testing.T) {
+	t.Run("within limit", func(t *testing.T) {
+		got, err := readLimitedBody(strings.NewReader("hello"), 8, "download")
+		if err != nil {
+			t.Fatalf("readLimitedBody: %v", err)
+		}
+		if string(got) != "hello" {
+			t.Errorf("body = %q, want hello", got)
+		}
+	})
+
+	t.Run("exactly at limit", func(t *testing.T) {
+		got, err := readLimitedBody(strings.NewReader("12345678"), 8, "download")
+		if err != nil {
+			t.Fatalf("readLimitedBody: %v", err)
+		}
+		if len(got) != 8 {
+			t.Errorf("len = %d, want 8", len(got))
+		}
+	})
+
+	t.Run("over limit", func(t *testing.T) {
+		_, err := readLimitedBody(strings.NewReader("123456789"), 8, "download")
+		if err == nil {
+			t.Fatal("expected error for oversized body")
+		}
+		if !strings.Contains(err.Error(), "download response exceeds 8 byte limit") {
+			t.Errorf("error = %q, want clear limit message", err.Error())
+		}
+	})
 }
