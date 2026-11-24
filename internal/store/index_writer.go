@@ -104,17 +104,22 @@ func (s *Store) UpsertAndReplaceIndexBatchContext(ctx context.Context, reqs []Do
 
 func writeIndexInTx(ctx context.Context, s *Store, tx *sql.Tx, req DocumentIndex, replace bool, compressionEnabled bool, compressionLevel int, now string) (int64, error) {
 	var docID int64
+	// Only an append treats an empty title as "keep the existing one": callers
+	// that append chunks (e.g. conversations) often don't know the title, and
+	// clearing it would desync documents.title from documents_fts.title. A
+	// replace with an empty title must still clear it, so scope preservation
+	// to the append path.
 	err := tx.QueryRowContext(ctx, `
 		INSERT INTO documents (collection_id, path, title, content_hash, mtime, line_count, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(collection_id, path) DO UPDATE SET
-		  title = excluded.title,
+		  title = CASE WHEN ? AND excluded.title = '' THEN documents.title ELSE excluded.title END,
 		  content_hash = excluded.content_hash,
 		  mtime = excluded.mtime,
 		  line_count = excluded.line_count,
 		  updated_at = excluded.updated_at
 		RETURNING id`,
-		req.CollectionID, req.Path, req.Title, req.ContentHash, req.Mtime, req.LineCount, now, now,
+		req.CollectionID, req.Path, req.Title, req.ContentHash, req.Mtime, req.LineCount, now, now, !replace,
 	).Scan(&docID)
 	if err != nil {
 		return 0, fmt.Errorf("upsert document: %w", err)
@@ -141,6 +146,14 @@ func writeIndexInTx(ctx context.Context, s *Store, tx *sql.Tx, req DocumentIndex
 				req.Title = title
 			}
 		case sql.ErrNoRows:
+			// An append to a document with no FTS row still needs the
+			// preserved title, otherwise documents.title and the new
+			// documents_fts.title disagree.
+			if !replace && req.Title == "" {
+				if err := tx.QueryRowContext(ctx, `SELECT title FROM documents WHERE id = ?`, docID).Scan(&req.Title); err != nil {
+					return 0, fmt.Errorf("read document title: %w", err)
+				}
+			}
 		default:
 			return 0, fmt.Errorf("read existing fts entry: %w", err)
 		}
@@ -160,16 +173,16 @@ func writeIndexInTx(ctx context.Context, s *Store, tx *sql.Tx, req DocumentIndex
 		if _, err := tx.ExecContext(ctx, `DELETE FROM chunks WHERE document_id = ?`, docID); err != nil {
 			return 0, fmt.Errorf("delete chunks: %w", err)
 		}
-		// Only clear fast fields when the caller supplied a computed set
-		// (e.g. semantic enrichment). A nil FastFields map means the caller
-		// did not (re)compute metadata this pass (semantic disabled or the
-		// service is down), so keep the previously stored values rather than
-		// wiping them — enrichment is optional and must not destroy existing
-		// metadata on a transient outage.
-		if req.FastFields != nil {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM fast_fields WHERE doc_id = ?`, docID); err != nil {
-				return 0, fmt.Errorf("delete fast fields: %w", err)
-			}
+	}
+
+	// Replace the stored fast-field set whenever the caller supplied a
+	// computed one (e.g. semantic enrichment on an append). INSERT OR REPLACE
+	// alone would leave fields the new pass no longer produces stale. A nil
+	// map means metadata was not recomputed (semantic disabled or the service
+	// is down), so keep the previous values instead of wiping them.
+	if req.FastFields != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM fast_fields WHERE doc_id = ?`, docID); err != nil {
+			return 0, fmt.Errorf("delete fast fields: %w", err)
 		}
 	}
 

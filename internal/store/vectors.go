@@ -1,6 +1,7 @@
 package store
 
 import (
+	"container/heap"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -9,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 
 	"github.com/viterin/vek/vek32"
 )
@@ -456,7 +456,34 @@ func scanChunkRows(rows *sql.Rows, wantEmbedding bool) ([]chunkRow, [][]byte, er
 	return out, embBlobs, nil
 }
 
+// scoredChunk is one candidate kept by the bounded top-K heap in the linear
+// vector scan. Min-heap ordering keeps the worst retained score at index 0 so
+// a better candidate can evict it in O(log limit).
+type scoredChunk struct {
+	SearchResult
+	score float64
+}
+
+type scoredChunkHeap []scoredChunk
+
+func (h scoredChunkHeap) Len() int           { return len(h) }
+func (h scoredChunkHeap) Less(i, j int) bool { return h[i].score < h[j].score }
+func (h scoredChunkHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+
+func (h *scoredChunkHeap) Push(x any) { *h = append(*h, x.(scoredChunk)) }
+
+func (h *scoredChunkHeap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
 func (s *Store) linearSearchVectorContext(ctx context.Context, queryEmb []float32, limit int, filters *FilterSet) ([]SearchResult, error) {
+	if limit <= 0 {
+		return []SearchResult{}, nil
+	}
 	sqlQuery := `SELECT ` + chunkRowColumns + `, ch.embedding
 		 FROM chunks ch
 		 JOIN documents d ON d.id = ch.document_id
@@ -474,37 +501,46 @@ func (s *Store) linearSearchVectorContext(ctx context.Context, queryEmb []float3
 	}
 	defer rows.Close()
 
-	chunkRows, embBlobs, err := scanChunkRows(rows, true)
-	if err != nil {
-		return nil, err
+	// Stream rows into a bounded min-heap instead of materializing every
+	// embedding BLOB and sorting the whole table: only the best `limit`
+	// candidates are retained, so memory stays flat for large corpora.
+	h := &scoredChunkHeap{}
+	heap.Init(h)
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var (
+			r           chunkRow
+			contentZstd []byte
+			embBlob     []byte
+		)
+		if err := rows.Scan(&r.ChunkID, &r.DocumentID, &r.Seq, &r.Content, &contentZstd, &r.ChunkType, &r.ImagePath, &r.StartLine, &r.EndLine, &r.Title, &r.Path, &r.Collection, &embBlob); err != nil {
+			return nil, fmt.Errorf("scan chunk row: %w", err)
+		}
+		var err error
+		if r.Content, err = decodeChunkText(r.Content, contentZstd, fmt.Sprintf("chunk %d", r.ChunkID)); err != nil {
+			return nil, err
+		}
+		score := cosineSimilarity(queryEmb, decodeEmbedding(embBlob))
+		cand := scoredChunk{SearchResult: r.searchResult(), score: score}
+		if h.Len() < limit {
+			heap.Push(h, cand)
+		} else if score > (*h)[0].score {
+			heap.Pop(h)
+			heap.Push(h, cand)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate chunk rows: %w", err)
 	}
 
-	type scored struct {
-		SearchResult
-		score float64
-	}
-	all := make([]scored, 0, len(chunkRows))
-	for i, r := range chunkRows {
-		emb := decodeEmbedding(embBlobs[i])
-		all = append(all, scored{
-			SearchResult: r.searchResult(),
-			score:        cosineSimilarity(queryEmb, emb),
-		})
-	}
-
-	// Sort by similarity descending
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].score > all[j].score
-	})
-
-	if len(all) > limit {
-		all = all[:limit]
-	}
-
-	results := make([]SearchResult, len(all))
-	for i, s := range all {
-		s.SearchResult.Score = s.score
-		results[i] = s.SearchResult
+	// Pop worst-first and fill from the end so results come out best-first.
+	results := make([]SearchResult, h.Len())
+	for i := len(results) - 1; i >= 0; i-- {
+		top := heap.Pop(h).(scoredChunk)
+		top.SearchResult.Score = top.score
+		results[i] = top.SearchResult
 	}
 	return results, nil
 }
@@ -516,44 +552,59 @@ func (s *Store) fetchSearchResultsContext(ctx context.Context, results []VectorR
 		return nil, nil
 	}
 
-	// Fetch all in one query
-	ids := make([]int64, len(results))
-	for i, r := range results {
-		ids[i] = r.ChunkID
+	// HNSW can hand back more IDs than SQLite's host-parameter limit when a
+	// large -l is combined with filters (searchLimit = limit*10). Fetch in
+	// batchSize-sized groups so no single IN (...) exceeds that limit.
+	ids := make([]int64, 0, len(results))
+	seen := make(map[int64]struct{}, len(results))
+	for _, r := range results {
+		if _, ok := seen[r.ChunkID]; ok {
+			continue
+		}
+		seen[r.ChunkID] = struct{}{}
+		ids = append(ids, r.ChunkID)
 	}
 
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
+	fetched := make(map[int64]chunkRow, len(ids))
+	const batchSize = 500
+	for i := 0; i < len(ids); i += batchSize {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		end := i + batchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		batchIDs := ids[i:end]
 
-	query := `SELECT ` + chunkRowColumns + `
-		 FROM chunks ch
-		 JOIN documents d ON d.id = ch.document_id
-		 JOIN collections c ON c.id = d.collection_id
-		 WHERE ch.id IN (` + sqlPlaceholders(len(ids)) + `)`
-	args = append([]interface{}{ChunkTypeText}, args...)
+		args := make([]interface{}, 0, len(batchIDs)+1)
+		args = append(args, ChunkTypeText)
+		for _, id := range batchIDs {
+			args = append(args, id)
+		}
 
-	// Push filters into the SQL query so the DB handles filtering
-	query, args, err := appendFilterClause(query, filters, args)
-	if err != nil {
-		return nil, fmt.Errorf("fetch search results filters: %w", err)
-	}
+		query := `SELECT ` + chunkRowColumns + `
+			 FROM chunks ch
+			 JOIN documents d ON d.id = ch.document_id
+			 JOIN collections c ON c.id = d.collection_id
+			 WHERE ch.id IN (` + sqlPlaceholders(len(batchIDs)) + `)`
+		query, args, err := appendFilterClause(query, filters, args)
+		if err != nil {
+			return nil, fmt.Errorf("fetch search results filters: %w", err)
+		}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("fetch search results query: %w", err)
-	}
-	defer rows.Close()
-
-	chunkRows, _, err := scanChunkRows(rows, false)
-	if err != nil {
-		return nil, fmt.Errorf("fetch search results: %w", err)
-	}
-
-	fetched := make(map[int64]chunkRow, len(chunkRows))
-	for _, cr := range chunkRows {
-		fetched[cr.ChunkID] = cr
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("fetch search results query: %w", err)
+		}
+		chunkRows, _, err := scanChunkRows(rows, false)
+		rows.Close()
+		if err != nil {
+			return nil, fmt.Errorf("fetch search results: %w", err)
+		}
+		for _, cr := range chunkRows {
+			fetched[cr.ChunkID] = cr
+		}
 	}
 
 	// Preserve HNSW ordering while excluding chunks that failed filters or were deleted
