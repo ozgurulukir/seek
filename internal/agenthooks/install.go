@@ -44,7 +44,7 @@ func RemoveAllSeekEntries(path string) error {
 			if idx < 0 {
 				break
 			}
-			entryChanged, err := stripSeekHookFromEntry(settings, event, idx)
+			entryChanged, err := stripSeekHookFromEntry(settings, event, idx, nil)
 			if err != nil {
 				return err
 			}
@@ -195,14 +195,26 @@ func uninstallHook(t Target, out io.Writer) error {
 		return err
 	}
 
-	idx := findSeekHookIndex(settings, t.event)
+	idx := findTargetSeekHookIndex(settings, t)
+	if idx < 0 {
+		// Legacy commands predate the target-shaped matcher; fall back to the
+		// broad seek matcher so an older hook can still be removed.
+		idx = findSeekHookIndex(settings, t.event)
+	}
 	if idx < 0 {
 		fmt.Fprintf(out, "%s hook not installed.\n", t.name)
 		return nil
 	}
 
-	if _, err := stripSeekHookFromEntry(settings, t.event, idx); err != nil {
+	removed, err := stripSeekHookFromEntry(settings, t.event, idx, &t)
+	if err != nil {
 		return err
+	}
+	if !removed {
+		// The broad matcher found another target's hook, not a legacy command
+		// belonging to this target. Report an honest no-op.
+		fmt.Fprintf(out, "%s hook not installed.\n", t.name)
+		return nil
 	}
 
 	if err := WriteSettings(path, settings); err != nil {
@@ -213,11 +225,12 @@ func uninstallHook(t Target, out io.Writer) error {
 	return nil
 }
 
-// stripSeekHookFromEntry removes seek's own command from the hook entry at
-// idx, keeping every other tool's command in the same entry, and prunes the
-// entry (and the event) only when they become empty. Shared by the
-// per-target uninstall and RemoveAllSeekEntries.
-func stripSeekHookFromEntry(settings map[string]interface{}, event string, idx int) (bool, error) {
+// stripSeekHookFromEntry removes one seek command from the hook entry at idx,
+// keeping every other tool's command in the same entry, and prunes the entry
+// (and the event) only when they become empty. Shared by the per-target
+// uninstall and RemoveAllSeekEntries. A non-nil target restricts removal to
+// that target's command; nil means strip any seek command.
+func stripSeekHookFromEntry(settings map[string]interface{}, event string, idx int, target *Target) (bool, error) {
 	hooks, ok := settings["hooks"].(map[string]interface{})
 	if !ok {
 		return false, fmt.Errorf("no hooks map")
@@ -234,17 +247,40 @@ func stripSeekHookFromEntry(settings map[string]interface{}, event string, idx i
 	if !ok {
 		return false, fmt.Errorf("hook entry has no command list")
 	}
-	for hookIdx, hook := range hookList {
-		hookMap, ok := hook.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		command, _ := hookMap["command"].(string)
-		if isSeekHookCommand(command) {
-			hookList = append(hookList[:hookIdx], hookList[hookIdx+1:]...)
-			break
+	removeIdx := -1
+	if target != nil {
+		for hookIdx, hook := range hookList {
+			hookMap, ok := hook.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			command, _ := hookMap["command"].(string)
+			if isTargetSeekHookCommand(command, *target) {
+				removeIdx = hookIdx
+				break
+			}
 		}
 	}
+	if removeIdx < 0 {
+		// Legacy seek commands predate the target-shaped matcher; fall back to
+		// the broad matcher so they remain removable.
+		for hookIdx, hook := range hookList {
+			hookMap, ok := hook.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			command, _ := hookMap["command"].(string)
+			if isSeekHookCommand(command) && (target == nil || !seekCommandBelongsToOtherTarget(command, *target)) {
+				removeIdx = hookIdx
+				break
+			}
+		}
+	}
+	removed := removeIdx >= 0
+	if !removed {
+		return false, nil
+	}
+	hookList = append(hookList[:removeIdx], hookList[removeIdx+1:]...)
 
 	if len(hookList) == 0 {
 		eventHooks = append(eventHooks[:idx], eventHooks[idx+1:]...)
@@ -256,5 +292,5 @@ func stripSeekHookFromEntry(settings map[string]interface{}, event string, idx i
 	} else {
 		hooks[event] = eventHooks
 	}
-	return true, nil
+	return removed, nil
 }

@@ -165,3 +165,57 @@ func TestWindowsTaskAction(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateServiceBinaryPath(t *testing.T) {
+	// Ordinary paths — including spaces and Windows separators — are fine.
+	for _, bin := range []string{
+		"/usr/local/bin/seek",
+		"/path with spaces/seek",
+		`C:\Program Files\seek\seek.exe`,
+		"seek",
+		"/home/u/bin/my-seek",
+	} {
+		if err := validateServiceBinaryPath(bin); err != nil {
+			t.Errorf("validateServiceBinaryPath(%q) = %v, want nil", bin, err)
+		}
+	}
+	// Control characters can break out of systemd/launchd/Task Scheduler
+	// quoting on every platform, not just Windows.
+	for _, bin := range []string{
+		"/x/seek\x00.exe",
+		"/x/seek\n.exe",
+		"/x/seek\r.exe",
+		"/x/seek\t.exe",
+		"/x/seek\x1b.exe",
+		"/x/seek\x7f.exe",
+	} {
+		if err := validateServiceBinaryPath(bin); err == nil {
+			t.Errorf("validateServiceBinaryPath(%q) = nil, want error", bin)
+		}
+	}
+}
+
+func TestSeekBinary_ValidatesResult(t *testing.T) {
+	bin, err := seekBinary()
+	if err != nil {
+		t.Fatalf("seekBinary: %v", err)
+	}
+	if err := validateServiceBinaryPath(bin); err != nil {
+		t.Fatalf("seekBinary returned unsafe path %q: %v", bin, err)
+	}
+}
+
+// TestValidateServiceUnitPath pins the stricter systemd/launchd rule: a
+// literal quote cannot be represented in the quoted ExecStart/plist fields,
+// while Windows paths with quotes are escaped separately.
+func TestValidateServiceUnitPath(t *testing.T) {
+	if err := validateServiceUnitPath("/usr/local/bin/seek"); err != nil {
+		t.Fatalf("ordinary path: %v", err)
+	}
+	if err := validateServiceUnitPath(`/x/seek".exe`); err == nil {
+		t.Fatal("quoted path should be rejected for unit/plist generation")
+	}
+	if err := validateServiceUnitPath("/x/seek\n.exe"); err == nil {
+		t.Fatal("control characters should still be rejected")
+	}
+}

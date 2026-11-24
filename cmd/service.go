@@ -83,14 +83,41 @@ func escapeWindowsArg(s string) string {
 	return b.String()
 }
 
+// validateServiceBinaryPath rejects binary paths that cannot be embedded
+// safely in a service definition. Control characters (NUL, CR, LF and the
+// rest of C0/DEL) can break out of the quoting used by systemd, launchd and
+// Task Scheduler; ordinary paths — including ones with spaces — are allowed.
+func validateServiceBinaryPath(bin string) error {
+	if strings.IndexFunc(bin, func(r rune) bool {
+		return r < 0x20 || r == 0x7f
+	}) >= 0 {
+		return fmt.Errorf("invalid service binary path %q: contains control characters", bin)
+	}
+	return nil
+}
+
+// validateServiceUnitPath adds the quote check required by the systemd and
+// launchd templates, which embed the binary inside a quoted field. Windows
+// paths legitimately contain quotes escaped by escapeWindowsArg, so this
+// stricter rule applies only to the unit/plist platforms.
+func validateServiceUnitPath(bin string) error {
+	if err := validateServiceBinaryPath(bin); err != nil {
+		return err
+	}
+	if strings.ContainsRune(bin, '"') {
+		return fmt.Errorf("invalid service binary path %q: contains a double quote", bin)
+	}
+	return nil
+}
+
 // windowsTaskAction renders the schtasks /TR action string for the sync
 // task. Task Scheduler launches the action via CreateProcess, not cmd.exe,
 // so a properly escaped argv is correct — routing through `cmd.exe /c` would
 // expose the binary path to cmd metacharacter expansion (%VAR% expands even
 // inside double quotes) and quote injection.
 func windowsTaskAction(bin string) (string, error) {
-	if strings.ContainsAny(bin, "\x00\r\n") {
-		return "", fmt.Errorf("invalid binary path %q: contains control characters", bin)
+	if err := validateServiceBinaryPath(bin); err != nil {
+		return "", err
 	}
 	return fmt.Sprintf("%s sync", escapeWindowsArg(bin)), nil
 }
@@ -147,22 +174,23 @@ func logPath() string {
 	return filepath.Join(home, ".cache", "seek", "service.log")
 }
 
-func seekBinary() string {
+func seekBinary() (string, error) {
+	bin := "seek"
 	if exe, err := os.Executable(); err == nil && exe != "" {
+		bin = exe
 		if real, err := filepath.EvalSymlinks(exe); err == nil {
-			return real
+			bin = real
 		}
-		return exe
+	} else if found, err := exec.LookPath("seek"); err == nil {
+		bin = found
+		if real, err := filepath.EvalSymlinks(found); err == nil {
+			bin = real
+		}
 	}
-	bin, err := exec.LookPath("seek")
-	if err != nil {
-		return "seek"
+	if err := validateServiceBinaryPath(bin); err != nil {
+		return "", err
 	}
-	real, err := filepath.EvalSymlinks(bin)
-	if err != nil {
-		return bin
-	}
-	return real
+	return bin, nil
 }
 
 func (c *ServiceStartCmd) Run(cfg *config.AppConfig) error {
@@ -178,7 +206,10 @@ func (c *ServiceStartCmd) Run(cfg *config.AppConfig) error {
 	if err := os.MkdirAll(logDir, config.DefaultDirPerms); err != nil {
 		return fmt.Errorf("create cache dir %s: %w", logDir, err)
 	}
-	bin := seekBinary()
+	bin, err := seekBinary()
+	if err != nil {
+		return fmt.Errorf("resolve service binary: %w", err)
+	}
 
 	switch runtime.GOOS {
 	case "windows":
@@ -212,6 +243,9 @@ func startWindowsService(bin string, interval int) error {
 }
 
 func startLinuxService(bin string, interval int) error {
+	if err := validateServiceUnitPath(bin); err != nil {
+		return fmt.Errorf("invalid service binary path: %w", err)
+	}
 	dir := systemdDir()
 	if err := os.MkdirAll(dir, config.DefaultDirPerms); err != nil {
 		return fmt.Errorf("create systemd user dir: %w", err)
@@ -264,6 +298,9 @@ func startLinuxService(bin string, interval int) error {
 }
 
 func startDarwinService(bin string, interval int) error {
+	if err := validateServiceUnitPath(bin); err != nil {
+		return fmt.Errorf("invalid service binary path: %w", err)
+	}
 	path := plistPath()
 	_ = os.MkdirAll(filepath.Dir(path), config.DefaultDirPerms)
 

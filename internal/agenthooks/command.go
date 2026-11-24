@@ -243,6 +243,23 @@ func isTargetSeekHookCommand(command string, target Target) bool {
 	return getTargetPattern(target).MatchString(command)
 }
 
+// seekCommandBelongsToOtherTarget reports whether command is the exact hook
+// shape of a different agent's target. The broad legacy matcher must not strip
+// another target's hook when uninstalling a target that is not itself
+// installed; genuinely target-agnostic legacy commands match no target and
+// remain removable by the fallback.
+func seekCommandBelongsToOtherTarget(command string, target Target) bool {
+	for _, other := range hookTargets {
+		if other.agent == target.agent {
+			continue
+		}
+		if isTargetSeekHookCommand(command, other) {
+			return true
+		}
+	}
+	return false
+}
+
 var hookExecutablePattern = regexp.MustCompile(`^(?:'([^']+)'|"([^"]+)"|(\S+))\s+hooks\s+`)
 
 func hookCommandBinary(settings map[string]interface{}, target Target) (string, bool) {
