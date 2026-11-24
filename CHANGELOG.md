@@ -5,6 +5,8 @@ All notable changes to `seek` are documented here. This follows
 
 ## [Unreleased]
 
+## [0.6.12] - 2026-11-24
+
 - **fix(store): batch HNSW result fetches and bound linear-scan memory**:
   vector search with a large `-l` plus filters could build one `IN (...)`
   holding more IDs than SQLite's parameter limit; the fetch now batches IDs
