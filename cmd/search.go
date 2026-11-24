@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/ozgurulukir/seek/internal/app"
@@ -84,13 +86,15 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) (err error) {
 		return fmt.Errorf("search: %w", err)
 	}
 
-	// JSON mode: machine-readable output for agents; no pretty printing, no
-	// context expansion. Content is emitted in full (the FTS snippet carries
-	// >>> markers and 40-token truncation; agents decide how much to read).
+	// JSON mode: machine-readable output for agents; no pretty printing.
+	// Content is emitted in full (the FTS snippet carries >>> markers and
+	// 40-token truncation; agents decide how much to read). Context expansion
+	// is applied here too so --json and MCP seek_search emit identical spans.
 	if c.JSON {
 		if err := runtime.Search.EnrichContent(ctx, results); err != nil {
 			return fmt.Errorf("enrich results: %w", err)
 		}
+		expandContext(runtime.Store, c.Context, results)
 		aggs, err := runtime.RunAggs(ctx, req)
 		if err != nil {
 			return fmt.Errorf("aggregations: %w", err)
@@ -106,14 +110,7 @@ func (c *SearchCmd) Run(cfg *config.AppConfig) (err error) {
 		if err != nil {
 			return fmt.Errorf("aggregations: %w", err)
 		}
-		fmt.Println("\nAggregations:")
-		for spec, buckets := range aggs {
-			fmt.Printf("  %s:\n", spec)
-			for _, b := range buckets {
-				fmt.Printf("    %s: %d\n", b.Key, b.Count)
-			}
-		}
-		fmt.Println()
+		writeAggregations(os.Stdout, aggs)
 	}
 
 	if len(results) == 0 {
@@ -223,6 +220,25 @@ func (c *SearchCmd) runAutocomplete(cfg *config.AppConfig) (err error) {
 		fmt.Printf("  %s\n", r)
 	}
 	return nil
+}
+
+// writeAggregations renders aggregation buckets in a deterministic order.
+// Map iteration order is random in Go, so specs are sorted before printing to
+// keep human output stable across runs.
+func writeAggregations(w io.Writer, aggs map[string][]search.Bucket) {
+	specs := make([]string, 0, len(aggs))
+	for spec := range aggs {
+		specs = append(specs, spec)
+	}
+	sort.Strings(specs)
+	fmt.Fprintln(w, "\nAggregations:")
+	for _, spec := range specs {
+		fmt.Fprintf(w, "  %s:\n", spec)
+		for _, b := range aggs[spec] {
+			fmt.Fprintf(w, "    %s: %d\n", b.Key, b.Count)
+		}
+	}
+	fmt.Fprintln(w)
 }
 
 func (c *SearchCmd) printResults(results []search.Result) {

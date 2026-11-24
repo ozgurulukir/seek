@@ -79,6 +79,20 @@ All notable changes to `seek` are documented here. This follows
   in the resolved seek binary were only rejected for Windows Task Scheduler;
   systemd and launchd definitions embedded them verbatim. One validator now
   runs in `seekBinary()` before any service definition is generated.
+- **fix(cli/mcp): apply `--context` expansion on the `seek search --json` path**:
+  JSON output previously skipped `expandContext` while MCP `seek_search`
+  applied it, so the two surfaces disagreed on chunk content and line spans for
+  the same query. Both now expand after `EnrichContent`; a parity test drives
+  the real JSON path with `-C 1` and asserts identical, genuinely widened spans.
+- **fix(mcp): cap `seek_autocomplete`'s `max` at 100**: large values were
+  forwarded uncapped, letting a client force the whole FTS vocabulary to be
+  materialized. The cap now mirrors the `seek_search` result cap.
+- **fix(cli): sort aggregation keys before human rendering**: Go map iteration
+  produced nondeterministic section order in `seek search --aggs`; specs are
+  now sorted, with a regression test pinning stable output.
+- **fix(sync): emit nothing on a missing-collection failure**: in JSON mode
+  `seek sync <missing> --json` wrote a success-shaped `[]` to stdout before
+  returning the not-found error; the check now runs before any emission.
 
 ## [0.6.11] - 2026-11-23
 

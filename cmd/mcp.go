@@ -197,9 +197,9 @@ func buildMCPServerWithServices(runtime *app.Runtime, cfg *config.AppConfig) (*m
 			}
 			return nil, nil, err
 		}
-		// Parity with `seek search --json`: chunk-level hits get full
-		// content, document-level hits get markers stripped, then optional
-		// context expansion widens the line spans.
+		// Parity with `seek search --json`: both paths call EnrichContent and
+		// then expandContext, so full chunk content, stripped markers, and
+		// widened line spans are identical for the same context radius.
 		if err := runtime.Search.EnrichContent(ctx, results); err != nil {
 			return nil, nil, fmt.Errorf("enrich results: %w", err)
 		}
@@ -292,10 +292,7 @@ func buildMCPServerWithServices(runtime *app.Runtime, cfg *config.AppConfig) (*m
 		Prefix string `json:"prefix" jsonschema:"the prefix to complete"`
 		Max    int    `json:"max,omitempty" jsonschema:"max suggestions (default 10)"`
 	}) (*mcp.CallToolResult, any, error) {
-		max := args.Max
-		if max <= 0 {
-			max = 10
-		}
+		max := mcpAutocompleteMax(args.Max)
 		terms, err := runtime.Store.AutocompleteTerms(strings.TrimSpace(args.Prefix), max)
 		if err != nil {
 			return nil, nil, err
@@ -340,6 +337,20 @@ func (a *mcpSearchArgs) searchRequest() app.SearchRequest {
 		req.Mode = app.ModeVec
 	}
 	return req
+}
+
+// mcpAutocompleteMax resolves the seek_autocomplete "max" argument: unset or
+// negative values fall back to 10, and large values are capped at
+// maxMCPResults so a client cannot force the server to materialize the whole
+// vocabulary. Mirrors the search tool's limit cap.
+func mcpAutocompleteMax(max int) int {
+	if max <= 0 {
+		return 10
+	}
+	if max > maxMCPResults {
+		return maxMCPResults
+	}
+	return max
 }
 
 func textResult(payload []byte) (*mcp.CallToolResult, any, error) {
